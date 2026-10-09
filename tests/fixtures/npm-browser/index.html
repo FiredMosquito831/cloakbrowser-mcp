@@ -1,0 +1,64 @@
+<!doctype html>
+<html>
+  <head>
+    <title>Release fixture</title>
+    <style>
+      #drop {
+        width: 180px;
+        height: 60px;
+        border: 1px solid;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Release marker</h1>
+    <output id="result">Ready</output>
+    <label>Name <input id="name" /></label>
+    <label>Consent <input id="consent" type="checkbox" /></label>
+    <label
+      >Choice
+      <select id="choice">
+        <option value="a">Alpha</option>
+        <option value="b">Beta</option>
+      </select></label
+    >
+    <label>Date <input id="date" type="date" /></label>
+    <label>Range <input id="range" type="range" min="0" max="10" /></label>
+    <label>Color <input id="color" type="color" /></label>
+    <button id="action">Action</button>
+    <button id="dialog">Dialog</button>
+    <input id="file" type="file" />
+    <button class="duplicate">Duplicate</button><button class="duplicate">Duplicate</button>
+    <div id="hover">Hover target</div>
+    <div id="source" draggable="true">Drag source</div>
+    <div id="drop">Drop target</div>
+    <iframe title="Fixture frame" src="/frame"></iframe>
+    <script>
+      const result = document.querySelector('#result');
+      document.querySelector('#action').addEventListener('click', () => {
+        result.textContent = 'Clicked';
+      });
+      document.querySelector('#dialog').addEventListener('click', () => {
+        alert('Fixture dialog');
+      });
+      document.querySelector('#file').addEventListener('change', (event) => {
+        result.textContent = event.target.files[0].name;
+      });
+      document.querySelector('#hover').addEventListener('mouseover', () => {
+        result.textContent = 'Hovered';
+      });
+      document.querySelector('#source').addEventListener('dragstart', (event) => {
+        event.dataTransfer.setData('text/plain', 'dragged');
+      });
+      document.querySelector('#drop').addEventListener('dragover', (event) => {
+        event.preventDefault();
+      });
+      document.querySelector('#drop').addEventListener('drop', (event) => {
+        event.preventDefault();
+        result.textContent = event.dataTransfer.getData('text/plain');
+      });
+      console.warn('Fixture console');
+      fetch('/api');
+    </script>
+  </body>
+</html>

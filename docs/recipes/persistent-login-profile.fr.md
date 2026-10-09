@@ -43,3 +43,7 @@ Utilisez des chemins de conteneur dans les variables d’environnement ; le chem
 - [Configuration](../configuration.md)
 - [Docker](../docker.md)
 - [Charger une extension Chrome](load-chrome-extension.md)
+
+## CloakBrowser 0.6.0
+
+Lorsque le mode stealth de CloakBrowser est activé, un profil persistant configuré explicitement conserve sa graine d’empreinte dans `.cloakbrowser-seed`. Le premier démarrage après la mise à jour attribue une graine si le fichier est absent. Un `--fingerprint` explicite, y compris `--fingerprint=off`, est prioritaire et laisse le fichier intact. Avec stealth désactivé, le fichier ne change pas. Les fichiers corrompus sont régénérés avec un avertissement ; les erreurs d’accès empêchent le démarrage.

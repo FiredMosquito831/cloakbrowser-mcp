@@ -162,3 +162,9 @@ checks.
 - [GeoIP Proxy Matching](geoip-proxy-matching.md) explains region-consistent proxy profiles.
 - [Recipes](recipes/index.md) lists task-focused setup paths.
 - [Tools](tools.md) explains why upstream Playwright MCP browser tools are forwarded unchanged.
+
+## CloakBrowser 0.6.0
+
+Humanized actions follow Playwright selector semantics, including strict mode. Ambiguous locators and unsupported actions raise errors instead of silently falling back. For example, humanized `fill()` cannot drive `input[type=color]`; disable humanize for a session that needs this operation.
+
+When humanize is enabled, the bridge applies a compatibility fix for CloakBrowser 0.6.0: ancestor iframe visibility is checked and resolved DOM elements use weak references so detached elements can be collected. The fix verifies the dependency version and source hashes. Another version or modified source is rejected; use `CLOAK_PLAYWRIGHT_MCP_HUMANIZE=false` until the bridge supports it.

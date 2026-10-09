@@ -53,6 +53,10 @@ Task-specific commands include `npm run test:unit`, `npm run test:integration`,
 - Use `#src/...` for runtime source, `@/...` in tests, `@tests/...` for test helpers,
   and `#scripts/...` for scripts instead of relative internal imports.
 - Prefer explicit types and small pure functions.
+- Pass only constants, variable references, or single-use inline callbacks as
+  call arguments. Compute other expressions first and store their results,
+  including objects created with constructors, in named variables or constants.
+  Preserve evaluation order and conditional execution when moving expressions.
 - Do not use `console.*` in runtime code. CLI help/version may use `process.stdout`;
   errors may use `process.stderr`.
 - Do not add `any`, `// @ts-ignore`, or non-null assertions to silence the checker.
@@ -70,6 +74,28 @@ Task-specific commands include `npm run test:unit`, `npm run test:integration`,
   boundary-heavy pure logic.
 - Use distribution or Docker end-to-end tests for packaged CLI, container entrypoint,
   or real-browser behavior.
+
+### HTML Templates
+
+- Keep large HTML documents and complete page markup in separate template files.
+  Small HTML fragments may remain inline in code.
+- In HTML files, write CSS in `<style>` tags and JavaScript in `<script>` tags.
+  Do not use `style` attributes or inline JavaScript event-handler attributes;
+  register event listeners from the script instead.
+
+### CloakBrowser License Use
+
+- Use CloakBrowser Free without a license for development and ordinary checks,
+  including end-to-end tests that do not require Pro-specific behavior.
+- Use a licensed CloakBrowser client only for end-to-end tests or verification
+  explicitly requiring Pro-specific behavior. Do not use it for routine agent
+  browsing, development, unit tests, or fake-upstream integration tests.
+- For license-free checks, select a known Free binary, clear
+  `CLOAKBROWSER_LICENSE_KEY`, and use an isolated temporary cache without a
+  `license.key` file. An empty environment key alone does not disable the
+  dependency's saved-key fallback. Clean up the temporary cache afterward.
+- Do not use or inspect saved license credentials for ordinary checks. Do not
+  stop unrelated browser sessions to obtain a Pro license slot.
 
 ## Workflow Routing
 

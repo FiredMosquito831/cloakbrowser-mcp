@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Retain the fingerprint seed across launches of explicitly configured persistent CloakBrowser profiles, using the interoperable `.cloakbrowser-seed` file.
+
+### Changed
+
+- Update the CloakBrowser npm dependency to 0.6.0, including the revised humanized action engine and concurrent-download fixes.
+- Update the upstream Playwright MCP npm dependency to 0.0.83, which adds the optional `browser_find.filename` argument for saving results to a file.
+
+### Fixed
+
+- Handle `ENOTSUP` when publishing persistent profile seeds on filesystems without hard-link support.
+- Apply a version- and source-verified compatibility fix for CloakBrowser 0.6.0 humanize: preserve ancestor iframe visibility and allow detached DOM elements to be collected without modifying installed dependency files.
+
 ## [1.14.1] - 2026-09-27
 
 ### Fixed

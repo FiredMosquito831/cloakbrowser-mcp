@@ -206,3 +206,7 @@ GeoIP sin conexión es independiente y puede tardar más.
 ## Más rutas prácticas
 
 Para elegir entre Playwright MCP upstream y este paquete, consulta la [comparación](comparison.md). Para tareas rápidas, usa las [recetas](recipes/index.md): perfil persistente, extensiones, reverse proxy, QA regional, Claude Desktop, Codex CLI y prueba smoke de CI.
+
+## CloakBrowser 0.6.0
+
+Cuando un proxy SOCKS5 o HTTP autenticado se configura mediante `--proxy-server` del navegador, `context.request`, `page.request` y `route.fetch()` no lo utilizan. Use `fetch()` dentro de la página para las solicitudes que deban seguir la ruta del navegador. Este puente no instala la advertencia automática de CloakBrowser.

@@ -43,3 +43,7 @@ Usa rutas del contenedor en variables de entorno; la ruta del host solo aparece 
 - [Configuration](../configuration.md)
 - [Docker](../docker.md)
 - [Cargar extensión de Chrome](load-chrome-extension.md)
+
+## CloakBrowser 0.6.0
+
+Con el modo stealth de CloakBrowser activado, un perfil persistente configurado explícitamente conserva su semilla de huella digital en `.cloakbrowser-seed`. El primer inicio tras actualizar asigna una semilla si falta el archivo. Un `--fingerprint` explícito, incluido `--fingerprint=off`, tiene prioridad y deja el archivo intacto. Con stealth desactivado, el archivo no cambia. Los archivos dañados se regeneran con una advertencia; los errores de acceso detienen el inicio.

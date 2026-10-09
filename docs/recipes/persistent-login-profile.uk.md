@@ -44,3 +44,7 @@ docker run --rm -i \
 - [Configuration](../configuration.md)
 - [Docker](../docker.md)
 - [Load Chrome Extension](load-chrome-extension.md)
+
+## CloakBrowser 0.6.0
+
+Коли stealth CloakBrowser увімкнено, явно налаштований постійний профіль зберігає fingerprint seed у `.cloakbrowser-seed`. Перший запуск після оновлення призначає seed, якщо файла немає. Явний `--fingerprint`, зокрема `--fingerprint=off`, має пріоритет і не змінює файл. Коли stealth вимкнено, файл не змінюється. Пошкоджений файл відновлюється з попередженням; помилка доступу до файла зупиняє запуск.

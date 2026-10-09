@@ -205,3 +205,7 @@ base GeoIP hors ligne est distinct et peut prendre plus de temps.
 ## Parcours pratiques supplémentaires
 
 Pour choisir entre Playwright MCP amont et ce paquet, consultez la [comparaison](comparison.md). Pour des tâches courtes, utilisez les [recettes](recipes/index.md): profil persistant, extensions, reverse proxy, QA régionale, Claude Desktop, Codex CLI et test smoke CI.
+
+## CloakBrowser 0.6.0
+
+Lorsqu’un proxy SOCKS5 ou HTTP authentifié est défini par l’option `--proxy-server` du navigateur, `context.request`, `page.request` et `route.fetch()` ne l’utilisent pas. Utilisez `fetch()` dans la page pour les requêtes qui doivent suivre le routage du navigateur. Ce pont n’installe pas l’avertissement automatique de CloakBrowser.

@@ -1,5 +1,4 @@
 export const localToolNames = ['cloakbrowser_binary_info', 'cloakbrowser_bridge_info'];
-
 export const expectedDefaultTools = [
   'browser_click',
   'browser_close',
@@ -27,7 +26,6 @@ export const expectedDefaultTools = [
   'browser_type',
   'browser_wait_for',
 ];
-
 export function normalizeToolResponseText(value) {
   return value
     .replaceAll(/\n### Events\n(?:- .*(?:\n|$))+/g, '')
@@ -40,12 +38,11 @@ export function normalizeToolResponseText(value) {
     )
     .replaceAll(/\d{3,}ms/g, '<duration>ms');
 }
-
 export function assertEqual(actual, expected, label) {
   const actualText = JSON.stringify(actual);
   const expectedText = JSON.stringify(expected);
-
   if (actualText !== expectedText) {
-    throw new Error(`${label} mismatch\nactual:   ${actualText}\nexpected: ${expectedText}`);
+    const message = `${label} mismatch\nactual:   ${actualText}\nexpected: ${expectedText}`;
+    throw new Error(message);
   }
 }

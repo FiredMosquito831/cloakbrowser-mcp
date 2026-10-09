@@ -43,3 +43,7 @@ docker run --rm -i \
 - [Configuration](../configuration.md)
 - [Docker](../docker.md)
 - [加载 Chrome 扩展](load-chrome-extension.md)
+
+## CloakBrowser 0.6.0
+
+启用 CloakBrowser stealth 时，显式配置的持久配置文件会将指纹种子保存在 `.cloakbrowser-seed` 中。升级后的首次启动会在文件缺失时分配种子。显式的 `--fingerprint`（包括 `--fingerprint=off`）优先，且不会修改该文件。禁用 stealth 时不会修改种子文件。损坏的文件会重新生成并发出警告；文件访问失败会阻止启动。

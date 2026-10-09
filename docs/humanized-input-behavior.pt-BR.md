@@ -162,3 +162,9 @@ Ele não deve ser utilizado como forma de contornar controles de acesso ou verif
 ## Mais caminhos práticos
 
 Para escolher entre o Playwright MCP upstream e este pacote, consulte a [comparação](comparison.md). Para tarefas rápidas, use as [receitas](recipes/index.md): perfil persistente, extensões, reverse proxy, QA regional, Claude Desktop, Codex CLI e teste smoke de CI.
+
+## CloakBrowser 0.6.0
+
+As ações humanizadas seguem a semântica dos seletores do Playwright, incluindo o modo estrito. Localizadores ambíguos e ações não suportadas geram erros em vez de recorrer silenciosamente a ações normais. Por exemplo, o `fill()` humanizado não suporta `input[type=color]`; desative humanize em uma sessão que precise dessa operação.
+
+Quando humanize está ativado, a ponte aplica uma correção de compatibilidade para CloakBrowser 0.6.0: verifica a visibilidade dos iframe ancestrais e usa referências fracas aos elementos DOM encontrados para permitir a coleta dos elementos removidos. A correção verifica a versão da dependência e os hashes do código-fonte. Outras versões ou código modificado são rejeitados; use `CLOAK_PLAYWRIGHT_MCP_HUMANIZE=false` até que a ponte ofereça suporte.

@@ -200,3 +200,7 @@ GeoIP マッチングは fail-closed です。CloakBrowser がプロキシ出口
 ## 追加の実用パス
 
 upstream Playwright MCP とこのパッケージのどちらを使うかは[比較](comparison.md)を参照してください。短い作業手順には[レシピ](recipes/index.md)を使います: 永続プロファイル、拡張機能、reverse proxy、リージョン QA、Claude Desktop、Codex CLI、CI スモークテスト。
+
+## CloakBrowser 0.6.0
+
+ブラウザーの `--proxy-server` で SOCKS5 または認証付き HTTP プロキシを設定しても、`context.request`、`page.request`、`route.fetch()` はそのプロキシを使いません。ブラウザーと同じ経路を使う必要があるリクエストには、ページ内の `fetch()` を使用してください。このブリッジは CloakBrowser の自動警告を設定しません。

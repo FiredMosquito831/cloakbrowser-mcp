@@ -206,3 +206,7 @@ Download der Offline-GeoIP-Datenbank erfolgt getrennt und kann länger dauern.
 ## Weitere praktische Pfade
 
 Für die Entscheidung zwischen upstream Playwright MCP und diesem Paket nutzen Sie den [Vergleich](comparison.md). Für kurze Aufgaben nutzen Sie die [Rezepte](recipes/index.md): persistentes Profil, Erweiterungen, reverse proxy, regionale QA, Claude Desktop, Codex CLI und CI-Smoke-Test.
+
+## CloakBrowser 0.6.0
+
+Wenn ein SOCKS5- oder authentifizierter HTTP-Proxy über das Browser-Flag `--proxy-server` gesetzt wird, verwenden `context.request`, `page.request` und `route.fetch()` diesen Proxy nicht. Verwenden Sie `fetch()` innerhalb der Seite für Anfragen, die dem Routing des Browsers folgen müssen. Diese Bridge installiert die automatische CloakBrowser-Warnung nicht.

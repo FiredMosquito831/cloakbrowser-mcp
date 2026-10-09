@@ -1,0 +1,10 @@
+<button>Frame action</button>
+<script>
+  const button = document.querySelector('button');
+  button.addEventListener('click', () => {
+    const computedValue = button.dataset.clicks || '0';
+    const computedValue2 = Number(computedValue) + 1;
+    button.dataset.clicks = String(computedValue2);
+    button.textContent = 'Frame clicked';
+  });
+</script>

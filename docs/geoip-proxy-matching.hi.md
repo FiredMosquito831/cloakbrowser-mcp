@@ -185,3 +185,7 @@ GeoIP मिलान fail-closed है। यदि CloakBrowser प्रॉ�
 ## अतिरिक्त व्यावहारिक रास्ते
 
 upstream Playwright MCP और इस package में चुनने के लिए [तुलना](comparison.md) देखें। तेज tasks के लिए [रेसिपी](recipes/index.md) उपयोग करें: persistent profile, extensions, reverse proxy, regional QA, Claude Desktop, Codex CLI और CI smoke test.
+
+## CloakBrowser 0.6.0
+
+जब SOCKS5 या प्रमाणीकरण वाला HTTP प्रॉक्सी ब्राउज़र के `--proxy-server` से सेट किया जाता है, तब `context.request`, `page.request` और `route.fetch()` उस प्रॉक्सी का उपयोग नहीं करते। ब्राउज़र के मार्ग से जाने वाले अनुरोधों के लिए पेज के अंदर `fetch()` का उपयोग करें। यह ब्रिज CloakBrowser की स्वचालित चेतावनी स्थापित नहीं करता।

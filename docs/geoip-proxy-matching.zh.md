@@ -196,3 +196,7 @@ GeoIP 匹配采用 fail-closed 行为。如果 CloakBrowser 无法解析代理�
 ## 更多实用路径
 
 要在 upstream Playwright MCP 和本包之间选择，请查看[对比](comparison.md)。快速任务请使用[操作示例](recipes/index.md)：持久配置文件、扩展、reverse proxy、区域 QA、Claude Desktop、Codex CLI 和 CI 冒烟测试。
+
+## CloakBrowser 0.6.0
+
+通过浏览器的 `--proxy-server` 参数设置 SOCKS5 或需要身份验证的 HTTP 代理时，`context.request`、`page.request` 和 `route.fetch()` 不会使用该代理。需要遵循浏览器路由的请求应使用页面内的 `fetch()`。此桥接器不会安装 CloakBrowser 的自动警告。

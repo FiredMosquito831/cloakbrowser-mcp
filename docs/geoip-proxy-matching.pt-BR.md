@@ -205,3 +205,7 @@ separado e pode levar mais tempo.
 ## Mais caminhos práticos
 
 Para escolher entre o Playwright MCP upstream e este pacote, consulte a [comparação](comparison.md). Para tarefas rápidas, use as [receitas](recipes/index.md): perfil persistente, extensões, reverse proxy, QA regional, Claude Desktop, Codex CLI e teste smoke de CI.
+
+## CloakBrowser 0.6.0
+
+Quando um proxy SOCKS5 ou HTTP autenticado é configurado pela opção `--proxy-server` do navegador, `context.request`, `page.request` e `route.fetch()` não usam esse proxy. Use `fetch()` dentro da página para solicitações que devam seguir a rota do navegador. Esta ponte não instala o aviso automático do CloakBrowser.

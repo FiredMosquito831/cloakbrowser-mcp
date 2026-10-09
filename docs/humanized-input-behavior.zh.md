@@ -156,3 +156,9 @@ docker run --rm -p 127.0.0.1:3000:3000 \
 ## 更多实用路径
 
 要在 upstream Playwright MCP 和本包之间选择，请查看[对比](comparison.md)。快速任务请使用[操作示例](recipes/index.md)：持久配置文件、扩展、reverse proxy、区域 QA、Claude Desktop、Codex CLI 和 CI 冒烟测试。
+
+## CloakBrowser 0.6.0
+
+人性化操作遵循 Playwright 选择器语义，包括严格模式。存在歧义的定位器和不支持的操作会报错，而不会静默回退到普通操作。例如，人性化 `fill()` 无法操作 `input[type=color]`；需要此操作的会话应禁用 humanize。
+
+启用 humanize 时，桥接器会为 CloakBrowser 0.6.0 应用兼容性修复：检查祖先 iframe 的可见性，并对找到的 DOM 元素使用弱引用，使已移除的元素能够被垃圾回收。修复会验证依赖版本和源文件哈希。其他版本或修改过的源码会被拒绝；在桥接器支持之前，请使用 `CLOAK_PLAYWRIGHT_MCP_HUMANIZE=false`。

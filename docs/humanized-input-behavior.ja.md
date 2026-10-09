@@ -158,3 +158,9 @@ docker run --rm -p 127.0.0.1:3000:3000 \
 ## 追加の実用パス
 
 upstream Playwright MCP とこのパッケージのどちらを使うかは[比較](comparison.md)を参照してください。短い作業手順には[レシピ](recipes/index.md)を使います: 永続プロファイル、拡張機能、reverse proxy、リージョン QA、Claude Desktop、Codex CLI、CI スモークテスト。
+
+## CloakBrowser 0.6.0
+
+人間らしい操作は、厳密モードを含む Playwright のセレクターの意味に従います。曖昧なロケーターや未対応の操作は、通常の操作に暗黙に切り替わらず、エラーになります。例えば、人間らしい `fill()` は `input[type=color]` を操作できません。この操作が必要なセッションでは humanize を無効にしてください。
+
+humanize を有効にすると、ブリッジは CloakBrowser 0.6.0 向けの互換性修正を適用します。祖先 iframe の可視性を確認し、取得した DOM 要素には弱参照を使うことで、削除された要素をガベージコレクションできるようにします。修正は依存パッケージのバージョンとソースのハッシュを検証します。他のバージョンや変更されたソースは拒否されます。ブリッジが対応するまでは `CLOAK_PLAYWRIGHT_MCP_HUMANIZE=false` を使用してください。

@@ -7,8 +7,10 @@ from typing import Any
 
 
 def read_project_metadata(root: Path | None = None) -> dict[str, str]:
-    project_root = root or Path(__file__).resolve().parent
-    package = _read_json(project_root / "package.json")
+    source_path = Path(__file__)
+    project_root = root or source_path.resolve().parent
+    package_path = project_root / "package.json"
+    package = _read_json(package_path)
     version = package["version"]
     docker_version = version.replace("+", "-")
 
@@ -24,13 +26,16 @@ def read_project_metadata(root: Path | None = None) -> dict[str, str]:
 
 
 def _read_compatibility_metadata(root: Path, project_version: str) -> dict[str, str]:
-    compatibility = _read_json(root / "docs" / "data" / "version-compatibility.json")
-    row = next((item for item in compatibility if item["version"] == project_version), None)
+    compatibility_path = root / "docs" / "data" / "version-compatibility.json"
+    compatibility = _read_json(compatibility_path)
+    matching_rows = (item for item in compatibility if item["version"] == project_version)
+    row = next(matching_rows, None)
     if row is None:
-        raise ValueError(
+        message = (
             "docs/data/version-compatibility.json must contain an entry for "
             f"package version {project_version!r}"
         )
+        raise ValueError(message)
     playwright_mcp_dependency = row["playwrightMcp"]
     playwright_mcp_version = _extract_version(playwright_mcp_dependency)
     cloakbrowser_dependency = row["cloakbrowser"]
@@ -52,13 +57,15 @@ def _read_compatibility_metadata(root: Path, project_version: str) -> dict[str, 
 def _extract_version(value: str) -> str:
     match = re.search(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?", value)
     if match is None:
-        raise ValueError(f"Cannot extract a version from {value!r}")
+        message = f"Cannot extract a version from {value!r}"
+        raise ValueError(message)
 
     return match.group(0)
 
 
 def _read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
+    content = path.read_text(encoding="utf-8")
+    return json.loads(content)
 
 
 def define_env(env: Any) -> None:

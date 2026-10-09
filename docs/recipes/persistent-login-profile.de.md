@@ -43,3 +43,7 @@ Verwenden Sie Containerpfade in Umgebungsvariablen; der Hostpfad steht nur im vo
 - [Configuration](../configuration.md)
 - [Docker](../docker.md)
 - [Chrome-Erweiterung laden](load-chrome-extension.md)
+
+## CloakBrowser 0.6.0
+
+Bei aktiviertem CloakBrowser-Stealth behält ein ausdrücklich konfiguriertes dauerhaftes Profil seinen Fingerprint-Seed in `.cloakbrowser-seed`. Beim ersten Start nach dem Update wird ein Seed zugewiesen, falls die Datei fehlt. Ein explizites `--fingerprint`, einschließlich `--fingerprint=off`, hat Vorrang und lässt die Datei unverändert. Bei deaktiviertem Stealth wird die Datei nicht verändert. Beschädigte Dateien werden mit einer Warnung neu erzeugt; Zugriffsfehler verhindern den Start.

@@ -204,3 +204,7 @@ npx -y cloakbrowser-mcp@latest
 ## Додаткові практичні сценарії
 
 Щоб обрати між upstream Playwright MCP і цим пакетом, перегляньте [порівняння](comparison.md). Для швидких задач використовуйте [рецепти](recipes/index.md): постійний профіль, розширення, reverse proxy, регіональне QA, Claude Desktop, Codex CLI і smoke-тест CI.
+
+## CloakBrowser 0.6.0
+
+Коли SOCKS5 або HTTP-проксі з автентифікацією задано прапорцем браузера `--proxy-server`, `context.request`, `page.request` і `route.fetch()` не використовують цей проксі. Для запитів через маршрут браузера використовуйте `fetch()` усередині сторінки. Міст не підключає автоматичне попередження CloakBrowser.

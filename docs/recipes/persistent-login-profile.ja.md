@@ -43,3 +43,7 @@ docker run --rm -i \
 - [Configuration](../configuration.md)
 - [Docker](../docker.md)
 - [Chrome 拡張機能を読み込む](load-chrome-extension.md)
+
+## CloakBrowser 0.6.0
+
+CloakBrowser の stealth が有効な場合、明示的に設定された永続プロファイルは指紋シードを `.cloakbrowser-seed` に保存します。更新後の初回起動時にファイルがなければシードを割り当てます。`--fingerprint=off` を含む明示的な `--fingerprint` が優先され、ファイルは変更されません。stealth が無効な場合も変更されません。破損したファイルは警告とともに再生成され、ファイルへのアクセスに失敗すると起動を中止します。
