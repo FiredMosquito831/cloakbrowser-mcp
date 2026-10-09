@@ -1,0 +1,171 @@
+import { execFile, spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { access, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { constants, tmpdir } from 'node:os';
+import path from 'node:path';
+import { promisify } from 'node:util';
+import { afterEach, describe, expect, it } from 'vitest';
+import { createFreeBrowserRuntime } from '@tests/helpers/browser-test-runtime.js';
+
+const executeFile = promisify(execFile);
+const disposers: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  for (const dispose of disposers.splice(0).reverse()) await dispose();
+});
+
+async function createRuntime(parentEnv: NodeJS.ProcessEnv = process.env) {
+  const temporaryDirectory = tmpdir();
+  const prefix = path.join(temporaryDirectory, 'cloak-free-runtime-');
+  const root = await mkdtemp(prefix);
+  const removal = { recursive: true, force: true };
+  disposers.push(() => rm(root, removal));
+  const options = { root, freeExecutable: process.execPath, parentEnv };
+  const runtime = await createFreeBrowserRuntime(options);
+  disposers.push(runtime.dispose);
+  return runtime;
+}
+
+describe('owned Free browser test runtime', () => {
+  it('clears inherited license and browser selection before starting a child', async () => {
+    const parentEnv = {
+      ...process.env,
+      CLOAKBROWSER_LICENSE_KEY: 'synthetic-test-license',
+      CLOAKBROWSER_LICENSE_STATUS_FILE: '/synthetic/status',
+      CLOAKBROWSER_CACHE_DIR: '/synthetic/personal-cache',
+      CLOAKBROWSER_BINARY_PATH: '/synthetic/pro-browser',
+      CLOAKBROWSER_RELEASE_CHANNEL: 'preview',
+      CLOAKBROWSER_VERSION: '999.0.0.0',
+      CLOAKBROWSER_DOWNLOAD_URL: 'https://synthetic.invalid',
+      PLAYWRIGHT_BROWSERS_PATH: '/synthetic/playwright-cache',
+    };
+    const runtime = await createRuntime(parentEnv);
+    const script =
+      'process.stdout.write(JSON.stringify(Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith("CLOAKBROWSER_") || key === "PLAYWRIGHT_BROWSERS_PATH"))))';
+    const args = ['-e', script];
+    const options = { env: runtime.env };
+    const result = await executeFile(process.execPath, args, options);
+    const observed = JSON.parse(result.stdout) as Record<string, string>;
+    const cache = path.join(runtime.root, 'cloak-cache');
+    const browsers = path.join(runtime.root, 'playwright-browsers');
+    const expected = {
+      CLOAKBROWSER_BINARY_PATH: process.execPath,
+      CLOAKBROWSER_CACHE_DIR: cache,
+      CLOAKBROWSER_AUTO_UPDATE: 'false',
+      PLAYWRIGHT_BROWSERS_PATH: browsers,
+    };
+    expect(observed).toEqual(expected);
+    const cacheEntries = await readdir(cache);
+    expect(cacheEntries).toEqual([]);
+    expect(parentEnv.CLOAKBROWSER_LICENSE_KEY).toBe('synthetic-test-license');
+  });
+
+  it('gives concurrent runtimes independent caches and disposal', async () => {
+    const first = await createRuntime();
+    const second = await createRuntime();
+    expect(first.env.CLOAKBROWSER_CACHE_DIR).not.toBe(second.env.CLOAKBROWSER_CACHE_DIR);
+    await first.dispose();
+    const secondEntries = await readdir(second.root);
+    expect(secondEntries).toContain('cloak-cache');
+  });
+
+  it('does not resolve a saved license from the inherited cache', async () => {
+    const parent = await createRuntime();
+    const personalCache = parent.env.CLOAKBROWSER_CACHE_DIR;
+    const keyPath = path.join(personalCache, 'license.key');
+    await writeFile(keyPath, 'synthetic-saved-license');
+    const parentEnv = { ...process.env, CLOAKBROWSER_CACHE_DIR: personalCache };
+    const runtime = await createRuntime(parentEnv);
+    const licenseUrl = new URL('../../node_modules/cloakbrowser/dist/license.js', import.meta.url);
+    const moduleUrl = licenseUrl.href;
+    const serializedUrl = JSON.stringify(moduleUrl);
+    const script = `const { resolveLicenseKey } = await import(${serializedUrl}); process.stdout.write(JSON.stringify({ hasLicense: Boolean(resolveLicenseKey()) }));`;
+    const args = ['--input-type=module', '-e', script];
+    const options = { env: runtime.env };
+    const result = await executeFile(process.execPath, args, options);
+    const observed = JSON.parse(result.stdout) as { hasLicense: boolean };
+    expect(observed.hasLicense).toBe(false);
+  });
+
+  it('refuses a populated root without deleting caller-owned data', async () => {
+    const parent = await createRuntime();
+    const marker = path.join(parent.root, 'caller-data');
+    await writeFile(marker, 'preserved');
+    const options = { root: parent.root, freeExecutable: process.execPath };
+    const creating = createFreeBrowserRuntime(options);
+    await expect(creating).rejects.toThrow('empty owned temporary directory');
+    await access(marker);
+  });
+
+  it('disposes acquired resources in reverse order even after a startup failure', async () => {
+    const runtime = await createRuntime();
+    const order: number[] = [];
+    runtime.ownCleanup(() => {
+      order.push(1);
+    });
+    runtime.ownCleanup(() => {
+      order.push(2);
+    });
+    const failStartup = async () => {
+      try {
+        throw new Error('Synthetic startup failure');
+      } finally {
+        await runtime.dispose();
+      }
+    };
+    const startup = failStartup();
+    await expect(startup).rejects.toThrow('Synthetic startup failure');
+    expect(order).toEqual([2, 1]);
+  });
+
+  it('terminates only its registered child and removes its root exactly once', async () => {
+    const runtime = await createRuntime();
+    const script = 'process.stdout.write("ready\\n"); setInterval(() => {}, 1000)';
+    const args = ['-e', script];
+    const options: import('node:child_process').SpawnOptions = {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: runtime.env,
+    };
+    const child = spawn(process.execPath, args, options);
+    runtime.ownChild(child);
+    const sentinelRoot = await createRuntime();
+    const sentinel = spawn(process.execPath, args, options);
+    sentinelRoot.ownChild(sentinel);
+    const exit = once(child, 'close');
+    try {
+      const firstDisposal = runtime.dispose();
+      const secondDisposal = runtime.dispose();
+      expect(secondDisposal).toBe(firstDisposal);
+      await firstDisposal;
+      const childExited = child.exitCode !== null || child.signalCode !== null;
+      expect(childExited).toBe(true);
+      await exit;
+      expect(sentinel.exitCode).toBeNull();
+      expect(sentinel.signalCode).toBeNull();
+      const sentinelPid = sentinel.pid;
+      if (!sentinelPid) throw new Error('Sentinel child did not start');
+      const sentinelAlive = process.kill(sentinelPid, 0);
+      expect(sentinelAlive).toBe(true);
+      const rootAccess = access(runtime.root);
+      const expected = { code: 'ENOENT', errno: -constants.errno.ENOENT };
+      await expect(rootAccess).rejects.toMatchObject(expected);
+    } finally {
+      child.kill('SIGKILL');
+      await exit;
+    }
+  });
+
+  it('continues cleanup after one disposer fails and reports the error', async () => {
+    const runtime = await createRuntime();
+    const marker = path.join(runtime.root, 'marker');
+    await writeFile(marker, 'owned');
+    runtime.ownCleanup(() => {
+      throw new Error('Synthetic cleanup failure');
+    });
+    const disposal = runtime.dispose();
+    await expect(disposal).rejects.toThrow('Browser test runtime cleanup failed');
+    const rootAccess = access(runtime.root);
+    const expected = { code: 'ENOENT' };
+    await expect(rootAccess).rejects.toMatchObject(expected);
+    disposers.pop();
+  });
+});
