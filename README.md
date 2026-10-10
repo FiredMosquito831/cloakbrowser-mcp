@@ -243,3 +243,5 @@ npm run bridge:compare -- cloakbrowser-mcp:dev --report bridge-parity-report.jso
 ```
 
 Documentation starts at [docs/getting-started.md](docs/getting-started.md). Contributor material is grouped under [docs/contributor-guide.md](docs/contributor-guide.md).
+
+See [test reporting](tests/README.md) for local Allure reports and combined CI matrix reports linked from pull requests.

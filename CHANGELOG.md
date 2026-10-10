@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in Allure Report 3 output for Vitest suites, validated CI matrix aggregation,
+  and sanitized report publication to a separate GitHub Pages repository with
+  guarded pull request links and 14-day retention.
+
+### Security
+
+- Update MCP SDK to a patched release (1.31.0 or later) and resolve the patched `proxy-addr`
+  dependency to address production audit findings without weakening the CI gate.
+
 ## [1.14.1] - 2026-09-27
 
 ### Fixed

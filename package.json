@@ -88,10 +88,15 @@
     "check": "npm run typecheck && npm run lint && npm run format:check && npm run docs:compatibility:check && npm run docs:translations:check && npm run server:validate && npm run build && npm test && npm run test:e2e:run",
     "check:ci": "npm run check && npm run audit:prod && npm run test:coverage",
     "docs:translations": "node scripts/update-doc-translations.mjs",
-    "docs:translations:check": "node scripts/update-doc-translations.mjs --check"
+    "docs:translations:check": "node scripts/update-doc-translations.mjs --check",
+    "test:report": "node scripts/test-report.mjs collect",
+    "test:report:generate": "node scripts/test-report.mjs generate",
+    "test:report:open": "node scripts/test-report.mjs open",
+    "test:report:merge": "node scripts/test-report.mjs merge",
+    "test:report:probe": "node scripts/test-report.mjs probe"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@playwright/mcp": "^0.0.82",
     "cloakbrowser": "^0.5.10",
     "commander": "^15.0.0",
@@ -109,6 +114,7 @@
     "@vitest/eslint-plugin": "^1.6.27",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
+    "allure": "3.20.1",
     "eslint": "^10.9.1",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-import-x": "^4.17.1",

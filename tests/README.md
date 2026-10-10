@@ -1,0 +1,63 @@
+# Test reports
+
+The existing unit, integration and packaged CLI suites use an opt-in Vitest
+reporter. Allure Report 3 generates HTML from validated, sanitized results.
+Coverage thresholds and Codecov remain unchanged.
+
+## Local use
+
+```bash
+npm run test:report:probe
+npm run test:report -- --suite unit --run-id local-unit
+npm run test:report:generate -- --input artifacts/test-results/local-unit --output artifacts/test-report/local-unit
+npm run test:report:open -- --report artifacts/test-report/local-unit
+```
+
+Use `--suite integration` or `--suite cli` for those suites. Each invocation needs
+a fresh run ID. A failing suite returns a nonzero status while preserving its
+sanitized evidence. Generation and viewing are separate commands, so failed runs
+can still be inspected. Generated files stay under ignored `artifacts/` paths.
+
+## GitHub Actions and PR links
+
+CI uploads `test-results-*` artifacts from existing test jobs and merges the
+matrix into `combined-test-report`. The Job Summary lists totals, failures and
+missing producers. Required checks retain their existing failure behavior.
+
+The trusted default-branch publisher validates producer data and regenerates HTML
+without executing PR code or publishing producer-supplied HTML. It publishes to
+the separate `swimmwatch/cloakbrowser-mcp-reports` repository and updates one
+verified bot-owned PR comment after checking the Pages build and exact HTML.
+
+Reports retain OS, architecture, Node.js version, suite and lane labels. Each
+link identifies the PR head SHA, CI run and attempt:
+
+```text
+https://swimmwatch.github.io/cloakbrowser-mcp-reports/pr/<number>/run/<id>-attempt-<attempt>/<sha>/
+```
+
+Artifacts and public reports have 14-day retention. Unavailable publication uses
+an Actions-run fallback. Main project documentation Pages is unchanged.
+
+## Configuration and security
+
+Source repository Actions variables:
+
+- `TEST_REPORT_REPOSITORY=swimmwatch/cloakbrowser-mcp-reports`
+- `TEST_REPORT_APP_CLIENT_ID`: the reports App client ID
+- `TEST_REPORT_PUBLICATION_ENABLED=true`: publication and daily owned-path cleanup
+
+Store the App private key only in Actions secret `TEST_REPORT_APP_PRIVATE_KEY`.
+The App installation is limited to the reports repository, with Contents write,
+Pages read and implicit Metadata read. Test jobs receive no publication credential.
+
+The reports site is public. Sanitization removes supported credential patterns
+and supplied secret values; it cannot recognize arbitrary sensitive prose. Use
+controlled fixtures and do not put private user data into test names or evidence.
+Raw logs, arbitrary screenshots/assets and executable producer content are not
+published. Setting the enable variable to `false` stops publication and cleanup;
+it does not remove already published reports.
+
+Extended periodic browser scenarios remain in the release worktree until their
+browser/runtime prerequisites are delivered. This reporting delivery instruments
+the existing PR matrix and does not schedule unavailable test suites.

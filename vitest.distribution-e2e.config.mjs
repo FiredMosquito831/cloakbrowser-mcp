@@ -1,5 +1,6 @@
 import { fileURLToPath, URL } from 'node:url';
 import { defineConfig } from 'vitest/config';
+import { reportConfiguration } from './scripts/testing/report-configuration.js';
 
 export default defineConfig({
   resolve: {
@@ -9,6 +10,7 @@ export default defineConfig({
     },
   },
   test: {
+    ...reportConfiguration(),
     include: ['tests/e2e/**/*.manual.ts'],
     environment: 'node',
     testTimeout: 180_000,
