@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { controlledPng as png } from '@tests/fixtures/reporting/controlled-png.js';
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const original = await importOriginal<typeof fs>();
@@ -24,7 +25,8 @@ afterEach(async () => {
 
 async function options() {
   const prefix = path.join(tmpdir(), 'cloak-results-');
-  const root = await fs.mkdtemp(prefix);
+  const temporary = await fs.mkdtemp(prefix);
+  const root = await fs.realpath(temporary);
   roots.push(root);
   return { root, runId: 'run-1', producerId: 'linux-unit', results: [record('passed')] };
 }
@@ -47,6 +49,21 @@ function record(status: string) {
 }
 
 describe('atomic producer evidence', () => {
+  it('accepts canonical temporary roots while continuing to reject symlink aliases', async () => {
+    const input = await options();
+    const physical = path.join(input.root, 'physical');
+    const alias = path.join(input.root, 'alias');
+    await fs.mkdir(physical);
+    const type = process.platform === 'win32' ? 'junction' : 'dir';
+    await fs.symlink(physical, alias, type);
+    const unsafe = { ...input, root: alias };
+    await expect(writeTestResult(unsafe)).rejects.toThrow('unsafe directory');
+    const canonical = await fs.realpath(alias);
+    const safe = { ...input, root: canonical };
+    const directory = await writeTestResult(safe);
+    const manifest = path.join(directory, 'producer.json');
+    await fs.access(manifest);
+  });
   it('persists all statuses, stable history, retry, grouping and safe attachments', async () => {
     const input = await options();
     input.results = ['passed', 'failed', 'broken', 'skipped'].map(record);
@@ -179,10 +196,6 @@ describe('atomic producer evidence', () => {
     const diagnostics = (await import(diagnosticUrl.href)) as {
       registerControlledScreenshot: (bytes: Buffer, url: string) => unknown;
     };
-    const png = Buffer.from(
-      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aB9sAAAAASUVORK5CYII=',
-      'base64',
-    );
     const data = diagnostics.registerControlledScreenshot(png, 'http://127.0.0.1/fixture');
     const result = { ...input.results[0], attachments: [{ name: 'fixture', type: 'image/png', data }] };
     const directory = await writeTestResult({ ...input, results: [result] });

@@ -1,15 +1,16 @@
 import { execFile, spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { access, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
-import { constants, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, describe, expect, it } from 'vitest';
-import { createFreeBrowserRuntime } from '@tests/helpers/browser-test-runtime.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createFreeBrowserRuntime, withCleanupDeadline } from '@tests/helpers/browser-test-runtime.js';
 
 const executeFile = promisify(execFile);
 const disposers: Array<() => Promise<void>> = [];
 afterEach(async () => {
+  vi.useRealTimers();
   for (const dispose of disposers.splice(0).reverse()) await dispose();
 });
 
@@ -26,6 +27,42 @@ async function createRuntime(parentEnv: NodeJS.ProcessEnv = process.env) {
 }
 
 describe('owned Free browser test runtime', () => {
+  it('fails a stalled cleanup at the shared deadline and forces only owned termination', async () => {
+    vi.useFakeTimers();
+    const force = vi.fn();
+    const cleanup = () => new Promise<void>(() => {});
+    const closing = withCleanupDeadline(cleanup, 'Controlled cleanup', force);
+    const outcome = closing.then(
+      () => ({ error: undefined }),
+      (error: unknown) => ({ error }),
+    );
+    await vi.advanceTimersByTimeAsync(9999);
+    expect(force).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    const result = await outcome;
+    expect(result.error).toBeInstanceOf(Error);
+    const message = result.error instanceof Error ? result.error.message : '';
+    expect(message).toBe('Controlled cleanup exceeded 10000ms');
+    expect(force).toHaveBeenCalledTimes(1);
+    const timers = vi.getTimerCount();
+    expect(timers).toBe(0);
+  });
+
+  it('removes the deadline timer on successful and failed cleanup', async () => {
+    vi.useFakeTimers();
+    const force = vi.fn();
+    const success = () => Promise.resolve('closed');
+    const closed = await withCleanupDeadline(success, 'Controlled cleanup', force);
+    expect(closed).toBe('closed');
+    const failure = async () => {
+      throw new Error('Controlled close error');
+    };
+    const rejected = withCleanupDeadline(failure, 'Controlled cleanup', force);
+    await expect(rejected).rejects.toThrow('Controlled close error');
+    expect(force).not.toHaveBeenCalled();
+    const timers = vi.getTimerCount();
+    expect(timers).toBe(0);
+  });
   it('clears inherited license and browser selection before starting a child', async () => {
     const parentEnv = {
       ...process.env,
@@ -146,7 +183,7 @@ describe('owned Free browser test runtime', () => {
       const sentinelAlive = process.kill(sentinelPid, 0);
       expect(sentinelAlive).toBe(true);
       const rootAccess = access(runtime.root);
-      const expected = { code: 'ENOENT', errno: -constants.errno.ENOENT };
+      const expected = { code: 'ENOENT' };
       await expect(rootAccess).rejects.toMatchObject(expected);
     } finally {
       child.kill('SIGKILL');

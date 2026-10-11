@@ -1,3 +1,5 @@
+import { crc32 } from 'node:zlib';
+
 export const TEXT_LIMIT = 128 * 1024;
 export const PNG_LIMIT = 2 * 1024 * 1024;
 export const ATTACHMENT_LIMIT = 6 * 1024 * 1024;
@@ -9,7 +11,92 @@ function reject() {
   throw new Error('Test evidence: unsafe or oversized diagnostic');
 }
 
-/** Validate controlled PNG content without reading files or preserving metadata chunks. */
+function validateImageHeader(data) {
+  if (data.length !== 13) reject();
+  const width = data.readUInt32BE(0);
+  const height = data.readUInt32BE(4);
+  const depths = { 0: [1, 2, 4, 8, 16], 2: [8, 16], 3: [1, 2, 4, 8], 4: [8, 16], 6: [8, 16] };
+  const color = data[9];
+  if (
+    !width ||
+    !height ||
+    width * height > 4 * 1024 * 1024 ||
+    !depths[color]?.includes(data[8]) ||
+    data[10] !== 0 ||
+    data[11] !== 0 ||
+    data[12] > 1
+  )
+    reject();
+  return color;
+}
+
+function validateOptionalChunk(type, data, color, paletteSize) {
+  const length = data.length;
+  if (type === 'PLTE') {
+    if (length === 0 || length > 768 || length % 3 || [0, 4].includes(color)) reject();
+    return;
+  }
+  if (type === 'tRNS') {
+    validateTransparency(length, color, paletteSize);
+    return;
+  }
+  const lengths = { sRGB: 1, gAMA: 4, pHYs: 9 };
+  if (length !== lengths[type]) reject();
+  if (type === 'sRGB' && data[0] > 3) reject();
+  if (type === 'gAMA' && data.readUInt32BE(0) === 0) reject();
+  if (type === 'pHYs' && data[8] > 1) reject();
+}
+
+function validateTransparency(length, color, paletteSize) {
+  const valid =
+    (color === 0 && length === 2) ||
+    (color === 2 && length === 6) ||
+    (color === 3 && length > 0 && length <= paletteSize);
+  if (!valid) reject();
+}
+
+function readPngChunk(bytes, offset) {
+  const length = bytes.readUInt32BE(offset);
+  const typeOffset = offset + 4;
+  const dataOffset = offset + 8;
+  const checksumOffset = dataOffset + length;
+  const end = checksumOffset + 4;
+  const type = bytes.toString('latin1', typeOffset, dataOffset);
+  if (end > bytes.length || !['IHDR', 'IDAT', 'IEND', 'PLTE', 'tRNS', 'sRGB', 'gAMA', 'pHYs'].includes(type))
+    reject();
+  const crcInput = bytes.subarray(typeOffset, checksumOffset);
+  const checksum = crc32(crcInput);
+  if (checksum !== bytes.readUInt32BE(checksumOffset)) reject();
+  const data = bytes.subarray(dataOffset, checksumOffset);
+  const raw = bytes.subarray(offset, end);
+  return { type, data, raw, end };
+}
+
+function acceptPngChunk(state, chunk) {
+  const { type, data } = chunk;
+  if (!state.seen.size && type !== 'IHDR') reject();
+  if (type !== 'IDAT' && state.seen.has(type)) reject();
+  state.seen.add(type);
+  switch (type) {
+    case 'IHDR':
+      state.color = validateImageHeader(data);
+      break;
+    case 'IDAT':
+      if (state.color === 3 && !state.paletteSize) reject();
+      state.imageData = true;
+      break;
+    case 'IEND':
+      if (data.length !== 0) reject();
+      state.ended = true;
+      break;
+    default:
+      if (state.imageData) reject();
+      validateOptionalChunk(type, data, state.color, state.paletteSize);
+      if (type === 'PLTE') state.paletteSize = data.length / 3;
+  }
+}
+
+/** Validate PNG structure and CRCs; discard optional color/resolution metadata. */
 export function validateControlledPng(bytes) {
   if (
     !Buffer.isBuffer(bytes) ||
@@ -19,32 +106,18 @@ export function validateControlledPng(bytes) {
   )
     reject();
   let offset = 8;
-  let imageData = false;
-  let ended = false;
+  const seen = new Set();
+  const state = { imageData: false, ended: false, color: undefined, paletteSize: 0, seen };
+  const chunks = [pngSignature];
   while (offset + 12 <= bytes.length) {
-    const length = bytes.readUInt32BE(offset);
-    const type = bytes.toString('ascii', offset + 4, offset + 8);
-    if (
-      offset + length + 12 > bytes.length ||
-      !['IHDR', 'IDAT', 'IEND', 'PLTE', 'tRNS', 'sRGB', 'gAMA', 'pHYs'].includes(type)
-    )
-      reject();
-    if (offset === 8) {
-      if (type !== 'IHDR' || length !== 13) reject();
-      const width = bytes.readUInt32BE(offset + 8);
-      const height = bytes.readUInt32BE(offset + 12);
-      if (!width || !height || width * height > 4 * 1024 * 1024) reject();
-    } else if (type === 'IHDR') reject();
-    if (type === 'IDAT') imageData = true;
-    offset += length + 12;
-    if (type === 'IEND') {
-      if (length !== 0 || offset !== bytes.length) reject();
-      ended = true;
-      break;
-    }
+    const chunk = readPngChunk(bytes, offset);
+    acceptPngChunk(state, chunk);
+    if (['IHDR', 'PLTE', 'tRNS', 'IDAT', 'IEND'].includes(chunk.type)) chunks.push(chunk.raw);
+    offset = chunk.end;
+    if (state.ended) break;
   }
-  if (!imageData || !ended) reject();
-  return Buffer.from(bytes);
+  if (!state.imageData || !state.ended || offset !== bytes.length) reject();
+  return Buffer.concat(chunks);
 }
 
 /** Register bytes captured from an owned local fixture, never an arbitrary image path. */
@@ -66,6 +139,27 @@ export function registerControlledScreenshot(bytes, fixtureUrl) {
   const receipt = Object.freeze({ provenance: 'controlled-local' });
   screenshots.set(receipt, safe);
   return receipt;
+}
+
+/** Decode bounded inline fixture evidence; never follow a runner-supplied file path. */
+export function screenshotAnnotation(message) {
+  if (typeof message !== 'string' || message.length > PNG_LIMIT * 2) reject();
+  let record;
+  try {
+    record = JSON.parse(message);
+  } catch {
+    reject();
+  }
+  if (
+    !record ||
+    Object.keys(record).sort().join(',') !== 'fixtureUrl,png' ||
+    typeof record.png !== 'string' ||
+    typeof record.fixtureUrl !== 'string'
+  )
+    reject();
+  const bytes = Buffer.from(record.png, 'base64');
+  if (bytes.toString('base64') !== record.png) reject();
+  return registerControlledScreenshot(bytes, record.fixtureUrl);
 }
 
 function redactText(text, secrets) {
@@ -102,6 +196,17 @@ function redactText(text, secrets) {
 
 /** Redact bounded text/metadata or return a copy of registered local PNG bytes. */
 export function sanitizeDiagnostic(input, secrets = []) {
+  const limits = { fields: 256, depth: 8, bytes: TEXT_LIMIT, environment: false };
+  return sanitizeValue(input, secrets, limits);
+}
+
+/** Sanitize trusted launch history with the same key/value policy and bounded traversal. */
+export function sanitizeHistory(input, secrets = []) {
+  const limits = { fields: 100000, depth: 32, bytes: 16 * 1024 * 1024, environment: true };
+  return sanitizeValue(input, secrets, limits);
+}
+
+function sanitizeValue(input, secrets, limits) {
   if (!Array.isArray(secrets) || secrets.length > 256) reject();
   if (input && typeof input === 'object' && screenshots.has(input)) {
     return Buffer.from(screenshots.get(input));
@@ -109,7 +214,7 @@ export function sanitizeDiagnostic(input, secrets = []) {
   const seen = new WeakSet();
   let fields = 0;
   function visit(value, depth) {
-    if (depth > 8 || ++fields > 256) reject();
+    if (depth > limits.depth || ++fields > limits.fields) reject();
     if (typeof value === 'string') {
       if (Buffer.byteLength(value) > TEXT_LIMIT) reject();
       return redactText(value, secrets);
@@ -125,14 +230,16 @@ export function sanitizeDiagnostic(input, secrets = []) {
     const entries = Object.entries(value);
     const result = Object.create(null);
     for (const [key, item] of entries) {
-      if (/^(?:env|environment|processEnv)$/i.test(key) || key === '__proto__') reject();
+      if ((!limits.environment && /^(?:env|environment|processEnv)$/i.test(key)) || key === '__proto__')
+        reject();
       const safeKey = redactText(key, secrets);
+      if (Object.hasOwn(result, safeKey)) reject();
       result[safeKey] = secretKey.test(key) ? '[REDACTED]' : visit(item, depth + 1);
     }
     return result;
   }
   const value = visit(input, 0);
   const output = typeof value === 'string' ? value : JSON.stringify(value);
-  if (Buffer.byteLength(output) > TEXT_LIMIT) reject();
+  if (Buffer.byteLength(output) > limits.bytes) reject();
   return output;
 }

@@ -1,9 +1,10 @@
 import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, realpath } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { request as createHttpsRequest } from 'node:https';
-import { resolve } from 'node:path';
+import { dirname } from 'node:path';
+import { existsSync } from 'node:fs';
 import type { Readable } from 'node:stream';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -16,22 +17,14 @@ import { LOCAL_TOOL_BRIDGE_INFO } from '@/bridge/tools.js';
 import { BRIDGE_INITIALIZE_META_KEY, JSON_RPC_VERSION, MCP_SESSION_ID_HEADER } from '@/protocol/constants.js';
 import {
   cleanupDistributionE2e,
+  createTempRoot,
   type DistributionCommand,
   packAndInstallCurrentPackage,
 } from '@tests/e2e/distributionHarness.js';
+import { createFreeBrowserRuntime, type FreeBrowserRuntime } from '@tests/helpers/browser-test-runtime.js';
 import { startTestTlsTerminator } from '@tests/helpers/tls-terminator.js';
 type BrowserEngine = 'cloak' | 'playwright';
 const nodeBrowserEngines = ['cloak', 'playwright'] as const satisfies readonly BrowserEngine[];
-// A Pro binary may be licensed for only one concurrent browser session.
-const multiSessionCloakBinaryPath = process.env.CLOAKBROWSER_MCP_CDP_MULTI_SESSION_BINARY_PATH;
-const installedCloakBinary = binaryInfo();
-const configuredCloakBinaryPath = process.env.CLOAKBROWSER_BINARY_PATH;
-const knownFreeCloakBinary =
-  installedCloakBinary.tier === 'free' &&
-  (configuredCloakBinaryPath === undefined ||
-    resolve(configuredCloakBinaryPath) === resolve(installedCloakBinary.binaryPath));
-// The tier of an unrelated custom binary is unknown; opt in with the multi-session path.
-const multiSessionCloakEnabled = multiSessionCloakBinaryPath !== undefined || knownFreeCloakBinary;
 interface ReadyCdpInfo {
   activeConnections: number;
   discoveryUrl: string;
@@ -70,7 +63,6 @@ interface RunningTlsBridge {
   };
 }
 interface RunningBridge {
-  baselineBrowserPids: Set<number>;
   browser: Browser;
   browserProcess: {
     arguments: string[];
@@ -83,10 +75,59 @@ interface RunningBridge {
   };
 }
 let packagedCommand: DistributionCommand;
-beforeAll(() => {
+let freeRuntime: FreeBrowserRuntime;
+beforeAll(async () => {
+  const cache = dirname(binaryInfo().cacheDir);
+  const entries = await readdir(cache);
+  const versions = entries
+    .filter((entry) => /^chromium-[\d.]+$/u.test(entry))
+    .sort()
+    .reverse();
+  const override = process.env.CLOAKBROWSER_BINARY_PATH;
+  const requested = override ? await realpath(override) : undefined;
+  let executable: string | undefined;
+  for (const entry of versions) {
+    const version = entry.slice('chromium-'.length);
+    const info = binaryInfo(version);
+    if (!info.installed || info.tier !== 'free') continue;
+    const candidate = await realpath(info.binaryPath);
+    if (!requested || requested === candidate) {
+      executable = candidate;
+      break;
+    }
+  }
+  if (!executable) throw new Error('CDP E2E requires a cached, verified Free CloakBrowser binary');
+  const playwrightExecutable = chromium.executablePath();
+  const installed = existsSync(playwrightExecutable);
+  if (!installed) throw new Error('CDP E2E requires an installed controlled Playwright Chromium executable');
   packagedCommand = packAndInstallCurrentPackage();
+  const parentEnv = { ...packagedCommand.env };
+  for (const key of Object.keys(parentEnv)) {
+    if (key.startsWith('PLAYWRIGHT_MCP_') || key.startsWith('CLOAK_PLAYWRIGHT_MCP_')) delete parentEnv[key];
+  }
+  parentEnv.PLAYWRIGHT_MCP_OUTPUT_DIR = packagedCommand.env.PLAYWRIGHT_MCP_OUTPUT_DIR ?? '';
+  const root = createTempRoot('cloak-cdp-free-');
+  const options = { root, freeExecutable: executable, parentEnv };
+  freeRuntime = await createFreeBrowserRuntime(options);
+  packagedCommand.env = freeRuntime.env;
+  packagedCommand.env.PLAYWRIGHT_MCP_EXECUTABLE_PATH = playwrightExecutable;
+  packagedCommand.env.PLAYWRIGHT_MCP_ISOLATED = 'true';
 });
-afterAll(() => cleanupDistributionE2e());
+afterAll(async () => {
+  try {
+    await freeRuntime?.dispose();
+  } finally {
+    cleanupDistributionE2e();
+  }
+});
+it('uses a verified Free Cloak binary and clears inherited license configuration', () => {
+  const executable = packagedCommand.env.CLOAKBROWSER_BINARY_PATH;
+  expect(executable).toBeDefined();
+  expect(packagedCommand.env.CLOAKBROWSER_LICENSE_KEY).toBeUndefined();
+  expect(packagedCommand.env.CLOAKBROWSER_CACHE_DIR).toBeDefined();
+  expect(packagedCommand.env.PLAYWRIGHT_MCP_EXECUTABLE_PATH).toBeDefined();
+  expect(packagedCommand.env.PLAYWRIGHT_MCP_ISOLATED).toBe('true');
+});
 it('redacts managed CDP capabilities from E2E diagnostics', () => {
   const capability = 'A'.repeat(43);
   const diagnostic = `connection failed for ws://127.0.0.1:9222/cdp/${capability}/devtools/browser/id`;
@@ -293,11 +334,8 @@ describe.each<BrowserEngine>(nodeBrowserEngines)('packaged Node managed CDP with
       const message3 = `Raw Browser.close did not disconnect ${engine}`;
       await withTimeout(disconnected, 10000, message3);
       await expect.poll(async () => (await readBridgeCdpInfo(bridge.client)).state).toBe('unavailable');
-      await expect.poll(async () => await processExists(initialBrowserProcess.pid)).toBe(false);
-      const filteredValues = (await findManagedBrowserProcesses()).filter(
-        (processInfo) => !bridge.baselineBrowserPids.has(processInfo.pid),
-      );
-      expect(filteredValues).toHaveLength(0);
+      const termination = { timeout: 10000 };
+      await expect.poll(async () => await processExists(initialBrowserProcess.pid), termination).toBe(false);
       const callToolOptions2 = {
         name: 'browser_tabs',
         arguments: { action: 'list' },
@@ -314,15 +352,10 @@ describe.each<BrowserEngine>(nodeBrowserEngines)('packaged Node managed CDP with
       expect(replacement.generation).toBeGreaterThan(bridge.cdp.generation);
       const computedValue = replacement.discoveryUrl === bridge.cdp.discoveryUrl;
       expect(computedValue).toBe(false);
-      const values3: Iterable<number> | null | undefined = [
-        ...bridge.baselineBrowserPids,
-        initialBrowserProcess.pid,
-      ];
-      const set = new Set(values3);
-      const replacementProcess = await findManagedBrowserProcess(set);
-      expect(replacementProcess.pid).not.toBe(initialBrowserProcess.pid);
       const replacementBrowser = await connectOverManagedCdp(replacement.discoveryUrl);
       try {
+        const replacementProcess = await readManagedBrowserProcess(replacementBrowser);
+        expect(replacementProcess.pid).not.toBe(initialBrowserProcess.pid);
         const findPageResult = findPage(replacementBrowser, 'data:text/html');
         await expect(findPageResult).resolves.toBeDefined();
       } finally {
@@ -332,326 +365,322 @@ describe.each<BrowserEngine>(nodeBrowserEngines)('packaged Node managed CDP with
       await closePackagedBridge(bridge);
     }
   });
-  const computedValue2 = engine === 'cloak' && !multiSessionCloakEnabled;
-  it.skipIf(computedValue2)(
-    'isolates two Streamable HTTP sessions with explicit CDP enablement',
-    async () => {
-      const fixture = await startFixtureServer();
-      const range = await findFreePortRange(3);
-      const server = await startPackagedHttpBridge(engine, false, range, multiSessionCloakBinaryPath);
-      const sessions: RawHttpSession[] = [];
-      const browsers: Browser[] = [];
-      try {
-        const initializeRawHttpSessionOptions = { cdpEnabled: true } as const;
-        const first = await initializeRawHttpSession(server, initializeRawHttpSessionOptions);
-        sessions.push(first);
-        const initializeRawHttpSessionOptions2 = { cdpEnabled: true } as const;
-        const second = await initializeRawHttpSession(server, initializeRawHttpSessionOptions2);
-        sessions.push(second);
-        const initializeRawHttpSessionOptions3 = { cdpEnabled: false } as const;
-        const disabled = await initializeRawHttpSession(server, initializeRawHttpSessionOptions3);
-        sessions.push(disabled);
-        const firstInfo = await readHttpCdpInfo(first);
-        const secondInfo = await readHttpCdpInfo(second);
-        expect(firstInfo.port).not.toBe(secondInfo.port);
-        expect(firstInfo.discoveryUrl).not.toBe(secondInfo.discoveryUrl);
-        const httpCdpStateResult = await readHttpCdpState(disabled);
-        const receiver3Actual = httpCdpStateResult;
-        const toEqualOptions = { enabled: false } as const;
-        expect(receiver3Actual).toEqual(toEqualOptions);
-        const callHttpToolOptions = { url: `${fixture.url}?session=first` } as const;
-        const callHttpToolResult = callHttpTool(first, 'browser_navigate', callHttpToolOptions);
-        const callHttpToolOptions2 = { url: `${fixture.url}?session=second` } as const;
-        const callHttpToolResult2 = callHttpTool(second, 'browser_navigate', callHttpToolOptions2);
-        const values4: [
-          Promise<{
-            [x: string]: unknown;
-            content: (
-              | {
-                  type: 'text';
-                  text: string;
-                  annotations?:
-                    | {
-                        audience?: ('user' | 'assistant')[] | undefined;
-                        priority?: number | undefined;
-                        lastModified?: string | undefined;
-                      }
-                    | undefined;
-                  _meta?: Record<string, unknown> | undefined;
-                }
-              | {
-                  type: 'image';
-                  data: string;
-                  mimeType: string;
-                  annotations?:
-                    | {
-                        audience?: ('user' | 'assistant')[] | undefined;
-                        priority?: number | undefined;
-                        lastModified?: string | undefined;
-                      }
-                    | undefined;
-                  _meta?: Record<string, unknown> | undefined;
-                }
-              | {
-                  type: 'audio';
-                  data: string;
-                  mimeType: string;
-                  annotations?:
-                    | {
-                        audience?: ('user' | 'assistant')[] | undefined;
-                        priority?: number | undefined;
-                        lastModified?: string | undefined;
-                      }
-                    | undefined;
-                  _meta?: Record<string, unknown> | undefined;
-                }
-              | {
-                  uri: string;
-                  name: string;
-                  type: 'resource_link';
-                  description?: string | undefined;
-                  mimeType?: string | undefined;
-                  size?: number | undefined;
-                  annotations?:
-                    | {
-                        audience?: ('user' | 'assistant')[] | undefined;
-                        priority?: number | undefined;
-                        lastModified?: string | undefined;
-                      }
-                    | undefined;
-                  _meta?: Record<string, unknown> | undefined;
-                  icons?:
-                    | {
-                        src: string;
-                        mimeType?: string | undefined;
-                        sizes?: string[] | undefined;
-                        theme?: 'light' | 'dark' | undefined;
-                      }[]
-                    | undefined;
-                  title?: string | undefined;
-                }
-              | {
-                  type: 'resource';
-                  resource:
-                    | {
-                        uri: string;
-                        text: string;
-                        mimeType?: string | undefined;
-                        _meta?: Record<string, unknown> | undefined;
-                      }
-                    | {
-                        uri: string;
-                        blob: string;
-                        mimeType?: string | undefined;
-                        _meta?: Record<string, unknown> | undefined;
-                      };
-                  annotations?:
-                    | {
-                        audience?: ('user' | 'assistant')[] | undefined;
-                        priority?: number | undefined;
-                        lastModified?: string | undefined;
-                      }
-                    | undefined;
-                  _meta?: Record<string, unknown> | undefined;
-                }
-            )[];
-            _meta?:
-              | {
-                  [x: string]: unknown;
-                  progressToken?: string | number | undefined;
-                  'io.modelcontextprotocol/related-task'?:
-                    | {
-                        taskId: string;
-                      }
-                    | undefined;
-                }
-              | undefined;
-            structuredContent?: Record<string, unknown> | undefined;
-            isError?: boolean | undefined;
-          }>,
-          Promise<{
-            [x: string]: unknown;
-            content: (
-              | {
-                  type: 'text';
-                  text: string;
-                  annotations?:
-                    | {
-                        audience?: ('user' | 'assistant')[] | undefined;
-                        priority?: number | undefined;
-                        lastModified?: string | undefined;
-                      }
-                    | undefined;
-                  _meta?: Record<string, unknown> | undefined;
-                }
-              | {
-                  type: 'image';
-                  data: string;
-                  mimeType: string;
-                  annotations?:
-                    | {
-                        audience?: ('user' | 'assistant')[] | undefined;
-                        priority?: number | undefined;
-                        lastModified?: string | undefined;
-                      }
-                    | undefined;
-                  _meta?: Record<string, unknown> | undefined;
-                }
-              | {
-                  type: 'audio';
-                  data: string;
-                  mimeType: string;
-                  annotations?:
-                    | {
-                        audience?: ('user' | 'assistant')[] | undefined;
-                        priority?: number | undefined;
-                        lastModified?: string | undefined;
-                      }
-                    | undefined;
-                  _meta?: Record<string, unknown> | undefined;
-                }
-              | {
-                  uri: string;
-                  name: string;
-                  type: 'resource_link';
-                  description?: string | undefined;
-                  mimeType?: string | undefined;
-                  size?: number | undefined;
-                  annotations?:
-                    | {
-                        audience?: ('user' | 'assistant')[] | undefined;
-                        priority?: number | undefined;
-                        lastModified?: string | undefined;
-                      }
-                    | undefined;
-                  _meta?: Record<string, unknown> | undefined;
-                  icons?:
-                    | {
-                        src: string;
-                        mimeType?: string | undefined;
-                        sizes?: string[] | undefined;
-                        theme?: 'light' | 'dark' | undefined;
-                      }[]
-                    | undefined;
-                  title?: string | undefined;
-                }
-              | {
-                  type: 'resource';
-                  resource:
-                    | {
-                        uri: string;
-                        text: string;
-                        mimeType?: string | undefined;
-                        _meta?: Record<string, unknown> | undefined;
-                      }
-                    | {
-                        uri: string;
-                        blob: string;
-                        mimeType?: string | undefined;
-                        _meta?: Record<string, unknown> | undefined;
-                      };
-                  annotations?:
-                    | {
-                        audience?: ('user' | 'assistant')[] | undefined;
-                        priority?: number | undefined;
-                        lastModified?: string | undefined;
-                      }
-                    | undefined;
-                  _meta?: Record<string, unknown> | undefined;
-                }
-            )[];
-            _meta?:
-              | {
-                  [x: string]: unknown;
-                  progressToken?: string | number | undefined;
-                  'io.modelcontextprotocol/related-task'?:
-                    | {
-                        taskId: string;
-                      }
-                    | undefined;
-                }
-              | undefined;
-            structuredContent?: Record<string, unknown> | undefined;
-            isError?: boolean | undefined;
-          }>,
-        ] = [callHttpToolResult, callHttpToolResult2];
-        await Promise.all(values4);
-        const firstBrowser = await connectOverManagedCdp(firstInfo.discoveryUrl);
-        const secondBrowser = await connectOverManagedCdp(secondInfo.discoveryUrl);
-        browsers.push(firstBrowser, secondBrowser);
-        const firstPage = await findPage(firstBrowser, fixture.url);
-        const secondPage = await findPage(secondBrowser, fixture.url);
-        await firstPage.evaluate("localStorage.setItem('session-owner', 'first')");
-        await secondPage.evaluate("localStorage.setItem('session-owner', 'second')");
-        const receiver4 = firstPage.context();
-        const values5: readonly {
-          name: string;
-          value: string;
-          url?: string;
-          domain?: string;
-          path?: string;
-          expires?: number;
-          httpOnly?: boolean;
-          secure?: boolean;
-          sameSite?: 'Strict' | 'Lax' | 'None';
-          partitionKey?: string;
-        }[] = [{ name: 'session-owner', value: 'first', url: fixture.url }];
-        await receiver4.addCookies(values5);
-        const receiver5 = secondPage.context();
-        const values6: readonly {
-          name: string;
-          value: string;
-          url?: string;
-          domain?: string;
-          path?: string;
-          expires?: number;
-          httpOnly?: boolean;
-          secure?: boolean;
-          sameSite?: 'Strict' | 'Lax' | 'None';
-          partitionKey?: string;
-        }[] = [{ name: 'session-owner', value: 'second', url: fixture.url }];
-        await receiver5.addCookies(values6);
-        const evaluateResult3 = firstPage.evaluate("localStorage.getItem('session-owner')");
-        await expect(evaluateResult3).resolves.toBe('first');
-        const evaluateResult4 = secondPage.evaluate("localStorage.getItem('session-owner')");
-        await expect(evaluateResult4).resolves.toBe('second');
-        const cookiesResult = firstPage.context().cookies(fixture.url);
-        const receiver6Actual = cookiesResult;
-        const objectContainingOptions = { name: 'session-owner', value: 'first' } as const;
-        const objectContainingResult = expect.objectContaining(objectContainingOptions);
-        const values7 = [objectContainingResult];
-        const arrayContainingResult = expect.arrayContaining(values7);
-        await expect(receiver6Actual).resolves.toEqual(arrayContainingResult);
-        const cookiesResult2 = secondPage.context().cookies(fixture.url);
-        const receiver7Actual = cookiesResult2;
-        const objectContainingOptions2 = { name: 'session-owner', value: 'second' } as const;
-        const objectContainingResult2 = expect.objectContaining(objectContainingOptions2);
-        const values8 = [objectContainingResult2];
-        const arrayContainingResult2 = expect.arrayContaining(values8);
-        await expect(receiver7Actual).resolves.toEqual(arrayContainingResult2);
-        const firstContext = firstBrowser.contexts()[0];
-        const secondContext = secondBrowser.contexts()[0];
-        if (firstContext === undefined || secondContext === undefined) {
-          throw new Error('Expected default browser contexts for both HTTP sessions');
-        }
-        const secondTargetCount = secondContext.pages().length;
-        const targetCreated = firstContext.waitForEvent('page');
-        const newTarget = await firstContext.newPage();
-        await expect(targetCreated).resolves.toBe(newTarget);
-        const message4 = `${fixture.url}?target=first`;
-        await newTarget.goto(message4);
-        const pagesResult = secondContext.pages();
-        expect(pagesResult).toHaveLength(secondTargetCount);
-      } finally {
-        const mappedValues = browsers.map((browser) => browser.close());
-        await Promise.allSettled(mappedValues);
-        const mappedValues2 = sessions.map((session) => closeRawHttpSession(session));
-        await Promise.allSettled(mappedValues2);
-        await closePackagedHttpBridge(server);
-        await fixture.close();
+  it('isolates two Streamable HTTP sessions with explicit CDP enablement', async () => {
+    const fixture = await startFixtureServer();
+    const range = await findFreePortRange(3);
+    const server = await startPackagedHttpBridge(engine, false, range);
+    const sessions: RawHttpSession[] = [];
+    const browsers: Browser[] = [];
+    try {
+      const initializeRawHttpSessionOptions = { cdpEnabled: true } as const;
+      const first = await initializeRawHttpSession(server, initializeRawHttpSessionOptions);
+      sessions.push(first);
+      const initializeRawHttpSessionOptions2 = { cdpEnabled: true } as const;
+      const second = await initializeRawHttpSession(server, initializeRawHttpSessionOptions2);
+      sessions.push(second);
+      const initializeRawHttpSessionOptions3 = { cdpEnabled: false } as const;
+      const disabled = await initializeRawHttpSession(server, initializeRawHttpSessionOptions3);
+      sessions.push(disabled);
+      const firstInfo = await readHttpCdpInfo(first);
+      const secondInfo = await readHttpCdpInfo(second);
+      expect(firstInfo.port).not.toBe(secondInfo.port);
+      expect(firstInfo.discoveryUrl).not.toBe(secondInfo.discoveryUrl);
+      const httpCdpStateResult = await readHttpCdpState(disabled);
+      const receiver3Actual = httpCdpStateResult;
+      const toEqualOptions = { enabled: false } as const;
+      expect(receiver3Actual).toEqual(toEqualOptions);
+      const callHttpToolOptions = { url: `${fixture.url}?session=first` } as const;
+      const callHttpToolResult = callHttpTool(first, 'browser_navigate', callHttpToolOptions);
+      const callHttpToolOptions2 = { url: `${fixture.url}?session=second` } as const;
+      const callHttpToolResult2 = callHttpTool(second, 'browser_navigate', callHttpToolOptions2);
+      const values4: [
+        Promise<{
+          [x: string]: unknown;
+          content: (
+            | {
+                type: 'text';
+                text: string;
+                annotations?:
+                  | {
+                      audience?: ('user' | 'assistant')[] | undefined;
+                      priority?: number | undefined;
+                      lastModified?: string | undefined;
+                    }
+                  | undefined;
+                _meta?: Record<string, unknown> | undefined;
+              }
+            | {
+                type: 'image';
+                data: string;
+                mimeType: string;
+                annotations?:
+                  | {
+                      audience?: ('user' | 'assistant')[] | undefined;
+                      priority?: number | undefined;
+                      lastModified?: string | undefined;
+                    }
+                  | undefined;
+                _meta?: Record<string, unknown> | undefined;
+              }
+            | {
+                type: 'audio';
+                data: string;
+                mimeType: string;
+                annotations?:
+                  | {
+                      audience?: ('user' | 'assistant')[] | undefined;
+                      priority?: number | undefined;
+                      lastModified?: string | undefined;
+                    }
+                  | undefined;
+                _meta?: Record<string, unknown> | undefined;
+              }
+            | {
+                uri: string;
+                name: string;
+                type: 'resource_link';
+                description?: string | undefined;
+                mimeType?: string | undefined;
+                size?: number | undefined;
+                annotations?:
+                  | {
+                      audience?: ('user' | 'assistant')[] | undefined;
+                      priority?: number | undefined;
+                      lastModified?: string | undefined;
+                    }
+                  | undefined;
+                _meta?: Record<string, unknown> | undefined;
+                icons?:
+                  | {
+                      src: string;
+                      mimeType?: string | undefined;
+                      sizes?: string[] | undefined;
+                      theme?: 'light' | 'dark' | undefined;
+                    }[]
+                  | undefined;
+                title?: string | undefined;
+              }
+            | {
+                type: 'resource';
+                resource:
+                  | {
+                      uri: string;
+                      text: string;
+                      mimeType?: string | undefined;
+                      _meta?: Record<string, unknown> | undefined;
+                    }
+                  | {
+                      uri: string;
+                      blob: string;
+                      mimeType?: string | undefined;
+                      _meta?: Record<string, unknown> | undefined;
+                    };
+                annotations?:
+                  | {
+                      audience?: ('user' | 'assistant')[] | undefined;
+                      priority?: number | undefined;
+                      lastModified?: string | undefined;
+                    }
+                  | undefined;
+                _meta?: Record<string, unknown> | undefined;
+              }
+          )[];
+          _meta?:
+            | {
+                [x: string]: unknown;
+                progressToken?: string | number | undefined;
+                'io.modelcontextprotocol/related-task'?:
+                  | {
+                      taskId: string;
+                    }
+                  | undefined;
+              }
+            | undefined;
+          structuredContent?: Record<string, unknown> | undefined;
+          isError?: boolean | undefined;
+        }>,
+        Promise<{
+          [x: string]: unknown;
+          content: (
+            | {
+                type: 'text';
+                text: string;
+                annotations?:
+                  | {
+                      audience?: ('user' | 'assistant')[] | undefined;
+                      priority?: number | undefined;
+                      lastModified?: string | undefined;
+                    }
+                  | undefined;
+                _meta?: Record<string, unknown> | undefined;
+              }
+            | {
+                type: 'image';
+                data: string;
+                mimeType: string;
+                annotations?:
+                  | {
+                      audience?: ('user' | 'assistant')[] | undefined;
+                      priority?: number | undefined;
+                      lastModified?: string | undefined;
+                    }
+                  | undefined;
+                _meta?: Record<string, unknown> | undefined;
+              }
+            | {
+                type: 'audio';
+                data: string;
+                mimeType: string;
+                annotations?:
+                  | {
+                      audience?: ('user' | 'assistant')[] | undefined;
+                      priority?: number | undefined;
+                      lastModified?: string | undefined;
+                    }
+                  | undefined;
+                _meta?: Record<string, unknown> | undefined;
+              }
+            | {
+                uri: string;
+                name: string;
+                type: 'resource_link';
+                description?: string | undefined;
+                mimeType?: string | undefined;
+                size?: number | undefined;
+                annotations?:
+                  | {
+                      audience?: ('user' | 'assistant')[] | undefined;
+                      priority?: number | undefined;
+                      lastModified?: string | undefined;
+                    }
+                  | undefined;
+                _meta?: Record<string, unknown> | undefined;
+                icons?:
+                  | {
+                      src: string;
+                      mimeType?: string | undefined;
+                      sizes?: string[] | undefined;
+                      theme?: 'light' | 'dark' | undefined;
+                    }[]
+                  | undefined;
+                title?: string | undefined;
+              }
+            | {
+                type: 'resource';
+                resource:
+                  | {
+                      uri: string;
+                      text: string;
+                      mimeType?: string | undefined;
+                      _meta?: Record<string, unknown> | undefined;
+                    }
+                  | {
+                      uri: string;
+                      blob: string;
+                      mimeType?: string | undefined;
+                      _meta?: Record<string, unknown> | undefined;
+                    };
+                annotations?:
+                  | {
+                      audience?: ('user' | 'assistant')[] | undefined;
+                      priority?: number | undefined;
+                      lastModified?: string | undefined;
+                    }
+                  | undefined;
+                _meta?: Record<string, unknown> | undefined;
+              }
+          )[];
+          _meta?:
+            | {
+                [x: string]: unknown;
+                progressToken?: string | number | undefined;
+                'io.modelcontextprotocol/related-task'?:
+                  | {
+                      taskId: string;
+                    }
+                  | undefined;
+              }
+            | undefined;
+          structuredContent?: Record<string, unknown> | undefined;
+          isError?: boolean | undefined;
+        }>,
+      ] = [callHttpToolResult, callHttpToolResult2];
+      await Promise.all(values4);
+      const firstBrowser = await connectOverManagedCdp(firstInfo.discoveryUrl);
+      const secondBrowser = await connectOverManagedCdp(secondInfo.discoveryUrl);
+      browsers.push(firstBrowser, secondBrowser);
+      const firstPage = await findPage(firstBrowser, fixture.url);
+      const secondPage = await findPage(secondBrowser, fixture.url);
+      await firstPage.evaluate("localStorage.setItem('session-owner', 'first')");
+      await secondPage.evaluate("localStorage.setItem('session-owner', 'second')");
+      const receiver4 = firstPage.context();
+      const values5: readonly {
+        name: string;
+        value: string;
+        url?: string;
+        domain?: string;
+        path?: string;
+        expires?: number;
+        httpOnly?: boolean;
+        secure?: boolean;
+        sameSite?: 'Strict' | 'Lax' | 'None';
+        partitionKey?: string;
+      }[] = [{ name: 'session-owner', value: 'first', url: fixture.url }];
+      await receiver4.addCookies(values5);
+      const receiver5 = secondPage.context();
+      const values6: readonly {
+        name: string;
+        value: string;
+        url?: string;
+        domain?: string;
+        path?: string;
+        expires?: number;
+        httpOnly?: boolean;
+        secure?: boolean;
+        sameSite?: 'Strict' | 'Lax' | 'None';
+        partitionKey?: string;
+      }[] = [{ name: 'session-owner', value: 'second', url: fixture.url }];
+      await receiver5.addCookies(values6);
+      const evaluateResult3 = firstPage.evaluate("localStorage.getItem('session-owner')");
+      await expect(evaluateResult3).resolves.toBe('first');
+      const evaluateResult4 = secondPage.evaluate("localStorage.getItem('session-owner')");
+      await expect(evaluateResult4).resolves.toBe('second');
+      const cookiesResult = firstPage.context().cookies(fixture.url);
+      const receiver6Actual = cookiesResult;
+      const objectContainingOptions = { name: 'session-owner', value: 'first' } as const;
+      const objectContainingResult = expect.objectContaining(objectContainingOptions);
+      const values7 = [objectContainingResult];
+      const arrayContainingResult = expect.arrayContaining(values7);
+      await expect(receiver6Actual).resolves.toEqual(arrayContainingResult);
+      const cookiesResult2 = secondPage.context().cookies(fixture.url);
+      const receiver7Actual = cookiesResult2;
+      const objectContainingOptions2 = { name: 'session-owner', value: 'second' } as const;
+      const objectContainingResult2 = expect.objectContaining(objectContainingOptions2);
+      const values8 = [objectContainingResult2];
+      const arrayContainingResult2 = expect.arrayContaining(values8);
+      await expect(receiver7Actual).resolves.toEqual(arrayContainingResult2);
+      const firstContext = firstBrowser.contexts()[0];
+      const secondContext = secondBrowser.contexts()[0];
+      if (firstContext === undefined || secondContext === undefined) {
+        throw new Error('Expected default browser contexts for both HTTP sessions');
       }
-    },
-  );
+      const secondTargetCount = secondContext.pages().length;
+      const targetCreated = firstContext.waitForEvent('page');
+      const newTarget = await firstContext.newPage();
+      await expect(targetCreated).resolves.toBe(newTarget);
+      const message4 = `${fixture.url}?target=first`;
+      await newTarget.goto(message4);
+      const pagesResult = secondContext.pages();
+      expect(pagesResult).toHaveLength(secondTargetCount);
+    } finally {
+      const mappedValues = browsers.map((browser) => browser.close());
+      await Promise.allSettled(mappedValues);
+      const mappedValues2 = sessions.map((session) => closeRawHttpSession(session));
+      await Promise.allSettled(mappedValues2);
+      await closePackagedHttpBridge(server);
+      await fixture.close();
+    }
+  });
   it('honors the HTTP process default and an explicit disabled session', async () => {
     const range = await findFreePortRange(2);
     const server = await startPackagedHttpBridge(engine, true, range);
@@ -855,7 +884,6 @@ async function startPackagedHttpBridge(
     end: number;
     start: number;
   },
-  binaryPath?: string,
 ): Promise<RunningHttpBridge> {
   const { PLAYWRIGHT_MCP_CLI_PATH: _fakeUpstream, ...baseEnv } = packagedCommand.env;
   const argumentValue3 = packagedCommand.command;
@@ -875,7 +903,6 @@ async function startPackagedHttpBridge(
       PLAYWRIGHT_MCP_HEADLESS: 'true',
       CLOAK_PLAYWRIGHT_MCP_CDP_ENABLED: String(processEnabled),
       CLOAK_PLAYWRIGHT_MCP_CDP_PORT_RANGE: `${String(range.start)}-${String(range.end)}`,
-      ...(binaryPath === undefined ? {} : { CLOAKBROWSER_BINARY_PATH: binaryPath }),
     },
   } as const;
   const child = spawn(argumentValue3, values11, spawnOptions);
@@ -1054,81 +1081,37 @@ async function terminateChild(child: ChildProcessWithoutNullStreams): Promise<vo
   child.kill('SIGTERM');
   await withTimeout(exited, 10000, 'Packaged HTTP bridge did not exit after SIGTERM');
 }
-async function findManagedBrowserProcess(excludedPids: ReadonlySet<number> = new Set()): Promise<{
-  arguments: string[];
-  pid: number;
-}> {
-  let processInfo:
-    | {
-        arguments: string[];
-        pid: number;
-      }
-    | undefined;
-  await expect
-    .poll(async () => {
-      const candidates = await findManagedBrowserProcesses();
-      processInfo = candidates.filter((candidate) => !excludedPids.has(candidate.pid)).at(-1);
-      return processInfo;
-    })
-    .toBeDefined();
-  if (processInfo === undefined) throw new Error('Managed browser process was not observed');
-  return processInfo;
-}
-async function findManagedBrowserProcesses(): Promise<
-  Array<{
-    arguments: string[];
-    pid: number;
-  }>
-> {
-  if (process.platform !== 'linux') {
-    throw new Error('Managed browser process launch evidence requires Linux /proc');
+async function readManagedBrowserProcess(browser: Browser): Promise<{ arguments: string[]; pid: number }> {
+  const session = await browser.newBrowserCDPSession();
+  try {
+    const result = await session.send('SystemInfo.getProcessInfo');
+    const processInfo = result.processInfo.find((info) => info.type === 'browser');
+    if (!processInfo) throw new Error('Missing owned managed browser PID');
+    let arguments_: string[];
+    if (process.platform === 'linux') {
+      const filename = `/proc/${processInfo.id}/cmdline`;
+      const bytes = await readFile(filename);
+      arguments_ = bytes.toString('utf8').split('\0').filter(Boolean);
+    } else {
+      const commandLine = await session.send('Browser.getBrowserCommandLine');
+      arguments_ = commandLine.arguments;
+    }
+    return { arguments: arguments_, pid: processInfo.id };
+  } finally {
+    await session.detach();
   }
-  const readdirOptions = { withFileTypes: true } as const;
-  const entries = await readdir('/proc', readdirOptions);
-  const mappedValues5 = entries
-    .filter((entry) => entry.isDirectory() && /^\d+$/u.test(entry.name))
-    .map(async (entry) => {
-      const pid = Number(entry.name);
-      try {
-        const message16 = `/proc/${entry.name}/cmdline`;
-        const commandLine = await readFile(message16);
-        const arguments_ = commandLine
-          .toString('utf8')
-          .split('\0')
-          .filter((argument) => argument.length > 0);
-        const flattened = arguments_.join(' ');
-        return flattened.includes('--remote-debugging-pipe') && !flattened.includes(' --type=')
-          ? { arguments: arguments_, pid }
-          : undefined;
-      } catch {
-        return undefined;
-      }
-    });
-  const processes = await Promise.all(mappedValues5);
-  return processes
-    .filter(
-      (
-        processInfo,
-      ): processInfo is {
-        arguments: string[];
-        pid: number;
-      } => Boolean(processInfo),
-    )
-    .sort((left, right) => left.pid - right.pid);
 }
 async function processExists(pid: number): Promise<boolean> {
   try {
-    const message17 = `/proc/${String(pid)}/stat`;
-    await readFile(message17);
+    process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ESRCH') return false;
+    throw error;
   }
 }
 async function startPackagedBridge(engine: BrowserEngine): Promise<RunningBridge> {
   const port = await findFreePort();
-  const mappedValues6 = (await findManagedBrowserProcesses()).map((processInfo) => processInfo.pid);
-  const baselineBrowserPids = new Set(mappedValues6);
   const { PLAYWRIGHT_MCP_CLI_PATH: _fakeUpstream, ...baseEnv } = packagedCommand.env;
   const stdioClientTransportOptions2 = {
     command: packagedCommand.command,
@@ -1155,11 +1138,11 @@ async function startPackagedBridge(engine: BrowserEngine): Promise<RunningBridge
     await withTimeout(connectResult2, 75000, message18);
     const cdp = await readCdpInfo(client);
     const browser = await connectOverManagedCdp(cdp.discoveryUrl);
-    const browserProcess = await findManagedBrowserProcess(baselineBrowserPids);
+    const browserProcess = await readManagedBrowserProcess(browser);
     const argumentValue7 = new URL(cdp.discoveryUrl).pathname;
     const includesResult2 = stderr.text.includes(argumentValue7);
     expect(includesResult2).toBe(false);
-    return { baselineBrowserPids, browser, browserProcess, cdp, client, stderr };
+    return { browser, browserProcess, cdp, client, stderr };
   } catch (error) {
     await client.close().catch(() => undefined);
     throwManagedCdpStartupError(engine, stderr.text, error);

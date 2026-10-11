@@ -1,0 +1,306 @@
+name: Functional test reporting
+
+on:
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CLOAK_REPORT_LANE: periodic
+  CLOAK_REPORT_PLATFORMS: '["ubuntu-latest","ubuntu-24.04-arm","macos-latest","macos-15-intel","windows-latest"]'
+  NODE_CHECK_VERSIONS: '["22","24","25","26"]'
+  NPM_VERSION: '11.19.0'
+  DOCKER_CACHE_SCOPE: cloakbrowser-mcp-docker
+  NODE_IMAGE_REF: node:22-bookworm-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436
+  PLAYWRIGHT_MCP_IMAGE: mcr.microsoft.com/playwright/mcp:v0.0.82@sha256:77dccc5ce9e94cb8ae7ebea87ddbb6cd54b05760c4d63c54e16accf2726b8734
+
+jobs:
+  functional:
+    name: functional (${{ matrix.os }}, ${{ matrix.suite }}, node 24)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest]
+        suite: [npm, proxy-geoip, extensions, lifecycle]
+    env:
+      CLOAKBROWSER_LICENSE_KEY: ''
+      CLOAKBROWSER_AUTO_UPDATE: 'false'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - name: Use pinned npm
+        run: npm install --global npm@${{ env.NPM_VERSION }}
+      - run: npm ci --ignore-scripts
+      - name: Configure isolated Free cache
+        shell: node {0}
+        run: |
+          const { appendFileSync } = require('node:fs');
+          const { join } = require('node:path');
+          const cache = join(process.env.RUNNER_TEMP, 'free-browser-cache');
+          const entry = `CLOAKBROWSER_CACHE_DIR=${cache}\n`;
+          appendFileSync(process.env.GITHUB_ENV, entry);
+      - name: Install native Chromium dependencies
+        if: runner.os == 'Linux'
+        run: node node_modules/playwright/cli.js install-deps chromium
+      - name: Install only Free Chromium into isolated cache
+        shell: node {0}
+        run: |
+          (async () => {
+            const { binaryInfo, ensureBinary } = await import('cloakbrowser');
+            const info = binaryInfo();
+            if (info.tier !== 'free') throw new Error('Expected license-free Chromium');
+            await ensureBinary(undefined, info.version);
+          })().catch((error) => { process.stderr.write(error.message + '\n'); process.exitCode = 1; });
+      - run: npm run build
+      - name: Configure functional reporting
+        run: node scripts/test-report.mjs ci-config
+        env:
+          CLOAK_REPORT_GROUP: ${{ matrix.suite }}
+          CLOAK_REPORT_SUITE: ${{ matrix.suite }}
+          CLOAK_REPORT_ENGINE: cloak
+      - name: Run real browser suite with Linux display
+        if: runner.os == 'Linux'
+        env:
+          REPORT_FILE: ${{ matrix.suite == 'npm' && 'npm-package.manual.ts' || matrix.suite == 'lifecycle' && 'browser-lifecycle.manual.ts' || format('{0}.manual.ts', matrix.suite) }}
+        run: xvfb-run -a node node_modules/vitest/vitest.mjs run --config vitest.distribution-e2e.config.mjs "tests/e2e/$REPORT_FILE"
+      - name: Run real browser suite on native desktop
+        if: runner.os != 'Linux'
+        env:
+          REPORT_FILE: ${{ matrix.suite == 'npm' && 'npm-package.manual.ts' || matrix.suite == 'lifecycle' && 'browser-lifecycle.manual.ts' || format('{0}.manual.ts', matrix.suite) }}
+        shell: node {0}
+        run: |
+          const { spawnSync } = require('node:child_process');
+          const file = `tests/e2e/${process.env.REPORT_FILE}`;
+          const args = ['node_modules/vitest/vitest.mjs', 'run', '--config', 'vitest.distribution-e2e.config.mjs', file];
+          const result = spawnSync(process.execPath, args, { stdio: 'inherit' });
+          if (result.error) throw result.error;
+          process.exitCode = result.status ?? 1;
+      - name: Upload sanitized functional evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results-functional-${{ matrix.os }}-${{ matrix.suite }}
+          path: ${{ env.CLOAK_REPORT_ROOT }}
+          retention-days: 14
+          if-no-files-found: error
+
+  docker:
+    name: docker (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            platform_slug: linux-amd64
+            image_tag: cloakbrowser-mcp:ci-linux-amd64
+            runner: ubuntu-latest
+            compare: true
+          - platform: linux/arm64
+            platform_slug: linux-arm64
+            image_tag: cloakbrowser-mcp:ci-linux-arm64
+            runner: ubuntu-24.04-arm
+            compare: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - name: Use npm ${{ env.NPM_VERSION }}
+        run: npm install --global npm@${{ env.NPM_VERSION }}
+      - run: npm ci --ignore-scripts
+      - id: package
+        name: Read package version
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "version_tag=v$version" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - id: base
+        name: Resolve Playwright MCP base digest
+        run: |
+          digest="$(docker buildx imagetools inspect "$PLAYWRIGHT_MCP_IMAGE" | awk '/^Digest:/ { print $2; exit }')"
+          if [ -z "$digest" ]; then
+            echo "::error title=Base image digest not found::Could not resolve $PLAYWRIGHT_MCP_IMAGE"
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - name: Build image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          load: true
+          pull: true
+          platforms: ${{ matrix.platform }}
+          tags: ${{ matrix.image_tag }}
+          build-args: |
+            NODE_IMAGE_REF=${{ env.NODE_IMAGE_REF }}
+            PLAYWRIGHT_MCP_IMAGE=${{ env.PLAYWRIGHT_MCP_IMAGE }}
+            PLAYWRIGHT_MCP_IMAGE_DIGEST=${{ steps.base.outputs.digest }}
+            RELEASE_VERSION=${{ steps.package.outputs.version }}
+            RELEASE_VERSION_TAG=${{ steps.package.outputs.version_tag }}
+            VCS_REF=${{ github.sha }}
+          cache-from: type=gha,scope=${{ env.DOCKER_CACHE_SCOPE }}-${{ matrix.platform_slug }}
+          cache-to: type=gha,mode=max,scope=${{ env.DOCKER_CACHE_SCOPE }}-${{ matrix.platform_slug }},ignore-error=true
+      - name: Smoke (--help)
+        run: docker run --rm "${{ matrix.image_tag }}" --help
+      - name: Configure docker reporting
+        run: node scripts/test-report.mjs ci-config
+        env:
+          CLOAK_REPORT_GROUP: docker
+          CLOAK_REPORT_SUITE: docker
+          CLOAK_REPORT_ENGINE: cloak
+      - name: Docker E2E acceptance
+        run: npm run test:e2e:docker:run
+        env:
+          CLOAKBROWSER_MCP_DOCKER_IMAGE: ${{ matrix.image_tag }}
+      - name: Configure docker-cdp reporting
+        run: node scripts/test-report.mjs ci-config
+        env:
+          CLOAK_REPORT_GROUP: docker-cdp
+          CLOAK_REPORT_SUITE: docker-cdp
+          CLOAK_REPORT_ENGINE: cloak
+      - name: Managed CDP Docker acceptance (cloak)
+        run: npm run test:e2e:cdp:docker:run
+        env:
+          CLOAKBROWSER_MCP_CDP_EXPECTED_ARCHITECTURE: ${{ matrix.platform }}
+          CLOAKBROWSER_MCP_DOCKER_IMAGE: ${{ matrix.image_tag }}
+      - name: Configure docker-cdp reporting
+        run: node scripts/test-report.mjs ci-config
+        env:
+          CLOAK_REPORT_GROUP: docker-cdp
+          CLOAK_REPORT_SUITE: docker-cdp
+          CLOAK_REPORT_ENGINE: playwright
+      - name: Managed CDP Docker acceptance (playwright)
+        run: npm run test:e2e:cdp:docker:run
+        env:
+          CLOAKBROWSER_MCP_CDP_DOCKER_ENGINE: playwright
+          CLOAKBROWSER_MCP_CDP_EXPECTED_ARCHITECTURE: ${{ matrix.platform }}
+          CLOAKBROWSER_MCP_DOCKER_IMAGE: ${{ matrix.image_tag }}
+      - name: Upload sanitized test evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results-docker-${{ matrix.platform_slug }}
+          path: ${{ env.CLOAK_REPORT_ROOT }}
+          retention-days: 14
+          if-no-files-found: error
+      - name: Compare with upstream Playwright MCP
+        if: matrix.compare
+        run: npm run bridge:compare -- "${{ matrix.image_tag }}" --report bridge-parity-report.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && matrix.compare
+        with:
+          name: bridge-parity-report-${{ matrix.platform_slug }}
+          path: bridge-parity-report.json
+          if-no-files-found: warn
+      - name: Scan Docker image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ matrix.image_tag }}
+          version: v0.70.0
+          scanners: vuln
+          format: sarif
+          output: trivy-results.sarif
+          severity: HIGH,CRITICAL
+          limit-severities-for-sarif: true
+          vuln-type: os,library
+          ignore-unfixed: true
+          exit-code: '1'
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: trivy-results-${{ matrix.platform_slug }}
+          path: trivy-results.sarif
+          if-no-files-found: warn
+      - name: Upload Trivy SARIF
+        if: always() && github.event_name != 'pull_request' && hashFiles('trivy-results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          sarif_file: trivy-results.sarif
+
+  test-report:
+    name: Combined test report
+    if: ${{ always() }}
+    needs: [functional, docker]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    env:
+      CLOAK_REPORT_INPUT: artifacts/ci-report-download
+      CLOAK_REPORT_OUTPUT: artifacts/ci-combined-report
+      CLOAK_REPORT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      CLOAK_REPORT_HISTORY_INPUT: artifacts/ci-previous-history
+      CLOAK_REPORT_HISTORY_OUTPUT: artifacts/ci-next-history
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Prepare isolated download directory
+        run: mkdir -p "$CLOAK_REPORT_INPUT"
+      - name: Download this run's producer artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: test-results-*
+          path: ${{ env.CLOAK_REPORT_INPUT }}
+          merge-multiple: false
+      - name: Find matching trusted launch history
+        id: history
+        if: always()
+        run: node scripts/test-report.mjs ci-history
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Download matching trusted history
+        if: always() && steps.history.outputs.run-id != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ steps.history.outputs.name }}
+          run-id: ${{ steps.history.outputs.run-id }}
+          github-token: ${{ github.token }}
+          path: ${{ env.CLOAK_REPORT_HISTORY_INPUT }}
+      - name: Validate, merge and generate report
+        id: report
+        if: always()
+        run: node scripts/test-report.mjs ci-aggregate
+      - name: Upload combined sanitized HTML and evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: combined-test-report
+          path: ${{ env.CLOAK_REPORT_OUTPUT }}
+          retention-days: 14
+          if-no-files-found: error
+      - name: Save successful default-branch history
+        if: always() && steps.report.outcome == 'success' && steps.history.outputs.name != ''
+        run: node scripts/test-report.mjs ci-history-save
+      - name: Upload trusted launch history
+        if: always() && steps.report.outcome == 'success' && steps.history.outputs.name != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.history.outputs.name }}
+          path: ${{ env.CLOAK_REPORT_HISTORY_OUTPUT }}
+          retention-days: 14
+          if-no-files-found: error

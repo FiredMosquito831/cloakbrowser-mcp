@@ -19,7 +19,6 @@ export const fakeUpstreamContainerPath = `${fakeUpstreamContainerDir}/fake-upstr
 export const dockerImageTag = process.env.CLOAKBROWSER_MCP_DOCKER_IMAGE ?? 'cloakbrowser-mcp:dev';
 const localToolNames = [LOCAL_TOOL_BINARY_INFO, LOCAL_TOOL_BRIDGE_INFO] as const;
 const expectedBridgeToolNames = [...fakeUpstreamToolNames, ...localToolNames];
-const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const tempRoots: string[] = [];
 export interface DistributionCommand {
   label: string;
@@ -63,20 +62,26 @@ export function runCommand(command: string, args: string[], cwd: string): string
   }
   return result.stdout;
 }
+export function runNpmCommand(args: string[], cwd: string): string {
+  const cli = process.env.npm_execpath;
+  if (!cli) throw new Error('Run distribution tests through npm to provide npm_execpath');
+  const nodeArgs = [cli, ...args];
+  return runCommand(process.execPath, nodeArgs, cwd);
+}
 export function packAndInstallCurrentPackage(): DistributionCommand {
   const packDir = createTempRoot('cloakbrowser-mcp-pack-');
   const installDir = createTempRoot('cloakbrowser-mcp-install-');
   const joinedPath3 = path.join(installDir, 'package.json');
   writeFileSync(joinedPath3, '{"private":true,"type":"module"}\n');
   const values: string[] = ['pack', '--json', '--pack-destination', packDir];
-  const runCommandResult = runCommand(npmCommand, values, repoRoot);
+  const runCommandResult = runNpmCommand(values, repoRoot);
   const packed = JSON.parse(runCommandResult) as Array<{
     filename: string;
   }>;
   const computedValue = packed[0]?.filename ?? '';
   const packageFile = path.join(packDir, computedValue);
   const values2: string[] = ['install', '--ignore-scripts', '--no-audit', '--no-fund', packageFile];
-  runCommand(npmCommand, values2, installDir);
+  runNpmCommand(values2, installDir);
   const propertyValue = 'npm package';
   const argumentValue = process.platform === 'win32' ? 'cloakbrowser-mcp.cmd' : 'cloakbrowser-mcp';
   const joinedPath5 = path.join(installDir, 'node_modules', '.bin', argumentValue);

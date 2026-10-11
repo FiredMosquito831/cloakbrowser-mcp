@@ -4,6 +4,48 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 type Cleanup = () => void | Promise<void>;
+export const browserDisposalTimeout = 10000;
+
+/** Bound the entire close operation, including PID and port observations. */
+export async function withCleanupDeadline<T>(
+  cleanup: () => Promise<T>,
+  owner: string,
+  forceTermination: () => void,
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const expired = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      const message = `${owner} exceeded ${browserDisposalTimeout}ms`;
+      try {
+        forceTermination();
+      } catch (cause) {
+        const options = { cause };
+        const error = new Error(message, options);
+        reject(error);
+        return;
+      }
+      const error = new Error(message);
+      reject(error);
+    }, browserDisposalTimeout);
+  });
+  try {
+    const operation = cleanup();
+    const contenders = [operation, expired];
+    return await Promise.race(contenders);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export function killOwnedProcess(pid: number | null | undefined): void {
+  if (!pid) return;
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ESRCH') return;
+    throw error;
+  }
+}
 export interface FreeBrowserRuntime {
   root: string;
   env: Record<string, string>;

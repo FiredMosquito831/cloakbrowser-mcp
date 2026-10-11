@@ -1,0 +1,340 @@
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+
+interface Identity {
+  pr: number;
+  run: number;
+  attempt: number;
+  sha: string;
+  path: string;
+  fallback: string;
+}
+type Api = (method: string, endpoint: string, body?: unknown) => Promise<unknown>;
+interface Publisher {
+  preparePublicReport: (options: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  updateReportComment: (
+    api: Api,
+    identity: Identity,
+    report?: Record<string, unknown>,
+    url?: string,
+  ) => Promise<string>;
+  cleanPublicTree: (tree: string, now: number) => Promise<Identity[]>;
+  verifyPublicReport: (
+    api: Api,
+    request: (url: string) => Promise<Buffer>,
+    options: Record<string, unknown>,
+  ) => Promise<void>;
+  githubApi: (token: string, destination?: string, request?: typeof fetch) => Api;
+}
+const url = new URL('../../scripts/publish-test-report.mjs', import.meta.url);
+const publisher = (await import(url.href)) as Publisher;
+const writerUrl = new URL('../../scripts/lib/test-results.mjs', import.meta.url);
+const writer = (await import(writerUrl.href)) as {
+  writeTestResult: (options: Record<string, unknown>) => Promise<void>;
+};
+const roots: string[] = [];
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+const sha = 'a'.repeat(40);
+const identity: Identity = {
+  pr: 7,
+  run: 20,
+  attempt: 2,
+  sha,
+  path: `pr/7/run/20-attempt-2/${sha}`,
+  fallback: 'https://github.com/swimmwatch/cloakbrowser-mcp/actions/runs/20/attempts/2',
+};
+const base = '/repos/swimmwatch/cloakbrowser-mcp';
+const bot = { type: 'Bot', login: 'github-actions[bot]' };
+const pr = { number: 7, state: 'open', head: { sha } };
+const run = {
+  id: 20,
+  run_attempt: 2,
+  event: 'pull_request',
+  head_sha: sha,
+  path: '.github/workflows/ci.yml',
+};
+const report = {
+  status: 'failed',
+  total: 2,
+  passed: 1,
+  failed: 1,
+  broken: 0,
+  skipped: 0,
+  missing: [],
+  environments: [
+    { id: 'linux', failed: 0 },
+    { id: 'windows', failed: 1 },
+  ],
+};
+const reportUrl = `https://swimmwatch.github.io/cloakbrowser-mcp-reports/${identity.path}/`;
+function fakeApi(comments: unknown[] = [], current: unknown = pr, runs: unknown[] = [run]) {
+  const writes: { method: string; endpoint: string; body: unknown }[] = [];
+  const api: Api = async (method, endpoint, body) => {
+    if (method !== 'GET') {
+      writes.push({ method, endpoint, body });
+      return {};
+    }
+    if (endpoint === `${base}/pulls/7`) return current;
+    if (endpoint.startsWith(`${base}/actions/workflows/ci.yml/runs?`)) return { workflow_runs: runs };
+    if (endpoint.startsWith(`${base}/issues/7/comments?`)) return comments;
+    throw new Error(`Unexpected API access: ${endpoint}`);
+  };
+  return { api, writes };
+}
+async function fixture() {
+  const temporary = await mkdtemp(path.join(tmpdir(), 'report-publisher-'));
+  const root = await realpath(temporary);
+  roots.push(root);
+  return root;
+}
+
+async function producer(input: string) {
+  const root = path.join(input, 'test-results-linux');
+  const result = {
+    uuid: randomUUID(),
+    file: 'tests/controlled.test.ts',
+    name: 'Controlled result',
+    project: 'default',
+    feature: 'publisher',
+    level: 'integration',
+    status: 'passed',
+    start: 0,
+    stop: 1,
+    retry: 0,
+    environment: { os: 'linux', arch: 'x64', node: '24', browser: 'none', lane: 'pr' },
+    attachments: [],
+  };
+  const options = { root, runId: 'run-20-attempt-2', producerId: 'linux', results: [result] };
+  await writer.writeTestResult(options);
+  return path.join(root, options.runId, options.producerId);
+}
+
+describe('trusted report publisher', () => {
+  it('keeps matrix failures truthful and never updates a user-owned marker comment', async () => {
+    const human = {
+      id: 1,
+      user: { type: 'User', login: 'maintainer' },
+      body: '<!-- cloakbrowser-report -->',
+    };
+    const f = fakeApi([human]);
+    await publisher.updateReportComment(f.api, identity, report, reportUrl);
+    expect(f.writes).toHaveLength(1);
+    expect(f.writes[0]?.endpoint).toBe(`${base}/issues/7/comments`);
+    const body = JSON.stringify(f.writes[0]?.body);
+    expect(body).toContain(sha);
+    expect(body).toContain('windows');
+    expect(body).toContain('failed');
+    expect(body).toContain(reportUrl);
+  });
+  it('updates only one bot-owned marker and makes identical events idempotent', async () => {
+    const initial = fakeApi();
+    await publisher.updateReportComment(initial.api, identity, report, reportUrl);
+    const body = (initial.writes[0]?.body as { body: string }).body;
+    const duplicate = fakeApi([{ id: 2, user: bot, body }]);
+    expect(await publisher.updateReportComment(duplicate.api, identity, report, reportUrl)).toBe('unchanged');
+    expect(duplicate.writes).toEqual([]);
+    const old = fakeApi([{ id: 2, user: bot, body: '<!-- cloakbrowser-report -->\nold' }]);
+    await publisher.updateReportComment(old.api, identity, report, reportUrl);
+    expect(old.writes[0]?.endpoint).toBe(`${base}/issues/comments/2`);
+  });
+  it.each(['head', 'run', 'attempt'])('does not overwrite a newer %s', async (change) => {
+    const current = change === 'head' ? { ...pr, head: { sha: 'b'.repeat(40) } } : pr;
+    const newer = change === 'run' ? { ...run, id: 21 } : { ...run, run_attempt: 3 };
+    const f = fakeApi([], current, change === 'head' ? [run] : [newer]);
+    expect(await publisher.updateReportComment(f.api, identity, report, reportUrl)).toBe('stale');
+    expect(f.writes).toEqual([]);
+  });
+  it('reports unavailable deployment without a successful public link', async () => {
+    const f = fakeApi();
+    await publisher.updateReportComment(f.api, identity);
+    const body = JSON.stringify(f.writes[0]?.body);
+    expect(body).toContain('unavailable');
+    expect(body).toContain(identity.fallback);
+    expect(body).not.toContain('github.io');
+  });
+  it('regenerates actual merged HTML and publishes no producer HTML or raw results', async () => {
+    const root = await fixture();
+    const input = path.join(root, 'download');
+    const output = path.join(root, 'public');
+    await mkdir(input);
+    for (const id of ['linux', 'windows']) {
+      const artifact = path.join(input, `test-results-${id}`);
+      const result = {
+        uuid: randomUUID(),
+        file: 'tests/controlled.test.ts',
+        name: 'Controlled matrix',
+        project: 'default',
+        feature: 'publisher',
+        level: 'integration',
+        status: id === 'linux' ? 'passed' : 'failed',
+        start: 0,
+        stop: 1,
+        retry: 0,
+        environment: { os: id, arch: 'x64', node: '24', browser: 'none', lane: 'pr' },
+        attachments: [{ name: 'log', type: 'text/plain', data: 'Authorization: Bearer synthetic-secret' }],
+      };
+      const options = { root: artifact, runId: 'run-20-attempt-2', producerId: id, results: [result] };
+      await writer.writeTestResult(options);
+      // A producer can tamper with valid evidence after its first sanitization.
+      const owner = path.join(artifact, options.runId, id);
+      const filenames = await readdir(owner);
+      const filename = filenames.find((entry) => entry.endsWith('-result.json'));
+      if (!filename) throw new Error('Missing controlled result');
+      const target = path.join(owner, filename);
+      const stored = JSON.parse(await readFile(target, 'utf8')) as {
+        name: string;
+        statusDetails: { message?: string };
+      };
+      stored.name = 'Controlled matrix <img src=x onerror="globalThis.publisherAttack=true">';
+      stored.statusDetails.message = 'password=second-pass-secret';
+      await writeFile(target, JSON.stringify(stored));
+    }
+    const expected = ['linux', 'windows'];
+    const options = { input, output, identity, expected };
+    const summary = await publisher.preparePublicReport(options);
+    expect(summary).toMatchObject({ total: 2, failed: 1 });
+    const published = path.join(output, identity.path);
+    expect((await readdir(published)).sort()).toEqual(['index.html', 'publication.json']);
+    const html = await readFile(path.join(published, 'index.html'), 'utf8');
+    expect(html).toContain('<html');
+    expect(html).not.toContain('synthetic-secret');
+    expect(html).not.toContain('second-pass-secret');
+    expect(html).not.toContain('<img src=x onerror=');
+    const f = fakeApi();
+    await publisher.updateReportComment(f.api, identity, summary, reportUrl);
+    expect(JSON.stringify(f.writes)).not.toContain('synthetic-secret');
+  });
+  it('rejects artifact executable content before producing a public tree', async () => {
+    const root = await fixture();
+    const input = path.join(root, 'download');
+    const output = path.join(root, 'public');
+    await mkdir(input);
+    const directory = await producer(input);
+    await writeFile(path.join(directory, 'index.html'), '<script>danger()</script>');
+    const options = { input, output, identity, expected: ['linux'] };
+    await expect(publisher.preparePublicReport(options)).rejects.toThrow('unsupported producer files');
+    await expect(readdir(output)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  it('rejects a forged manifest path before producing output', async () => {
+    const root = await fixture();
+    const input = path.join(root, 'download');
+    await mkdir(input);
+    const directory = await producer(input);
+    const filename = path.join(directory, 'producer.json');
+    const manifest = JSON.parse(await readFile(filename, 'utf8')) as { results: string[] };
+    manifest.results = ['../outside-result.json'];
+    await writeFile(filename, JSON.stringify(manifest));
+    const output = path.join(root, 'public');
+    const options = { input, output, identity, expected: ['linux'] };
+    await expect(publisher.preparePublicReport(options)).rejects.toThrow('unsafe result path');
+    await expect(readdir(output)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  it('rejects ambiguous bot ownership without changing any comments', async () => {
+    const body = '<!-- cloakbrowser-report -->';
+    const f = fakeApi([
+      { id: 1, user: bot, body },
+      { id: 2, user: bot, body },
+    ]);
+    await expect(publisher.updateReportComment(f.api, identity, report, reportUrl)).rejects.toThrow(
+      'multiple bot-owned',
+    );
+    expect(f.writes).toEqual([]);
+  });
+  it('rejects wrong-target and unsupported API writes before invoking the network', async () => {
+    const calls: unknown[] = [];
+    const request: typeof fetch = async (...args) => {
+      calls.push(args);
+      return new Response('{}');
+    };
+    const api = publisher.githubApi('synthetic-test-token', undefined, request);
+    for (const endpoint of [
+      '/repos/swimmwatch/cloakbrowser-mcp/contents/site',
+      '/repos/other/reports/issues/7/comments',
+    ]) {
+      await expect(api('POST', endpoint, {})).rejects.toThrow();
+    }
+    await expect(api('DELETE', `${base}/issues/comments/2`)).rejects.toThrow('forbidden API write');
+    expect(calls).toEqual([]);
+  });
+  it('keeps publisher disabled, read-only source access and trusted checkout wiring', async () => {
+    const workflow = await readFile('.github/workflows/publish-test-report.yml', 'utf8');
+    expect(workflow).toContain("vars.TEST_REPORT_PUBLICATION_ENABLED == 'true'");
+    expect(workflow).toContain("github.event.workflow_run.event == 'pull_request'");
+    expect(workflow).toContain('ref: ${{ github.event.repository.default_branch }}');
+    expect(workflow).not.toMatch(/^\s+(?:contents|pages): write/m);
+    expect(workflow).not.toContain('github.event.workflow_run.head_sha');
+    expect(workflow).toContain('persist-credentials: false');
+    expect(workflow).toContain('external_repository: ${{ env.REPORTS_REPOSITORY }}');
+    expect(workflow.indexOf('run: node scripts/publish-test-report.mjs prepare')).toBeLessThan(
+      workflow.indexOf('uses: actions/create-github-app-token@'),
+    );
+  });
+  it('verifies both successful Pages build identity and exact entrypoint bytes', async () => {
+    const bytes = Buffer.from('<html>trusted</html>');
+    const digest = createHash('sha256').update(bytes).digest('hex');
+    const options = {
+      repository: 'swimmwatch/cloakbrowser-mcp-reports',
+      commit: sha,
+      url: reportUrl,
+      digest,
+    };
+    const api: Api = async () => ({ status: 'built', commit: sha });
+    const request = async () => bytes;
+    await publisher.verifyPublicReport(api, request, options);
+    const wrong = async () => Buffer.from('other report');
+    await expect(publisher.verifyPublicReport(api, wrong, options)).rejects.toThrow('entrypoint');
+    const pending: Api = async () => ({ status: 'building', commit: sha });
+    await expect(publisher.verifyPublicReport(pending, request, options)).rejects.toThrow('deployment');
+  });
+  it('cleans expired owned paths while preserving live and unrelated files', async () => {
+    const tree = await fixture();
+    const now = Date.UTC(2026, 9, 10);
+    const expired = path.join(tree, identity.path);
+    await mkdir(expired, { recursive: true });
+    const metadata = { version: 1, identity, created: now - 15 * 86400000 };
+    await writeFile(path.join(expired, 'publication.json'), JSON.stringify(metadata));
+    await writeFile(path.join(expired, 'index.html'), 'owned');
+    const live = path.join(tree, 'unrelated');
+    await mkdir(live);
+    await writeFile(path.join(live, 'index.html'), 'retain');
+    const freshIdentity = {
+      ...identity,
+      run: 21,
+      path: `pr/7/run/21-attempt-2/${sha}`,
+      fallback: 'https://github.com/swimmwatch/cloakbrowser-mcp/actions/runs/21/attempts/2',
+    };
+    const fresh = path.join(tree, freshIdentity.path);
+    await mkdir(fresh, { recursive: true });
+    const freshMetadata = { version: 1, identity: freshIdentity, created: now };
+    await writeFile(path.join(fresh, 'publication.json'), JSON.stringify(freshMetadata));
+    await writeFile(path.join(fresh, 'index.html'), 'fresh');
+    expect(await publisher.cleanPublicTree(tree, now)).toEqual([identity]);
+    await expect(readFile(path.join(expired, 'index.html'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(path.join(live, 'index.html'), 'utf8')).toBe('retain');
+    expect(await readFile(path.join(fresh, 'index.html'), 'utf8')).toBe('fresh');
+  });
+  it('rejects forged retention metadata without deleting a report', async () => {
+    const tree = await fixture();
+    const owned = path.join(tree, identity.path);
+    await mkdir(owned, { recursive: true });
+    const metadata = { version: 1, identity: { ...identity, pr: 8 }, created: 0 };
+    await writeFile(path.join(owned, 'publication.json'), JSON.stringify(metadata));
+    await writeFile(path.join(owned, 'index.html'), 'retain');
+    await expect(publisher.cleanPublicTree(tree, Date.now())).rejects.toThrow('identity');
+    expect(await readFile(path.join(owned, 'index.html'), 'utf8')).toBe('retain');
+  });
+  it('rejects symlinked cleanup roots without touching their target', async () => {
+    const tree = await fixture();
+    const target = await fixture();
+    await writeFile(path.join(target, 'keep'), 'safe');
+    const type = process.platform === 'win32' ? 'junction' : 'dir';
+    await symlink(target, path.join(tree, 'pr'), type);
+    await expect(publisher.cleanPublicTree(tree, Date.now())).rejects.toThrow();
+    expect(await readFile(path.join(target, 'keep'), 'utf8')).toBe('safe');
+  });
+});

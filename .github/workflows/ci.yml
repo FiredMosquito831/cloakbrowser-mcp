@@ -12,6 +12,8 @@ permissions:
   contents: read
 
 env:
+  CLOAK_REPORT_LANE: pr
+  CLOAK_REPORT_PLATFORMS: '["ubuntu-latest","ubuntu-24.04-arm","macos-latest","macos-15-intel","windows-latest"]'
   CI_DOCKER_IMAGE: cloakbrowser-mcp:ci
   DOCKER_CACHE_SCOPE: cloakbrowser-mcp-docker
   NPM_VERSION: '11.19.0'
@@ -65,8 +67,22 @@ jobs:
       - name: Use npm ${{ env.NPM_VERSION }}
         run: npm install --global npm@${{ env.NPM_VERSION }}
       - run: npm ci --ignore-scripts
+      - name: Configure quality reporting
+        run: node scripts/test-report.mjs ci-config
+        env:
+          CLOAK_REPORT_GROUP: quality
+          CLOAK_REPORT_SUITE: unit
+          CLOAK_REPORT_ENGINE: none
       - run: npm run check
       - run: npm run package:verify
+      - name: Upload sanitized test evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results-quality-${{ matrix.os }}-node${{ matrix.node-version }}
+          path: ${{ env.CLOAK_REPORT_ROOT }}
+          retention-days: 14
+          if-no-files-found: error
 
   e2e:
     name: e2e (${{ matrix.os }}, node 26)
@@ -102,7 +118,29 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: Install Playwright Chromium
         run: node node_modules/playwright/cli.js install chromium
-      - run: npm run test:e2e
+      - run: npm run build
+      - name: Configure cli reporting
+        run: node scripts/test-report.mjs ci-config
+        env:
+          CLOAK_REPORT_GROUP: cli
+          CLOAK_REPORT_SUITE: cli
+          CLOAK_REPORT_ENGINE: none
+      - run: npm run test:e2e:run
+      - name: Configure console reporting
+        run: node scripts/test-report.mjs ci-config
+        env:
+          CLOAK_REPORT_GROUP: console
+          CLOAK_REPORT_SUITE: console
+          CLOAK_REPORT_ENGINE: playwright
+      - run: npm run test:e2e:playwright-console:run
+      - name: Upload sanitized test evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results-e2e-${{ matrix.os }}
+          path: ${{ env.CLOAK_REPORT_ROOT }}
+          retention-days: 14
+          if-no-files-found: error
 
   cdp-e2e:
     name: managed CDP real-browser (linux/amd64, node 22)
@@ -120,9 +158,23 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: Install Playwright Chromium
         run: node node_modules/playwright/cli.js install chromium
+      - name: Configure cdp reporting
+        run: node scripts/test-report.mjs ci-config
+        env:
+          CLOAK_REPORT_GROUP: cdp
+          CLOAK_REPORT_SUITE: cdp
+          CLOAK_REPORT_ENGINE: mixed
       - run: npm run test:e2e:cdp
         env:
           CLOAKBROWSER_MCP_CDP_EXPECTED_ARCHITECTURE: linux/amd64
+      - name: Upload sanitized test evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results-cdp-linux-amd64
+          path: ${{ env.CLOAK_REPORT_ROOT }}
+          retention-days: 14
+          if-no-files-found: error
 
   coverage:
     runs-on: ubuntu-latest
@@ -142,7 +194,21 @@ jobs:
       - name: Use npm ${{ env.NPM_VERSION }}
         run: npm install --global npm@${{ env.NPM_VERSION }}
       - run: npm ci --ignore-scripts
+      - name: Configure coverage reporting
+        run: node scripts/test-report.mjs ci-config
+        env:
+          CLOAK_REPORT_GROUP: coverage
+          CLOAK_REPORT_SUITE: unit
+          CLOAK_REPORT_ENGINE: none
       - run: npm run test:coverage
+      - name: Upload sanitized test evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results-coverage-node${{ matrix.node-version }}
+          path: ${{ env.CLOAK_REPORT_ROOT }}
+          retention-days: 14
+          if-no-files-found: error
       - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: ./coverage/lcov.info
@@ -251,21 +317,47 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ env.DOCKER_CACHE_SCOPE }}-${{ matrix.platform_slug }},ignore-error=true
       - name: Smoke (--help)
         run: docker run --rm "${{ matrix.image_tag }}" --help
+      - name: Configure docker reporting
+        run: node scripts/test-report.mjs ci-config
+        env:
+          CLOAK_REPORT_GROUP: docker
+          CLOAK_REPORT_SUITE: docker
+          CLOAK_REPORT_ENGINE: cloak
       - name: Docker E2E acceptance
         run: npm run test:e2e:docker:run
         env:
           CLOAKBROWSER_MCP_DOCKER_IMAGE: ${{ matrix.image_tag }}
+      - name: Configure docker-cdp reporting
+        run: node scripts/test-report.mjs ci-config
+        env:
+          CLOAK_REPORT_GROUP: docker-cdp
+          CLOAK_REPORT_SUITE: docker-cdp
+          CLOAK_REPORT_ENGINE: cloak
       - name: Managed CDP Docker acceptance (cloak)
         run: npm run test:e2e:cdp:docker:run
         env:
           CLOAKBROWSER_MCP_CDP_EXPECTED_ARCHITECTURE: ${{ matrix.platform }}
           CLOAKBROWSER_MCP_DOCKER_IMAGE: ${{ matrix.image_tag }}
+      - name: Configure docker-cdp reporting
+        run: node scripts/test-report.mjs ci-config
+        env:
+          CLOAK_REPORT_GROUP: docker-cdp
+          CLOAK_REPORT_SUITE: docker-cdp
+          CLOAK_REPORT_ENGINE: playwright
       - name: Managed CDP Docker acceptance (playwright)
         run: npm run test:e2e:cdp:docker:run
         env:
           CLOAKBROWSER_MCP_CDP_DOCKER_ENGINE: playwright
           CLOAKBROWSER_MCP_CDP_EXPECTED_ARCHITECTURE: ${{ matrix.platform }}
           CLOAKBROWSER_MCP_DOCKER_IMAGE: ${{ matrix.image_tag }}
+      - name: Upload sanitized test evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results-docker-${{ matrix.platform_slug }}
+          path: ${{ env.CLOAK_REPORT_ROOT }}
+          retention-days: 14
+          if-no-files-found: error
       - name: Compare with upstream Playwright MCP
         if: matrix.compare
         run: npm run bridge:compare -- "${{ matrix.image_tag }}" --report bridge-parity-report.json
@@ -330,3 +422,40 @@ jobs:
             process.exit(1);
           }
           EOF
+
+  test-report:
+    name: Combined test report
+    if: ${{ always() }}
+    needs: [node-versions, quality, e2e, cdp-e2e, coverage, docker]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOAK_REPORT_INPUT: artifacts/ci-report-download
+      CLOAK_REPORT_OUTPUT: artifacts/ci-combined-report
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Prepare isolated download directory
+        run: mkdir -p "$CLOAK_REPORT_INPUT"
+      - name: Download this run's producer artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: test-results-*
+          path: ${{ env.CLOAK_REPORT_INPUT }}
+          merge-multiple: false
+      - name: Validate, merge and generate report
+        id: report
+        if: always()
+        run: node scripts/test-report.mjs ci-aggregate
+      - name: Upload combined sanitized HTML and evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: combined-test-report
+          path: ${{ env.CLOAK_REPORT_OUTPUT }}
+          retention-days: 14
+          if-no-files-found: error

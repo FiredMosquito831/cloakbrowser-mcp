@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { cp, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { crc32 } from 'node:zlib';
+import { controlledPng } from '@tests/fixtures/reporting/controlled-png.js';
 
 interface Results {
   writeTestResult: (options: Record<string, unknown>) => Promise<string>;
@@ -17,7 +19,8 @@ afterEach(async () => {
 
 async function fixture() {
   const prefix = path.join(tmpdir(), 'cloak-merge-');
-  const root = await mkdtemp(prefix);
+  const temporary = await mkdtemp(prefix);
+  const root = await realpath(temporary);
   roots.push(root);
   const runId = 'run-1';
   const producers: string[] = [];
@@ -45,6 +48,45 @@ async function fixture() {
 }
 
 describe('untrusted cross-job evidence merge', () => {
+  it.each(['checksum', 'metadata'])('rejects PNG %s tampering before aggregate publication', async (kind) => {
+    const f = await fixture();
+    const directory = await f.producer('linux', 'linux');
+    const entries = await readdir(directory);
+    const name = entries.find((entry) => entry.endsWith('-result.json'));
+    const text = entries.find((entry) => entry.endsWith('.txt'));
+    if (!name || !text) throw new Error('Controlled evidence missing');
+    const resultPath = path.join(directory, name);
+    const result = JSON.parse(await readFile(resultPath, 'utf8')) as { attachments: unknown[] };
+    const source = `${randomUUID()}-attachment.png`;
+    const image = Buffer.from(controlledPng);
+    let corrupted = image;
+    if (kind === 'checksum') image[45] ^= 1;
+    else {
+      const payload = Buffer.from('synthetic-png-payload');
+      const size = payload.length + 12;
+      const chunk = Buffer.alloc(size);
+      chunk.writeUInt32BE(payload.length);
+      chunk.write('sRGB', 4, 'ascii');
+      payload.copy(chunk, 8);
+      const offset = size - 4;
+      const input = chunk.subarray(4, offset);
+      const checksum = crc32(input);
+      chunk.writeUInt32BE(checksum, offset);
+      const header = image.subarray(0, 33);
+      const rest = image.subarray(33);
+      const parts = [header, chunk, rest];
+      corrupted = Buffer.concat(parts);
+    }
+    result.attachments = [{ name: 'fixture', type: 'image/png', source, provenance: 'controlled-local' }];
+    const serialized = JSON.stringify(result);
+    await writeFile(resultPath, serialized);
+    const textPath = path.join(directory, text);
+    await rm(textPath);
+    const imagePath = path.join(directory, source);
+    await writeFile(imagePath, corrupted);
+    await expect(mergeTestResults(f.input)).rejects.toThrow('Test evidence');
+    expect(await readdir(f.root)).not.toContain('merged');
+  });
   it('preserves environment variants, failures and referenced attachments', async () => {
     const f = await fixture();
     await f.producer('linux', 'linux');

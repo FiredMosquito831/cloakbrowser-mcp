@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
+import { ErrorCode, ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
 import { prepareBridgeRuntime } from '@/bridge/config.js';
@@ -794,6 +794,110 @@ describe('streamable HTTP bridge', () => {
       const firstContent = firstResult.structuredContent as Record<string, unknown>;
       const secondContent = secondResult.structuredContent as Record<string, unknown>;
       expect(firstContent.upstreamPid).not.toBe(secondContent.upstreamPid);
+    });
+  });
+  it('rejects an expired session and releases its upstream process before a fresh session is used', async () => {
+    await withFakeUpstream(async () => {
+      const store = createSessionStore('memory');
+      const options = { sessionStore: store };
+      const server = await startHttpBridge(options);
+      const { client, transport } = await connectHttpClient(server);
+      const request = { name: 'browser_snapshot', arguments: { includePid: true } };
+      const result = await client.callTool(request);
+      const content = result.structuredContent as { upstreamPid: number };
+      const id = transport.sessionId;
+      if (!id) throw new Error('Missing active HTTP session ID');
+      const now = Date.now();
+      const expiredAt = now - 1000;
+      await store.touch(id, expiredAt, 1);
+      const expired = await postToolsList(server.url, id);
+      expect(expired.status).toBe(HttpStatus.NotFound);
+      const termination = { timeout: 5000 };
+      await expect.poll(() => isProcessRunning(content.upstreamPid), termination).toBe(false);
+      const fresh = await connectHttpClient(server);
+      const recovered = await fresh.client.callTool(request);
+      const recoveredContent = recovered.structuredContent as { upstreamPid: number };
+      expect(recoveredContent.upstreamPid).not.toBe(content.upstreamPid);
+    });
+  });
+  it('keeps neighbouring sessions usable after an upstream exits and recovers with a fresh session', async () => {
+    await withFakeUpstream(async () => {
+      const server = await startHttpBridge();
+      const first = await connectHttpClient(server);
+      const second = await connectHttpClient(server);
+      const request = { name: 'browser_navigate', arguments: { includePid: true } };
+      const result = await first.client.callTool(request);
+      const content = result.structuredContent as { upstreamPid: number };
+      process.kill(content.upstreamPid, 'SIGTERM');
+      await expect.poll(() => isProcessRunning(content.upstreamPid)).toBe(false);
+      const failedRequest = { name: 'browser_snapshot', arguments: {} };
+      const failed = first.client.callTool(failedRequest);
+      await expect(failed).rejects.toThrow(/closed|not connected/iu);
+      const healthy = await second.client.callTool(request);
+      const healthyContent = healthy.structuredContent as { forwarded: boolean; upstreamPid: number };
+      expect(healthyContent.forwarded).toBe(true);
+      const secondPid = healthyContent.upstreamPid;
+      expect(secondPid).not.toBe(content.upstreamPid);
+      const fresh = await connectHttpClient(server);
+      const recovered = await fresh.client.callTool(request);
+      const recoveredContent = recovered.structuredContent as { forwarded: boolean };
+      expect(recoveredContent.forwarded).toBe(true);
+      const sessionId = first.transport.sessionId;
+      await first.transport.terminateSession();
+      const response = await postToolsList(server.url, sessionId);
+      expect(response.status).toBe(HttpStatus.NotFound);
+    });
+  });
+  it('cancels an in-flight HTTP call without losing its session and terminates the owned child', async () => {
+    await withFakeUpstream(async () => {
+      const server = await startHttpBridge();
+      const { client, transport } = await connectHttpClient(server);
+      const pidRequest = { name: 'browser_snapshot', arguments: { includePid: true } };
+      const initial = await client.callTool(pidRequest);
+      const content = initial.structuredContent as { upstreamPid: number };
+      const controller = new AbortController();
+      const request = {
+        name: 'browser_navigate',
+        arguments: {
+          callId: 'cancelled-call',
+          fakeRecordStartedCall: true,
+          delayMs: 2000,
+        },
+      };
+      const options = { signal: controller.signal };
+      const pending = client.callTool(request, undefined, options).then(
+        () => ({ success: true, error: undefined }),
+        (error: unknown) => ({ success: false, error }),
+      );
+      try {
+        await expect
+          .poll(async () => {
+            const observation = { name: 'browser_snapshot', arguments: { includeStartedCalls: true } };
+            const result = await client.callTool(observation);
+            const content = result.structuredContent as { startedCalls: string[] };
+            return content.startedCalls;
+          })
+          .toContain('cancelled-call');
+        const reason = new Error('Controlled request cancellation');
+        controller.abort(reason);
+        const outcome = await pending;
+        expect(outcome.success).toBe(false);
+        const message = expect.stringContaining('Controlled request cancellation');
+        const expected = { code: ErrorCode.RequestTimeout, message };
+        expect(outcome.error).toMatchObject(expected);
+        const retained = await client.callTool(pidRequest);
+        const retainedContent = retained.structuredContent as { upstreamPid: number };
+        expect(retainedContent.upstreamPid).toBe(content.upstreamPid);
+        const sessionId = transport.sessionId;
+        await transport.terminateSession();
+        const termination = { timeout: 5000 };
+        await expect.poll(() => isProcessRunning(content.upstreamPid), termination).toBe(false);
+        const response = await postToolsList(server.url, sessionId);
+        expect(response.status).toBe(HttpStatus.NotFound);
+      } finally {
+        controller.abort();
+        await pending;
+      }
     });
   });
   it('uses one explicit custom binary path for all HTTP sessions', async () => {

@@ -1,5 +1,6 @@
 import { fileURLToPath, URL } from 'node:url';
 import { defineConfig } from 'vitest/config';
+import { reportConfiguration } from './scripts/testing/report-configuration.js';
 export default (() => {
   const uRL = new URL('./src', import.meta.url);
   const fileURLToPathResult = fileURLToPath(uRL);
@@ -14,6 +15,7 @@ export default (() => {
   };
   const options3 = {
     include: ['tests/e2e/**/*.manual.ts'],
+    ...reportConfiguration(),
     environment: 'node',
     testTimeout: 180000,
     hookTimeout: 180000,

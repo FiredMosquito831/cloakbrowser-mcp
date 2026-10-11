@@ -40,11 +40,20 @@
     <iframe title="Fixture frame" src="/frame"></iframe>
     <script>
       const result = document.querySelector('#result');
-      document.querySelector('#action').addEventListener('click', () => {
+      document.querySelector('#action').addEventListener('click', (event) => {
+        const shift = String(event.shiftKey);
+        event.currentTarget.dataset.shiftClick = shift;
         result.textContent = 'Clicked';
+      });
+      document.querySelectorAll('.duplicate').forEach((button, index) => {
+        button.addEventListener('click', () => {
+          const number = index + 1;
+          result.textContent = `Duplicate ${number} clicked`;
+        });
       });
       document.querySelector('#dialog').addEventListener('click', () => {
         alert('Fixture dialog');
+        result.textContent = 'Dialog closed';
       });
       document.querySelector('#file').addEventListener('change', (event) => {
         result.textContent = event.target.files[0].name;

@@ -14,6 +14,7 @@ const cdpMetrics = {
 };
 const cdpChallenges = new Map();
 const toolCallCounts = new Map();
+const startedCalls = new Set();
 const dynamicTools = new Map();
 let browserGeneration = 1;
 let fakeChromium;
@@ -137,6 +138,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [...tools, ...dynamicTools.values()],
 }));
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  if (request.params.arguments?.fakeRecordStartedCall === true) {
+    const callId = request.params.arguments?.callId;
+    if (typeof callId === 'string') startedCalls.add(callId);
+  }
   const delayMs = request.params.arguments?.delayMs;
   if (typeof delayMs === 'number' && Number.isFinite(delayMs) && delayMs > 0) {
     await new Promise((resolve) => setTimeout(resolve, delayMs));
@@ -184,6 +189,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     toolCallCounts.set(callId, count);
     value.toolCallCount = count;
   }
+  if (request.params.arguments?.includeStartedCalls === true) value.startedCalls = [...startedCalls];
   if (request.params.arguments?.includePid === true) value.upstreamPid = process.pid;
   if (request.params.arguments?.includeProxyEnv === true) {
     value.proxyEnv = {
@@ -214,7 +220,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     structuredContent: value,
   };
 });
-process.stdin.once('end', () => void closeFakeChromium());
+process.stdin.once('end', () => {
+  void server.close().finally(() => closeFakeChromium());
+});
 const stdioServerTransport = new StdioServerTransport();
 await server.connect(stdioServerTransport);
 function readProxyConfig() {
