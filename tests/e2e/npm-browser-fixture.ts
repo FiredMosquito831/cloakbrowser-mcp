@@ -34,8 +34,8 @@ export async function startNpmBrowserFixture(): Promise<NpmBrowserFixture> {
         response.end('Controlled fixture failure');
         break;
       default: {
-        response.setHeader('Content-Type', 'text/html');
-        const page = request.url === '/frame' ? frameHtml : html;
+        response.setHeader('Content-Type', 'text/html; charset=utf-8');
+        const page = request.url === '/frame' ? frameHtml : request.url === '/humanize' ? humanizeHtml : html;
         response.end(page);
       }
     }
@@ -113,3 +113,5 @@ const pageUrl = new URL('../fixtures/npm-browser/index.html', import.meta.url);
 const html = readFileSync(pageUrl, 'utf8');
 const frameUrl = new URL('../fixtures/npm-browser/frame.html', import.meta.url);
 const frameHtml = readFileSync(frameUrl, 'utf8');
+const humanizeUrl = new URL('../fixtures/npm-browser/humanize.html', import.meta.url);
+const humanizeHtml = readFileSync(humanizeUrl, 'utf8');

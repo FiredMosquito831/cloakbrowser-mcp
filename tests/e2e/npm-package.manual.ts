@@ -24,6 +24,7 @@ import {
 import { LOCAL_TOOL_BINARY_INFO, LOCAL_TOOL_BRIDGE_INFO } from '@/bridge/tools.js';
 import { profileSeedFileName } from '@/bridge/profile-seed.js';
 import { expectedDependencyVersions } from '@tests/helpers/dependency-versions.js';
+import { verifyHumanizedReads, verifyHumanizedSelections } from '@tests/e2e/humanize-release-scenarios.js';
 const runtimes: FreeBrowserRuntime[] = [];
 const diagnosticsUrl = new URL('../../scripts/lib/test-diagnostics.mjs', import.meta.url);
 const diagnostics = (await import(diagnosticsUrl.href)) as {
@@ -176,7 +177,12 @@ async function attachFailureScreenshot(
     if (result.isError) return;
     const serialized = JSON.stringify(result);
     const value = evaluationValue(serialized) as { url?: string; marker?: string };
-    const controlledPages = [`${fixtureUrl}/`, `${fixtureUrl}/new`, `${fixtureUrl}/second`];
+    const controlledPages = [
+      `${fixtureUrl}/`,
+      `${fixtureUrl}/new`,
+      `${fixtureUrl}/second`,
+      `${fixtureUrl}/humanize`,
+    ];
     if (!value.url || !controlledPages.includes(value.url) || value.marker !== 'Release marker') return;
     const resize = { name: 'browser_resize', arguments: { width: 1200, height: 900 } };
     await client.callTool(resize);
@@ -190,6 +196,124 @@ async function attachFailureScreenshot(
     // A lost page may not provide a screenshot; preserve the original failure.
   }
 }
+
+async function assertHumanizeReleaseScenarios(
+  client: Client,
+  call: (name: string, args: Record<string, unknown>) => Promise<string>,
+  fixtureUrl: string,
+): Promise<void> {
+  const navigation = { url: `${fixtureUrl}/humanize` };
+  await call('browser_navigate', navigation);
+  const reads = { code: verifyHumanizedReads.toString() };
+  const readResult = await call('browser_run_code_unsafe', reads);
+  const readValue = evaluationValue(readResult);
+  const commonReads = {
+    value: 'Reader value',
+    text: 'Nested marker',
+    innerText: 'Nested marker',
+    html: '<strong>Nested marker</strong>',
+    attribute: 'Visible note',
+  };
+  const expectedReads = {
+    pageReads: commonReads,
+    locatorReads: { ...commonReads, missingAttribute: null },
+    frameReads: {
+      value: 'Frame value',
+      text: 'Frame action',
+      innerText: 'Frame action',
+      html: 'Frame action',
+      missingAttribute: null,
+    },
+    handleReads: commonReads,
+    fallbackReads: {
+      text: 'Hidden marker',
+      html: '<strong>Hidden marker</strong>',
+      attribute: 'Hidden note',
+      overlappingText: 'Exact marker',
+      overlappingAttribute: 'Exact note',
+    },
+    dispatched: {
+      clicks: '2',
+      visibleHandle: '1',
+      frame: 'Frame clicked',
+      hidden: '1',
+      overlapping: '1',
+      payload: 'Handle payload',
+    },
+    lateRead: 'Late marker',
+  };
+  expect(readValue).toEqual(expectedReads);
+  const selections = { code: verifyHumanizedSelections.toString() };
+  const selectionResult = await call('browser_run_code_unsafe', selections);
+  const selectionValue = evaluationValue(selectionResult);
+  const expectedSelections = {
+    last: ['199'],
+    lastValue: '199',
+    repeated: ['75'],
+    repeatedValue: '75',
+    accented: ['accented'],
+    duplicate: ['duplicate-first'],
+    edgeValue: 'duplicate-first',
+  };
+  expect(selectionValue).toEqual(expectedSelections);
+  const negativeCases: Array<[string, RegExp]> = [
+    [
+      "async (page) => { const options = { timeout: 200 }; return page.locator('#missing-read').textContent(options); }",
+      /Timeout|timed out/u,
+    ],
+    [
+      "async (page) => page.locator('#overlapping-container > div').getAttribute('data-note')",
+      /strict mode violation/u,
+    ],
+    ["async (page) => page.locator('#rich').inputValue()", /input|textarea|select/iu],
+    [
+      "async (page) => { const options = { timeout: 200 }; return page.locator('#edge-choice').selectOption('disabled', options); }",
+      /Timeout|timed out/u,
+    ],
+    [
+      "async (page) => { const options = { timeout: 2000 }; return page.locator('#timeout-choice').selectOption('target', options); }",
+      /choosing an option/u,
+    ],
+  ];
+  for (const [code, expected] of negativeCases) {
+    const request = { name: 'browser_run_code_unsafe', arguments: { code } };
+    const failure = await client.callTool(request);
+    expect(failure.isError).toBe(true);
+    const serialized = JSON.stringify(failure);
+    expect(serialized).toMatch(expected);
+  }
+  const recovery = {
+    code: "async (page) => { const options = { timeout: 5000 }; await page.locator('#dispatch').click(options); return page.locator('#result').textContent(); }",
+  };
+  const recovered = await call('browser_run_code_unsafe', recovery);
+  const recoveredValue = evaluationValue(recovered);
+  expect(recoveredValue).toBe('Clicked');
+  const emoji = {
+    name: 'browser_run_code_unsafe',
+    arguments: {
+      code: "async (page) => { const options = { timeout: 15000 }; return page.locator('#edge-choice').selectOption('emoji', options); }",
+    },
+  };
+  const emojiResult = await client.callTool(emoji);
+  const serializedEmoji = JSON.stringify(emojiResult);
+  if (process.platform === 'darwin') {
+    expect(emojiResult.isError).toBe(true);
+    expect(serializedEmoji).toContain('macOS dropdown ignores arrow keys');
+    const raw = { code: "async (page) => page._original.selectOption('#edge-choice', 'emoji')" };
+    const rawResult = await call('browser_run_code_unsafe', raw);
+    const rawValue = evaluationValue(rawResult);
+    const expected = ['emoji'];
+    expect(rawValue).toEqual(expected);
+  } else {
+    expect(emojiResult.isError).not.toBe(true);
+    const value = evaluationValue(serializedEmoji);
+    const expected = ['emoji'];
+    expect(value).toEqual(expected);
+  }
+  const restore = { url: fixtureUrl };
+  await call('browser_navigate', restore);
+}
+
 interface ProfileSession {
   readState: () => Promise<unknown>;
   writeState: (value: string) => Promise<void>;
@@ -964,6 +1088,7 @@ describe('npm package distribution E2E', () => {
         } as const;
         await call('browser_run_code_unsafe', callOptions32);
       }
+      await assertHumanizeReleaseScenarios(client, call, fixture.url);
       const callOptions33 = { action: 'new', url: `${fixture.url}/new` } as const;
       await call('browser_tabs', callOptions33);
       const callOptions34 = { target: '#action' } as const;

@@ -60,6 +60,8 @@ describe('local npm browser fixture lifecycle', () => {
     const fixture = await startNpmBrowserFixture();
     try {
       const page = await fetch(fixture.url);
+      const contentType = page.headers.get('content-type');
+      expect(contentType).toBe('text/html; charset=utf-8');
       const html = await page.text();
       expect(html).toContain('Release marker');
       expect(html).toContain('id="download"');
@@ -77,6 +79,25 @@ describe('local npm browser fixture lifecycle', () => {
       state.uploads.push('Mutation outside the fixture');
       const freshState = fixture.getState();
       expect(freshState.uploads).toEqual(['Controlled fixture upload']);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  const htmlRoutes = [
+    ['/frame', ['Frame value']],
+    ['/humanize', ['🌍 World', 'Éclair']],
+  ] as const;
+  it.each(htmlRoutes)('serves %s with explicit UTF-8 decoding', async (route, markers) => {
+    const fixture = await startNpmBrowserFixture();
+    try {
+      const url = `${fixture.url}${route}`;
+      const response = await fetch(url);
+      expect(response.status).toBe(200);
+      const contentType = response.headers.get('content-type');
+      expect(contentType).toBe('text/html; charset=utf-8');
+      const html = await response.text();
+      for (const marker of markers) expect(html).toContain(marker);
     } finally {
       await fixture.close();
     }

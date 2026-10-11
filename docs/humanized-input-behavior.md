@@ -163,8 +163,12 @@ checks.
 - [Recipes](recipes/index.md) lists task-focused setup paths.
 - [Tools](tools.md) explains why upstream Playwright MCP browser tools are forwarded unchanged.
 
-## CloakBrowser 0.6.0
+## CloakBrowser 0.6.1
 
 Humanized actions follow Playwright selector semantics, including strict mode. Ambiguous locators and unsupported actions raise errors instead of silently falling back. For example, humanized `fill()` cannot drive `input[type=color]`; disable humanize for a session that needs this operation.
 
-When humanize is enabled, the bridge applies a compatibility fix for CloakBrowser 0.6.0: ancestor iframe visibility is checked and resolved DOM elements use weak references so detached elements can be collected. The fix verifies the dependency version and source hashes. Another version or modified source is rejected; use `CLOAK_PLAYWRIGHT_MCP_HUMANIZE=false` until the bridge supports it.
+When humanize is enabled, the bridge applies a compatibility fix for CloakBrowser 0.6.0 and 0.6.1: ancestor iframe visibility is checked and resolved DOM elements use weak references so detached elements can be collected. The fix verifies the dependency version and source hashes. Another version or modified source is rejected; use `CLOAK_PLAYWRIGHT_MCP_HUMANIZE=false` until the bridge supports it.
+
+CloakBrowser 0.6.1 runs `inputValue()`, `textContent()`, `innerText()`, `innerHTML()`, `getAttribute()`, and `dispatchEvent()` through the humanize isolated world on `Page`, `Frame`, `Locator`, and `ElementHandle`. Hidden or overlapping `ElementHandle` targets, and event arguments containing a `JSHandle`, use the upstream raw Playwright fallback for reads and event dispatch.
+
+Dropdown selection uses type-ahead and supports repeated selections. On macOS, a label starting with an emoji can be unreachable with human input; the error is forwarded through MCP. If programmatic selection is acceptable, use the upstream `page._original.selectOption()` explicitly.

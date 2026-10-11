@@ -32,7 +32,7 @@ interface World {
   evaluate(frame: Frame, expression: string): Promise<unknown>;
   call(frame: Frame, method: string, ...args: unknown[]): Promise<unknown>;
 }
-describe('verified CloakBrowser 0.6.0 humanize compatibility', () => {
+describe('verified installed CloakBrowser humanize compatibility', () => {
   it('rejects dependency source changes before applying any patch', () => {
     expect(() => {
       const message = `${helpers}\n`;

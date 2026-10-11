@@ -12,13 +12,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
-- Update the CloakBrowser npm dependency to 0.6.0, including the revised humanized action engine and concurrent-download fixes.
+- Update the CloakBrowser npm dependency to 0.6.1, including the revised humanized action engine, isolated-world reads and event dispatch, faster dropdown selection, and concurrent-download fixes.
 - Update the upstream Playwright MCP npm dependency to 0.0.83, which adds the optional `browser_find.filename` argument for saving results to a file.
 
 ### Fixed
 
 - Handle `ENOTSUP` when publishing persistent profile seeds on filesystems without hard-link support.
-- Apply a version- and source-verified compatibility fix for CloakBrowser 0.6.0 humanize: preserve ancestor iframe visibility and allow detached DOM elements to be collected without modifying installed dependency files.
+- Apply a version- and source-verified compatibility fix for CloakBrowser 0.6.0 and 0.6.1 humanize: preserve ancestor iframe visibility and allow detached DOM elements to be collected without modifying installed dependency files.
 
 ## [1.14.1] - 2026-09-27
 

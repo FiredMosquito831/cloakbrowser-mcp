@@ -163,8 +163,12 @@ Ele não deve ser utilizado como forma de contornar controles de acesso ou verif
 
 Para escolher entre o Playwright MCP upstream e este pacote, consulte a [comparação](comparison.md). Para tarefas rápidas, use as [receitas](recipes/index.md): perfil persistente, extensões, reverse proxy, QA regional, Claude Desktop, Codex CLI e teste smoke de CI.
 
-## CloakBrowser 0.6.0
+## CloakBrowser 0.6.1
 
 As ações humanizadas seguem a semântica dos seletores do Playwright, incluindo o modo estrito. Localizadores ambíguos e ações não suportadas geram erros em vez de recorrer silenciosamente a ações normais. Por exemplo, o `fill()` humanizado não suporta `input[type=color]`; desative humanize em uma sessão que precise dessa operação.
 
-Quando humanize está ativado, a ponte aplica uma correção de compatibilidade para CloakBrowser 0.6.0: verifica a visibilidade dos iframe ancestrais e usa referências fracas aos elementos DOM encontrados para permitir a coleta dos elementos removidos. A correção verifica a versão da dependência e os hashes do código-fonte. Outras versões ou código modificado são rejeitados; use `CLOAK_PLAYWRIGHT_MCP_HUMANIZE=false` até que a ponte ofereça suporte.
+Quando humanize está ativado, a ponte aplica uma correção de compatibilidade para CloakBrowser 0.6.0/0.6.1: verifica a visibilidade dos iframe ancestrais e usa referências fracas aos elementos DOM encontrados para permitir a coleta dos elementos removidos. A correção verifica a versão da dependência e os hashes do código-fonte. Outras versões ou código modificado são rejeitados; use `CLOAK_PLAYWRIGHT_MCP_HUMANIZE=false` até que a ponte ofereça suporte.
+
+O CloakBrowser 0.6.1 executa `inputValue()`, `textContent()`, `innerText()`, `innerHTML()`, `getAttribute()` e `dispatchEvent()` no contexto isolado de humanize para `Page`, `Frame`, `Locator` e `ElementHandle`. Para elementos `ElementHandle` ocultos ou sobrepostos e argumentos de eventos que contêm um `JSHandle`, o upstream utiliza o Playwright sem humanize como alternativa para leitura e envio de eventos.
+
+A seleção em listas suspensas usa busca por prefixo e permite seleções repetidas. No macOS, uma opção cujo rótulo começa com um emoji pode ser inacessível à entrada humanizada; o erro é encaminhado pelo MCP. Se a seleção programática for aceitável, use explicitamente o método upstream `page._original.selectOption()`.

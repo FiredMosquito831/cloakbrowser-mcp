@@ -98,7 +98,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@playwright/mcp": "^0.0.83",
-    "cloakbrowser": "^0.6.0",
+    "cloakbrowser": "^0.6.1",
     "commander": "^15.0.0",
     "mmdb-lib": "^3.0.3",
     "pino": "^10.3.1",
