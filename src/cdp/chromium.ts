@@ -6,6 +6,7 @@ import { CDP_HTTP_MAX_UPSTREAM_RESPONSE_BYTES, CDP_WEBSOCKET_HANDSHAKE_TIMEOUT_M
 import type { ChromiumCdpClient, ChromiumCdpDiscovery, InternalCdpPortReservation } from '#src/cdp/types';
 const internalCdpHost = '127.0.0.1' as const;
 const chromiumDiscoveryRetryDelayMs = 25;
+const chromiumDiscoveryUnavailableMessage = 'Chromium discovery endpoint is unavailable';
 export async function reserveInternalCdpPort(): Promise<InternalCdpPortReservation> {
   const server = createServer((socket) => socket.destroy());
   await new Promise<void>((resolve, reject) => {
@@ -52,7 +53,7 @@ async function retryChromiumDiscovery(
   }
 }
 function isRetryableDiscoveryError(error: unknown): boolean {
-  if (error instanceof Error && error.message === 'Chromium discovery endpoint unavailable') {
+  if (error instanceof Error && error.message === chromiumDiscoveryUnavailableMessage) {
     return true;
   }
   if (typeof error !== 'object' || error === null || !('code' in error)) return false;
@@ -141,12 +142,6 @@ export async function readAndDeletePageChallenge(
       const error2 = new Error('Managed CDP bootstrap timed out');
       return finish(error2);
     };
-    const addEventListenerOptions2 = { once: true } as const;
-    signal.addEventListener('abort', abort, addEventListenerOptions2);
-    if (signal.aborted) {
-      abort();
-      return;
-    }
     socket.once('open', () => {
       const expression = `(() => { const propertyName = ${JSON.stringify(propertyName)}; const value = globalThis[propertyName]; delete globalThis[propertyName]; return value; })()`;
       const stringifyOptions = {
@@ -183,6 +178,9 @@ export async function readAndDeletePageChallenge(
       const error6 = new Error('Chromium page target closed before challenge response');
       return finish(error6);
     });
+    const addEventListenerOptions2 = { once: true } as const;
+    signal.addEventListener('abort', abort, addEventListenerOptions2);
+    if (signal.aborted) abort();
   });
 }
 async function requestJson(host: string, port: number, path: string, signal: AbortSignal): Promise<unknown> {
@@ -191,7 +189,7 @@ async function requestJson(host: string, port: number, path: string, signal: Abo
     const request = createHttpRequest(createHttpRequestOptions, (response) => {
       if (response.statusCode !== 200) {
         response.resume();
-        const error7 = new Error('Chromium discovery endpoint is unavailable');
+        const error7 = new Error(chromiumDiscoveryUnavailableMessage);
         reject(error7);
         return;
       }

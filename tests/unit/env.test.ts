@@ -4,6 +4,46 @@ import { describe, expect, it } from 'vitest';
 import { appendNodeOption, envBool, envInt, envList, envString, quoteNodeOptionValue } from '@/bridge/env.js';
 import { fakeRuntimeDir } from '@tests/helpers/paths.js';
 describe('bridge environment helpers', () => {
+  const truthyValues = ['1', 'TRUE', 'Yes', 'oN'];
+  it.each(truthyValues)('recognizes the boolean alias %s', (value) => {
+    const env = { FLAG: value };
+    const result = envBool(env, 'FLAG', false);
+    expect(result).toBe(true);
+  });
+  it('uses defaults for missing or empty integer and list values', () => {
+    const env = { EMPTY: '', SPACE: '  ' };
+    const missingBool = envBool(env, 'MISSING', true);
+    const missingInt = envInt(env, 'MISSING', 17);
+    const emptyInt = envInt(env, 'EMPTY', 17);
+    const emptyList = envList(env, 'SPACE');
+    const defaultList = envList(env, 'MISSING', ' alpha, ,beta ');
+    const expected = ['alpha', 'beta'];
+    expect(missingBool).toBe(true);
+    expect(missingInt).toBe(17);
+    expect(emptyInt).toBe(17);
+    expect(emptyList).toHaveLength(0);
+    expect(defaultList).toEqual(expected);
+  });
+  it('rejects invalid integers with the environment variable name', () => {
+    const env = { PORT: 'invalid' };
+    const parse = () => envInt(env, 'PORT', 17);
+    expect(parse).toThrow('PORT must be an integer');
+  });
+  const invalidLists: Array<[string, string | typeof SyntaxError]> = [
+    ['[1]', 'ARGS must be a JSON string array'],
+    ['["valid", null]', 'ARGS must be a JSON string array'],
+    ['[false]', 'ARGS must be a JSON string array'],
+    ['[', SyntaxError],
+  ];
+  it.each(invalidLists)('rejects malformed JSON lists %s', (value, error) => {
+    const env = { ARGS: value };
+    const parse = () => envList(env, 'ARGS');
+    expect(parse).toThrow(error);
+  });
+  it('escapes embedded quotes in Node option paths with whitespace', () => {
+    const result = quoteNodeOptionValue('a "quoted" path');
+    expect(result).toBe('"a \\"quoted\\" path"');
+  });
   it('reads strings, booleans, integers, and lists', () => {
     const env = {
       TEXT: 'value',

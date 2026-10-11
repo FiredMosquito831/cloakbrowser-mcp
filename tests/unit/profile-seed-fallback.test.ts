@@ -4,14 +4,23 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { profileSeedFileName, readOrCreateProfileSeed } from '@/bridge/profile-seed.js';
-const { linkFailure } = vi.hoisted(() => ({ linkFailure: vi.fn() }));
-vi.mock('node:fs/promises', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('node:fs/promises')>()),
-  link: linkFailure,
+const { linkFailure, writeFault } = vi.hoisted(() => ({
+  linkFailure: vi.fn(),
+  writeFault: { path: '', error: undefined as Error | undefined },
 }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const original = await importOriginal<typeof import('node:fs/promises')>();
+  const write: typeof original.writeFile = async (file, data, options) => {
+    if (file === writeFault.path && writeFault.error !== undefined) throw writeFault.error;
+    await original.writeFile(file, data, options);
+  };
+  return { ...original, link: linkFailure, writeFile: write };
+});
 const roots: string[] = [];
 afterEach(async () => {
   linkFailure.mockReset();
+  writeFault.path = '';
+  writeFault.error = undefined;
   const mappedValues = roots.splice(0).map((root) => {
     const rmOptions = { recursive: true, force: true } as const;
     return rm(root, rmOptions);
@@ -26,6 +35,22 @@ async function createRoot(): Promise<string> {
   return root;
 }
 describe('profile seed publication on filesystems without hard links', () => {
+  it('propagates exclusive fallback write errors and cleans the unpublished temporary file', async () => {
+    const root = await createRoot();
+    const unsupported = new Error('Hard links unsupported');
+    const unsupportedCode = { code: systemErrorCodes.ENOTSUP };
+    const linkError = Object.assign(unsupported, unsupportedCode);
+    linkFailure.mockRejectedValue(linkError);
+    const denied = new Error('Seed write denied');
+    const deniedCode = { code: systemErrorCodes.EACCES };
+    const writeError = Object.assign(denied, deniedCode);
+    writeFault.path = path.join(root, profileSeedFileName);
+    writeFault.error = writeError;
+    const result = readOrCreateProfileSeed(root);
+    await expect(result).rejects.toBe(writeError);
+    const remaining = await readdir(root);
+    expect(remaining).toHaveLength(0);
+  });
   const values: readonly ('ENOSYS' | 'ENOTSUP' | 'EOPNOTSUPP' | 'EPERM' | 'EXDEV')[] = [
     systemErrorCodes.EPERM,
     systemErrorCodes.ENOTSUP,

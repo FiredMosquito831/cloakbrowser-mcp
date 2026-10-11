@@ -1,11 +1,40 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   CDP_CAPABILITY_BYTES,
+  CdpCapabilityError,
   generateCdpCapability,
   isCdpCapability,
   matchesCdpCapability,
 } from '@/cdp/capability.js';
 describe('CDP capability foundations', () => {
+  const invalidSizes = [CDP_CAPABILITY_BYTES - 1, CDP_CAPABILITY_BYTES + 1];
+  it.each(invalidSizes)('rejects a random source returning %i bytes', (size) => {
+    const bytes = Buffer.alloc(size);
+    const random = () => bytes;
+    const generate = () => generateCdpCapability(random);
+    expect(generate).toThrow(CdpCapabilityError);
+    const message = `exactly ${CDP_CAPABILITY_BYTES} bytes`;
+    expect(generate).toThrow(message);
+  });
+  it('rejects noncanonical trailing bits even when the decoded bytes match', () => {
+    const bytes = Buffer.alloc(CDP_CAPABILITY_BYTES);
+    const canonical = bytes.toString('base64url');
+    const noncanonical = `${canonical.slice(0, -1)}B`;
+    const decoded = Buffer.from(noncanonical, 'base64url');
+    expect(decoded).toEqual(bytes);
+    const valid = isCdpCapability(noncanonical);
+    const match = matchesCdpCapability(canonical, noncanonical);
+    expect(valid).toBe(false);
+    expect(match).toBe(false);
+  });
+  it('never authenticates an invalid expected capability even if comparison succeeds', () => {
+    const bytes = Buffer.alloc(CDP_CAPABILITY_BYTES);
+    const current = bytes.toString('base64url');
+    const compare = vi.fn(() => true);
+    const match = matchesCdpCapability('invalid', current, compare);
+    expect(match).toBe(false);
+    expect(compare).toHaveBeenCalledOnce();
+  });
   it('requests at least 256 bits and emits one path-safe segment', () => {
     const random = vi.fn((size: number) => Buffer.alloc(size, 0xab));
     const capability = generateCdpCapability(random);

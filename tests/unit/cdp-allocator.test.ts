@@ -7,6 +7,51 @@ import {
   CdpPortPoolExhaustedError,
 } from '@/cdp/allocator.js';
 describe('CDP port allocator', () => {
+  const invalidRanges = [
+    { start: 0, end: 1 },
+    { start: 1, end: 65536 },
+    { start: 2, end: 1 },
+    { start: 1.5, end: 2 },
+    { start: 1, end: 2.5 },
+    { start: NaN, end: 2 },
+  ];
+  it.each(invalidRanges)('rejects invalid port range %j', (range) => {
+    const create = () => new CdpPortAllocator(range);
+    expect(create).toThrow(RangeError);
+  });
+  const unknownFailures: unknown[] = [new Error('bind failed'), { code: 13 }, 'bind failed'];
+  it.each(unknownFailures)(
+    'preserves an untyped bind failure and rolls back its reservation: %j',
+    async (failure) => {
+      const range = { start: 25001, end: 25001 };
+      const allocator = new CdpPortAllocator(range);
+      const binding = { close: async () => undefined };
+      const bind = vi.fn().mockRejectedValueOnce(failure).mockResolvedValue(binding);
+      const options = { bind, host: '127.0.0.1' };
+      const acquire = allocator.acquire(options);
+      const expected = { cause: failure, code: undefined, port: range.start };
+      await expect(acquire).rejects.toMatchObject(expected);
+      const lease = await allocator.acquire(options);
+      expect(lease.port).toBe(range.start);
+      await lease.release();
+    },
+  );
+  it('keeps an uncertain binding reserved after close fails', async () => {
+    const range = { start: 25002, end: 25002 };
+    const allocator = new CdpPortAllocator(range);
+    const failure = new Error('close failed');
+    const close = vi.fn().mockRejectedValue(failure);
+    const bind = async () => ({ close });
+    const options = { bind, host: '127.0.0.1' };
+    const lease = await allocator.acquire(options);
+    const release = lease.release();
+    await expect(release).rejects.toBe(failure);
+    const repeatedRelease = lease.release();
+    await expect(repeatedRelease).rejects.toBe(failure);
+    const acquire = allocator.acquire(options);
+    await expect(acquire).rejects.toBeInstanceOf(CdpPortPoolExhaustedError);
+    expect(close).toHaveBeenCalledOnce();
+  });
   it('leases available ports atomically in ascending order and reports exhaustion', async () => {
     const cdpPortAllocatorOptions = { start: 20001, end: 20002 } as const;
     const allocator = new CdpPortAllocator(cdpPortAllocatorOptions);

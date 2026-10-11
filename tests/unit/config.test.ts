@@ -259,6 +259,109 @@ describe('bridge config generation', () => {
     const values: never[] = [];
     expect(receiver9Actual).toEqual(values);
   });
+  it('releases a persistent profile and removes runtime files after launch configuration fails', async () => {
+    const root = createTempRoot();
+    const profile = path.join(root, 'profile');
+    const output = path.join(root, 'output');
+    const lock = path.join(profile, profileLockFileName);
+    const failure = new Error('Launch configuration failed');
+    const env = { PLAYWRIGHT_MCP_OUTPUT_DIR: output, CLOAK_PLAYWRIGHT_MCP_CONSOLE_FALLBACK: 'false' };
+    const options = {
+      tempRoot: root,
+      userDataDir: profile,
+      env,
+      ensureCloakBinary: async () => fakeCloakBinaryPath,
+      buildCloakLaunchOptions: async () => {
+        const locked = existsSync(lock);
+        expect(locked).toBe(true);
+        throw failure;
+      },
+    };
+    const prepare = prepareBridgeRuntime(options);
+    await expect(prepare).rejects.toBe(failure);
+    const locked = existsSync(lock);
+    const remaining = readdirSync(root).filter((entry) => entry.startsWith('cloakbrowser-mcp-'));
+    expect(locked).toBe(false);
+    expect(remaining).toHaveLength(0);
+    const retryOptions = { ...options, env: { ...env, PLAYWRIGHT_MCP_BROWSER_ENGINE: 'playwright' } };
+    const runtime = await prepareBridgeRuntime(retryOptions);
+    try {
+      const reacquired = existsSync(lock);
+      expect(reacquired).toBe(true);
+    } finally {
+      runtime.dispose();
+    }
+    const released = existsSync(lock);
+    expect(released).toBe(false);
+  });
+  it('rejects malformed environment context JSON without leaving runtime files', async () => {
+    const root = createTempRoot();
+    const options = { tempRoot: root, env: { CLOAK_PLAYWRIGHT_MCP_CONTEXT_OPTIONS: '{' } };
+    const prepare = prepareBridgeRuntime(options);
+    await expect(prepare).rejects.toThrow('CLOAK_PLAYWRIGHT_MCP_CONTEXT_OPTIONS must be a JSON object');
+    const remaining = readdirSync(root);
+    expect(remaining).toHaveLength(0);
+  });
+  const invalidManagedPorts = [0, 65536, 1.5, NaN];
+  it.each(invalidManagedPorts)(
+    'rejects managed CDP port %s and removes the temporary runtime',
+    async (managedCdpInternalPort) => {
+      const root = createTempRoot();
+      const output = path.join(root, 'output');
+      const options = {
+        tempRoot: root,
+        managedCdpInternalPort,
+        env: {
+          PLAYWRIGHT_MCP_BROWSER_ENGINE: 'playwright',
+          PLAYWRIGHT_MCP_OUTPUT_DIR: output,
+          CLOAK_PLAYWRIGHT_MCP_CONSOLE_FALLBACK: 'false',
+        },
+      };
+      const prepare = prepareBridgeRuntime(options);
+      await expect(prepare).rejects.toThrow('managedCdpInternalPort must be an integer from 1 to 65535');
+      const remaining = readdirSync(root).filter((entry) => entry.startsWith('cloakbrowser-mcp-'));
+      expect(remaining).toHaveLength(0);
+    },
+  );
+  it('rejects empty binary paths and directories without invoking the binary resolver', async () => {
+    const root = createTempRoot();
+    let resolved = false;
+    const ensureCloakBinary = async () => {
+      resolved = true;
+      return fakeCloakBinaryPath;
+    };
+    const output = path.join(root, 'output');
+    const env = { PLAYWRIGHT_MCP_OUTPUT_DIR: output };
+    const invalidPaths = [' ', root];
+    const errors = ['binaryPath must be a non-empty path', 'binaryPath must point to an existing file'];
+    for (const [index, binaryPath] of invalidPaths.entries()) {
+      const options = { tempRoot: root, binaryPath, ensureCloakBinary, env };
+      const prepare = prepareBridgeRuntime(options);
+      const message = errors[index];
+      await expect(prepare).rejects.toThrow(message);
+    }
+    expect(resolved).toBe(false);
+  });
+  const opaqueLocks = ['{', 'null', '{}', '{"pid":"unknown","createdAt":123}'];
+  it.each(opaqueLocks)('preserves an existing profile lock with opaque metadata %s', async (content) => {
+    const root = createTempRoot();
+    const profile = path.join(root, 'profile');
+    mkdirSync(profile);
+    const lock = path.join(profile, profileLockFileName);
+    writeFileSync(lock, content);
+    const output = path.join(root, 'output');
+    const options = {
+      tempRoot: root,
+      userDataDir: profile,
+      env: { PLAYWRIGHT_MCP_BROWSER_ENGINE: 'playwright', PLAYWRIGHT_MCP_OUTPUT_DIR: output },
+    };
+    const prepare = prepareBridgeRuntime(options);
+    await expect(prepare).rejects.toThrow('Persistent profile is already active');
+    const preserved = readFileSync(lock, 'utf8');
+    expect(preserved).toBe(content);
+    const remaining = readdirSync(root).filter((entry) => entry.startsWith('cloakbrowser-mcp-'));
+    expect(remaining).toHaveLength(0);
+  });
   const values2 = ['typescript', 'python', 'java', 'csharp', 'none'] as const;
   it.each(values2)('writes %s as the generated Playwright MCP codegen language', async (codegen) => {
     const root = createTempRoot();

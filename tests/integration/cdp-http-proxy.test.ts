@@ -30,6 +30,104 @@ afterEach(async () => {
   await Promise.allSettled(mappedValues);
 });
 describe('CDP HTTP proxy integration', () => {
+  it('redacts an interrupted upstream response and remains usable for the next request', async () => {
+    let interrupt = true;
+    const fake = await fakeChromium((_request, response) => {
+      if (interrupt) {
+        interrupt = false;
+        response.writeHead(200);
+        response.flushHeaders();
+        response.write('{"private":"secret');
+        setImmediate(() => response.destroy());
+        return;
+      }
+      const body = { ok: true };
+      writeJson(response, 200, body);
+    });
+    const proxy = await readyProxy(fake);
+    const path = `/cdp/${capability}/json/version`;
+    const headers = { Host: `127.0.0.1:${proxy.port}` };
+    const failed = await requestProxy(proxy, path, headers);
+    expect(failed.status).toBe(502);
+    const code = errorCode(failed);
+    expect(code).toBe('bad_gateway');
+    const text = failed.body.toString();
+    expect(text).not.toContain('secret');
+    const recovered = await requestProxy(proxy, path, headers);
+    expect(recovered.status).toBe(200);
+    expect(fake.requests).toHaveLength(2);
+  });
+  it('continues forwarding and closes cleanly when diagnostic callbacks throw', async () => {
+    const failure = new Error('Diagnostic sink failed');
+    const onActivity = vi.fn(() => {
+      throw failure;
+    });
+    const onSecurityRejections = vi.fn(() => {
+      throw failure;
+    });
+    const fake = await fakeChromium((_request, response) => {
+      const body = { ok: true };
+      writeJson(response, 200, body);
+    });
+    const options = { onActivity, onSecurityRejections };
+    const proxy = await readyProxy(fake, options);
+    const validPath = `/cdp/${capability}/json/version`;
+    const stalePath = `/cdp/${staleCapability}/json/version`;
+    const headers = { Host: `127.0.0.1:${proxy.port}` };
+    const denied = await requestProxy(proxy, stalePath, headers);
+    expect(denied.status).toBe(404);
+    const allowed = await requestProxy(proxy, validPath, headers);
+    expect(allowed.status).toBe(200);
+    expect(onActivity).toHaveBeenCalledOnce();
+    await proxy.close();
+    expect(onSecurityRejections).toHaveBeenCalledOnce();
+  });
+  const malformedAuthorities = [
+    '[]:80',
+    '[::1',
+    '[::1]extra',
+    '[::1]:bad',
+    '::1:80',
+    'localhost:',
+    'localhost:bad',
+  ];
+  it.each(malformedAuthorities)(
+    'rejects malformed Host authority %s before contacting Chromium',
+    async (host) => {
+      const fake = await fakeChromium((_request, response) => response.end());
+      const proxy = await readyProxy(fake);
+      const path = `/cdp/${capability}/json/version`;
+      const headers = { Host: host };
+      const result = await requestProxy(proxy, path, headers);
+      const code = errorCode(result);
+      expect(code).toBe('bad_request');
+      expect(fake.requests).toHaveLength(0);
+    },
+  );
+  it('rejects invalid generations without replacing the published endpoint', async () => {
+    const fake = await fakeChromium((_request, response) => {
+      const body = { ok: true };
+      writeJson(response, 200, body);
+    });
+    const proxy = await readyProxy(fake);
+    const valid = { capability, upstreamHost: fake.host, upstreamPort: fake.port };
+    const invalid = [
+      { ...valid, capability: 'invalid' },
+      { ...valid, upstreamHost: 'example.test' },
+      { ...valid, upstreamPort: 0 },
+    ];
+    for (const generation of invalid) {
+      const stage = () => proxy.stageGeneration(generation);
+      const publish = () => proxy.publishGeneration(generation);
+      expect(stage).toThrow();
+      expect(publish).toThrow();
+    }
+    const path = `/cdp/${capability}/json/version`;
+    const headers = { Host: `127.0.0.1:${proxy.port}` };
+    const result = await requestProxy(proxy, path, headers);
+    expect(result.status).toBe(200);
+    expect(fake.requests).toHaveLength(1);
+  });
   it('aggregates capability, Host, and Origin rejections without protected request data', async () => {
     const reports: unknown[] = [];
     const fake = await fakeChromium((_request, response) => {
