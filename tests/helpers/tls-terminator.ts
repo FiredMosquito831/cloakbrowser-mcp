@@ -21,6 +21,7 @@ export async function startTestTlsTerminator(
   options: {
     host?: string;
     port?: number;
+    upstreamHost?: string;
   } = {},
 ): Promise<TestTlsTerminator> {
   const requests: TestTlsTerminatorRequest[] = [];
@@ -35,7 +36,7 @@ export async function startTestTlsTerminator(
     requests.push(snapshotResult);
     const createHttpRequestOptions = {
       headers: request.headers,
-      host: '127.0.0.1',
+      host: options.upstreamHost ?? '127.0.0.1',
       method: request.method,
       path: request.url,
       port: upstreamPort,
@@ -55,7 +56,8 @@ export async function startTestTlsTerminator(
   server.on('upgrade', (request, socket, head) => {
     const snapshotResult2 = snapshot(request);
     upgrades.push(snapshotResult2);
-    const createConnectionOptions = { host: '127.0.0.1', port: upstreamPort } as const;
+    const upstreamHost = options.upstreamHost ?? '127.0.0.1';
+    const createConnectionOptions = { host: upstreamHost, port: upstreamPort } as const;
     const upstream = createConnection(createConnectionOptions);
     sockets.add(upstream);
     upstream.once('close', () => sockets.delete(upstream));

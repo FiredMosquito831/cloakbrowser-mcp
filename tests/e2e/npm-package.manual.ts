@@ -214,7 +214,7 @@ function createProfileSessions(
     delete env.PLAYWRIGHT_MCP_USER_DATA_DIR;
     delete env.PLAYWRIGHT_MCP_EXTENSION_TOKEN;
     if (profile) env.PLAYWRIGHT_MCP_USER_DATA_DIR = profile;
-    const transportOptions = { command: command.command, env, stderr: 'pipe' } as const;
+    const transportOptions = { command: command.command, args: command.args, env, stderr: 'pipe' } as const;
     const transport = new StdioClientTransport(transportOptions);
     const clientOptions = { name: 'profile state npm e2e', version: '1' } as const;
     const client = new Client(clientOptions);
@@ -379,7 +379,12 @@ describe('npm package distribution E2E', () => {
       PLAYWRIGHT_MCP_TIMEOUT_ACTION: '1000',
     };
     delete env.PLAYWRIGHT_MCP_CLI_PATH;
-    const stdioClientTransportOptions = { command: command.command, env, stderr: 'pipe' } as const;
+    const stdioClientTransportOptions = {
+      command: command.command,
+      args: command.args,
+      env,
+      stderr: 'pipe',
+    } as const;
     const transport = new StdioClientTransport(stdioClientTransportOptions);
     let stderr = '';
     transport.stderr?.on('data', (chunk: Buffer | string) => {
@@ -854,13 +859,9 @@ describe('npm package distribution E2E', () => {
       PLAYWRIGHT_MCP_USER_DATA_DIR: joinedPath2,
     };
     delete env.PLAYWRIGHT_MCP_CLI_PATH;
-    const bin = path.dirname(command.command);
-    const modules = path.dirname(bin);
-    const cli = path.join(modules, 'cloakbrowser-mcp', 'dist', 'cli.js');
-    const cliArgs = [cli];
     const stdioClientTransportOptions4 = {
-      command: process.execPath,
-      args: cliArgs,
+      command: command.command,
+      args: command.args,
       env,
       stderr: 'pipe',
     } as const;

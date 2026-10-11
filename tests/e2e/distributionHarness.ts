@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -38,10 +38,17 @@ export function createTempRoot(prefix: string): string {
   return root;
 }
 export function cleanupDistributionE2e(): void {
+  const errors: unknown[] = [];
   for (const root of tempRoots.splice(0)) {
-    const rmSyncOptions = { recursive: true, force: true } as const;
-    rmSync(root, rmSyncOptions);
+    const rmSyncOptions = { recursive: true, force: true, maxRetries: 5, retryDelay: 100 } as const;
+    try {
+      rmSync(root, rmSyncOptions);
+    } catch (error) {
+      tempRoots.push(root);
+      errors.push(error);
+    }
   }
+  if (errors.length) throw new AggregateError(errors, 'Distribution E2E cleanup failed');
 }
 export function runCommand(command: string, args: string[], cwd: string): string {
   const spawnSyncOptions: import('node:child_process').SpawnSyncOptionsWithStringEncoding = {
@@ -68,7 +75,12 @@ export function runNpmCommand(args: string[], cwd: string): string {
   const nodeArgs = [cli, ...args];
   return runCommand(process.execPath, nodeArgs, cwd);
 }
-export function packAndInstallCurrentPackage(): DistributionCommand {
+export interface NpmDistributionCommand extends DistributionCommand {
+  args: string[];
+  cliPath: string;
+  installRoot: string;
+}
+export function packAndInstallCurrentPackage(): NpmDistributionCommand {
   const packDir = createTempRoot('cloakbrowser-mcp-pack-');
   const installDir = createTempRoot('cloakbrowser-mcp-install-');
   const joinedPath3 = path.join(installDir, 'package.json');
@@ -83,13 +95,22 @@ export function packAndInstallCurrentPackage(): DistributionCommand {
   const values2: string[] = ['install', '--ignore-scripts', '--no-audit', '--no-fund', packageFile];
   runNpmCommand(values2, installDir);
   const propertyValue = 'npm package';
-  const argumentValue = process.platform === 'win32' ? 'cloakbrowser-mcp.cmd' : 'cloakbrowser-mcp';
-  const joinedPath5 = path.join(installDir, 'node_modules', '.bin', argumentValue);
+  const packageRoot = path.join(installDir, 'node_modules', 'cloakbrowser-mcp');
+  const manifestPath = path.join(packageRoot, 'package.json');
+  const manifestSource = readFileSync(manifestPath, 'utf8');
+  const manifest = JSON.parse(manifestSource) as { bin: Record<string, string> };
+  const entrypoint = manifest.bin['cloakbrowser-mcp'];
+  if (!entrypoint) throw new Error('Installed npm package does not declare the cloakbrowser-mcp CLI');
+  const cliPath = path.join(packageRoot, entrypoint);
+  const args = [cliPath];
   const joinedPath4 = path.join(installDir, 'out');
   const baseBridgeEnvResult = createBaseBridgeEnv(joinedPath4, fakeUpstreamPath);
   return {
     label: propertyValue,
-    command: joinedPath5,
+    command: process.execPath,
+    args,
+    cliPath,
+    installRoot: installDir,
     env: baseBridgeEnvResult,
   };
 }

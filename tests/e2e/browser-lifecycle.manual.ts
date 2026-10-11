@@ -58,9 +58,7 @@ beforeAll(async () => {
   }
   const options = { root, freeExecutable: executable, parentEnv };
   runtime = await createFreeBrowserRuntime(options);
-  const bin = path.dirname(command.command);
-  const modules = path.dirname(bin);
-  cli = path.join(modules, 'cloakbrowser-mcp', 'dist', 'cli.js');
+  cli = command.cliPath;
 });
 afterAll(async () => {
   try {

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -57,7 +57,8 @@ it('reuses a verified cached Free binary without downloading', async () => {
   await writeFile(executable, 'controlled fixture');
   binaryInfo.mockReturnValue({ cacheDir: cache, installed: true, tier: 'free', binaryPath: executable });
   const resolved = await resolveFreeBrowserExecutable(root);
-  expect(resolved.executable).toBe(executable);
+  const canonicalExecutable = await realpath(executable);
+  expect(resolved.executable).toBe(canonicalExecutable);
   expect(execute).not.toHaveBeenCalled();
 });
 it('rejects an unverified explicit override instead of silently replacing it', async () => {

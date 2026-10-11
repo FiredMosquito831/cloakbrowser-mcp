@@ -158,11 +158,12 @@ export async function withExtensionClient(
     if (options.token) env.PLAYWRIGHT_MCP_EXTENSION_TOKEN = options.token;
   }
   const secrets = [...(options.secrets ?? []), ...(options.token ? [options.token] : [])];
-  const binDirectory = path.dirname(options.command.command);
-  const modules = path.dirname(binDirectory);
-  const cli = path.join(modules, 'cloakbrowser-mcp', 'dist', 'cli.js');
-  const args = [cli];
-  const transportOptions = { command: process.execPath, args, env, stderr: 'pipe' } as const;
+  const transportOptions = {
+    command: options.command.command,
+    args: options.command.args,
+    env,
+    stderr: 'pipe',
+  } as const;
   const transport = new StdioClientTransport(transportOptions);
   const clientOptions = { name: 'controlled extension E2E', version: '1' };
   const client = new Client(clientOptions);

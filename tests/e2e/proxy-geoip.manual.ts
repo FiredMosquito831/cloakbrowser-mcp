@@ -55,8 +55,7 @@ beforeAll(async () => {
   const executable = binary.executable;
   freeChromium = binary.version;
   command = packAndInstallCurrentPackage();
-  const executableDirectory = path.dirname(command.command);
-  const packageDirectory = path.dirname(executableDirectory);
+  const packageDirectory = path.join(command.installRoot, 'node_modules');
   const cloakManifestPath = path.join(packageDirectory, 'cloakbrowser', 'package.json');
   const mcpManifestPath = path.join(packageDirectory, '@playwright', 'mcp', 'package.json');
   const cloakManifestText = await readFile(cloakManifestPath, 'utf8');
@@ -117,7 +116,7 @@ async function withSession(
     DEBUG: 'pw:browser',
     ...overrides,
   };
-  const transportOptions = { command: command.command, env, stderr: 'pipe' } as const;
+  const transportOptions = { command: command.command, args: command.args, env, stderr: 'pipe' } as const;
   const transport = new StdioClientTransport(transportOptions);
   const clientOptions = { name: 'controlled proxy e2e', version: '1' };
   const client = new Client(clientOptions);

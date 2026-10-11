@@ -23,10 +23,12 @@ import {
 import {
   createFreeBrowserRuntime,
   type FreeBrowserRuntime,
+  killOwnedProcess,
   ownedProcessCommand,
   resolveFreeBrowserExecutable,
 } from '@tests/helpers/browser-test-runtime.js';
-import { startTestTlsTerminator } from '@tests/helpers/tls-terminator.js';
+import { type ReservedPortRange, reservePortRange } from '@tests/helpers/port-reservation.js';
+import { startTestTlsTerminator, type TestTlsTerminator } from '@tests/helpers/tls-terminator.js';
 type BrowserEngine = 'cloak' | 'playwright';
 const nodeBrowserEngines = ['cloak', 'playwright'] as const satisfies readonly BrowserEngine[];
 interface ReadyCdpInfo {
@@ -56,6 +58,7 @@ interface RunningHttpBridge {
   url: URL;
 }
 interface RawHttpSession {
+  browserPid?: number;
   id: string;
   server: RunningHttpBridge;
 }
@@ -354,15 +357,18 @@ describe.each<BrowserEngine>(nodeBrowserEngines)('packaged Node managed CDP with
   });
   it('isolates two Streamable HTTP sessions with explicit CDP enablement', async () => {
     const fixture = await startFixtureServer();
-    const range = await findFreePortRange(3);
-    const server = await startPackagedHttpBridge(engine, false, range);
+    const range = await reservePortRange(3);
+    let server: RunningHttpBridge | undefined;
     const sessions: RawHttpSession[] = [];
     const browsers: Browser[] = [];
     try {
+      server = await startPackagedHttpBridge(engine, false, range);
       const initializeRawHttpSessionOptions = { cdpEnabled: true } as const;
+      await range.releaseNext();
       const first = await initializeRawHttpSession(server, initializeRawHttpSessionOptions);
       sessions.push(first);
       const initializeRawHttpSessionOptions2 = { cdpEnabled: true } as const;
+      await range.releaseNext();
       const second = await initializeRawHttpSession(server, initializeRawHttpSessionOptions2);
       sessions.push(second);
       const initializeRawHttpSessionOptions3 = { cdpEnabled: false } as const;
@@ -660,24 +666,22 @@ describe.each<BrowserEngine>(nodeBrowserEngines)('packaged Node managed CDP with
       const pagesResult = secondContext.pages();
       expect(pagesResult).toHaveLength(secondTargetCount);
     } finally {
-      const mappedValues = browsers.map((browser) => browser.close());
-      await Promise.allSettled(mappedValues);
-      const mappedValues2 = sessions.map((session) => closeRawHttpSession(session));
-      await Promise.allSettled(mappedValues2);
-      await closePackagedHttpBridge(server);
-      await fixture.close();
+      await closeHttpScenario(server, sessions, browsers, range, fixture);
     }
   });
   it('honors the HTTP process default and an explicit disabled session', async () => {
-    const range = await findFreePortRange(2);
-    const server = await startPackagedHttpBridge(engine, true, range);
+    const range = await reservePortRange(2);
+    let server: RunningHttpBridge | undefined;
     const sessions: RawHttpSession[] = [];
     const browsers: Browser[] = [];
     try {
+      server = await startPackagedHttpBridge(engine, true, range);
+      await range.releaseNext();
       const inherited = await initializeRawHttpSession(server);
+      sessions.push(inherited);
       const initializeRawHttpSessionOptions4 = { cdpEnabled: false } as const;
       const disabled = await initializeRawHttpSession(server, initializeRawHttpSessionOptions4);
-      sessions.push(inherited, disabled);
+      sessions.push(disabled);
       const inheritedInfo = await readHttpCdpInfo(inherited);
       const httpCdpStateResult2 = await readHttpCdpState(disabled);
       const receiver8Actual = httpCdpStateResult2;
@@ -686,27 +690,27 @@ describe.each<BrowserEngine>(nodeBrowserEngines)('packaged Node managed CDP with
       const connectOverManagedCdpResult = await connectOverManagedCdp(inheritedInfo.discoveryUrl);
       browsers.push(connectOverManagedCdpResult);
     } finally {
-      const mappedValues3 = browsers.map((browser) => browser.close());
-      await Promise.allSettled(mappedValues3);
-      const mappedValues4 = sessions.map((session) => closeRawHttpSession(session));
-      await Promise.allSettled(mappedValues4);
-      await closePackagedHttpBridge(server);
+      await closeHttpScenario(server, sessions, browsers, range);
     }
   });
   it('routes advertised HTTPS and WSS through an operator TLS terminator', async () => {
-    const port = await findFreePort();
-    const bridge = await startPackagedTlsBridge(engine, port);
-    const startTestTlsTerminatorOptions = { host: '127.0.0.2', port } as const;
-    const terminator = await startTestTlsTerminator(port, startTestTlsTerminatorOptions);
+    const reservation = await reservePortRange(1);
+    const port = reservation.start;
+    let bridge: RunningTlsBridge | undefined;
+    let terminator: TestTlsTerminator | undefined;
     let socket: WebSocket | undefined;
     try {
+      bridge = await startPackagedTlsBridge(engine, port);
+      await reservation.releaseNext();
+      const startTestTlsTerminatorOptions = { host: '127.0.0.1', upstreamHost: '::1', port } as const;
+      terminator = await startTestTlsTerminator(port, startTestTlsTerminatorOptions);
       const message5 = `${bridge.cdp.discoveryUrl}/json/version`;
       const uRL = new URL(message5);
       const discovery = (await requestHttpsJson(uRL)) as {
         webSocketDebuggerUrl: string;
       };
       const receiver9Actual = discovery.webSocketDebuggerUrl;
-      const message6 = `^wss://127\\.0\\.0\\.2:${String(port)}/cdp/`;
+      const message6 = `^wss://127\\.0\\.0\\.1:${String(port)}/cdp/`;
       const regExp = new RegExp(message6, 'u');
       expect(receiver9Actual).toMatch(regExp);
       socket = await openTlsWebSocket(discovery.webSocketDebuggerUrl);
@@ -716,7 +720,7 @@ describe.each<BrowserEngine>(nodeBrowserEngines)('packaged Node managed CDP with
       expect(receiver10Actual).toMatchObject(toMatchObjectOptions2);
       expect(terminator.port).toBe(bridge.cdp.port);
       const receiver11Actual = terminator.requests;
-      const objectContainingOptions3 = { host: `127.0.0.2:${String(port)}` } as const;
+      const objectContainingOptions3 = { host: `127.0.0.1:${String(port)}` } as const;
       const objectContainingResult3 = expect.objectContaining(objectContainingOptions3);
       const objectContainingOptions4 = {
         headers: objectContainingResult3,
@@ -726,7 +730,7 @@ describe.each<BrowserEngine>(nodeBrowserEngines)('packaged Node managed CDP with
       const arrayContainingResult3 = expect.arrayContaining(values9);
       expect(receiver11Actual).toEqual(arrayContainingResult3);
       const receiver12Actual = terminator.upgrades;
-      const objectContainingOptions5 = { host: `127.0.0.2:${String(port)}` } as const;
+      const objectContainingOptions5 = { host: `127.0.0.1:${String(port)}` } as const;
       const objectContainingResult5 = expect.objectContaining(objectContainingOptions5);
       const objectContainingOptions6 = {
         headers: objectContainingResult5,
@@ -736,13 +740,24 @@ describe.each<BrowserEngine>(nodeBrowserEngines)('packaged Node managed CDP with
       const arrayContainingResult4 = expect.arrayContaining(values10);
       expect(receiver12Actual).toEqual(arrayContainingResult4);
     } finally {
-      await closeWebSocket(socket);
-      await terminator.close();
-      await bridge.client.close().catch(() => undefined);
-      expect(bridge.stderr.text).not.toMatch(/fatal:|Unhandled|Error:/iu);
+      const cleanups = [
+        async () => await closeWebSocket(socket),
+        async () => {
+          if (terminator) await terminator.close();
+        },
+        async () => {
+          if (bridge) await closePackagedTlsBridge(bridge);
+        },
+        async () => await reservation.close(),
+      ];
+      await runScenarioCleanups(cleanups, 'Managed TLS scenario cleanup failed');
     }
   });
 });
+async function closePackagedTlsBridge(bridge: RunningTlsBridge): Promise<void> {
+  await bridge.client.close();
+  expect(bridge.stderr.text).not.toMatch(/fatal:|Unhandled|Error:/iu);
+}
 async function startPackagedTlsBridge(engine: BrowserEngine, port: number): Promise<RunningTlsBridge> {
   const { PLAYWRIGHT_MCP_CLI_PATH: _fakeUpstream, ...baseEnv } = packagedCommand.env;
   const stdioClientTransportOptions = {
@@ -752,7 +767,8 @@ async function startPackagedTlsBridge(engine: BrowserEngine, port: number): Prom
       ...baseEnv,
       PLAYWRIGHT_MCP_BROWSER_ENGINE: engine,
       PLAYWRIGHT_MCP_HEADLESS: 'true',
-      CLOAK_PLAYWRIGHT_MCP_CDP_ADVERTISED_HOST: '127.0.0.2',
+      CLOAK_PLAYWRIGHT_MCP_CDP_HOST: '::1',
+      CLOAK_PLAYWRIGHT_MCP_CDP_ADVERTISED_HOST: '127.0.0.1',
       CLOAK_PLAYWRIGHT_MCP_CDP_ADVERTISED_SCHEME: 'https',
       CLOAK_PLAYWRIGHT_MCP_CDP_ENABLED: 'true',
       CLOAK_PLAYWRIGHT_MCP_CDP_PORT_RANGE: String(port),
@@ -771,7 +787,7 @@ async function startPackagedTlsBridge(engine: BrowserEngine, port: number): Prom
     const message7 = `Packaged ${engine} TLS MCP timed out`;
     await withTimeout(connectResult, 75000, message7);
     const cdp = await readCdpInfo(client);
-    expect(cdp.discoveryUrl).toMatch(/^https:\/\/127\.0\.0\.2:/u);
+    expect(cdp.discoveryUrl).toMatch(/^https:\/\/127\.0\.0\.1:/u);
     return { cdp, client, stderr };
   } catch (error) {
     await client.close().catch(() => undefined);
@@ -932,14 +948,36 @@ async function initializeRawHttpSession(
     },
   } as const;
   const response = await postJsonRpc(argumentValue4, postJsonRpcOptions);
-  expect(response.status).toBe(200);
-  await readJsonRpcResult(response);
+  if (response.status !== 200) {
+    const body = await response.text();
+    const diagnostic = redactCdpCapabilities(
+      `HTTP initialize returned ${String(response.status)}: ${body}; stderr: ${server.stderr.text}`,
+    );
+    throw new Error(diagnostic);
+  }
   const id = response.headers.get(MCP_SESSION_ID_HEADER);
   if (id === null) throw new Error('HTTP initialize response did not include a session id');
-  const postJsonRpcOptions2 = { jsonrpc: JSON_RPC_VERSION, method: 'notifications/initialized' } as const;
-  const initialized = await postJsonRpc(server.url, postJsonRpcOptions2, id);
-  expect(initialized.status).toBe(202);
-  return { id, server };
+  const session: RawHttpSession = { id, server };
+  try {
+    await readJsonRpcResult(response);
+    const postJsonRpcOptions2 = { jsonrpc: JSON_RPC_VERSION, method: 'notifications/initialized' } as const;
+    const initialized = await postJsonRpc(server.url, postJsonRpcOptions2, id);
+    expect(initialized.status).toBe(202);
+    const cdp = await readHttpCdpState(session);
+    if (cdp.enabled && cdp.state === 'ready') {
+      const browser = await connectOverManagedCdp(cdp.discoveryUrl);
+      try {
+        const owned = await readManagedBrowserProcess(browser);
+        session.browserPid = owned.pid;
+      } finally {
+        await browser.close();
+      }
+    }
+    return session;
+  } catch (error) {
+    await closeRawHttpSession(session);
+    throw error;
+  }
 }
 async function closeRawHttpSession(session: RawHttpSession): Promise<void> {
   const argumentValue5 = session.server.url;
@@ -947,7 +985,45 @@ async function closeRawHttpSession(session: RawHttpSession): Promise<void> {
     method: 'DELETE',
     headers: { [MCP_SESSION_ID_HEADER]: session.id },
   } as const;
-  await fetch(argumentValue5, fetchOptions);
+  try {
+    const response = await fetch(argumentValue5, fetchOptions);
+    expect(response.status).toBe(200);
+    if (session.browserPid !== undefined) {
+      const pid = session.browserPid;
+      const polling = { timeout: 10000 } as const;
+      await expect.poll(() => processExists(pid), polling).toBe(false);
+    }
+  } catch (error) {
+    killOwnedProcess(session.browserPid);
+    throw error;
+  }
+}
+async function closeHttpScenario(
+  server: RunningHttpBridge | undefined,
+  sessions: RawHttpSession[],
+  browsers: Browser[],
+  range: ReservedPortRange,
+  fixture?: { close(): Promise<void> },
+): Promise<void> {
+  const cleanups = [
+    ...browsers.map((browser) => async () => await browser.close()),
+    ...sessions.map((session) => async () => await closeRawHttpSession(session)),
+    ...(server ? [async () => await closePackagedHttpBridge(server)] : []),
+    async () => await range.close(),
+    ...(fixture ? [async () => await fixture.close()] : []),
+  ];
+  await runScenarioCleanups(cleanups, 'Managed HTTP scenario cleanup failed');
+}
+async function runScenarioCleanups(cleanups: Array<() => Promise<void>>, message: string): Promise<void> {
+  const errors: unknown[] = [];
+  for (const cleanup of cleanups) {
+    try {
+      await cleanup();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length) throw new AggregateError(errors, message);
 }
 async function callHttpTool(
   session: RawHttpSession,
@@ -1256,35 +1332,6 @@ async function findFreePort(): Promise<number> {
   if (typeof address !== 'object' || address === null) throw new Error('Expected TCP address');
   await closeServer(server);
   return address.port;
-}
-async function findFreePortRange(size: number): Promise<{
-  end: number;
-  start: number;
-}> {
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    const start = await findFreePort();
-    if (start + size - 1 > 65535) continue;
-    const reservations: Server[] = [];
-    try {
-      for (let offset = 0; offset < size; offset += 1) {
-        const server = createServer();
-        await new Promise<void>((resolve, reject) => {
-          server.once('error', reject);
-          const computedValue4 = start + offset;
-          server.listen(computedValue4, '127.0.0.1', resolve);
-        });
-        reservations.push(server);
-      }
-      const mappedValues7 = reservations.map(async (server) => await closeServer(server));
-      await Promise.all(mappedValues7);
-      return { end: start + size - 1, start };
-    } catch {
-      const mappedValues8 = reservations.map(async (server) => await closeServer(server));
-      await Promise.allSettled(mappedValues8);
-    }
-  }
-  const message25 = `Unable to reserve a contiguous ${String(size)}-port range`;
-  throw new Error(message25);
 }
 async function startFixtureServer(): Promise<{
   close(): Promise<void>;
