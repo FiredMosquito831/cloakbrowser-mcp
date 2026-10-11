@@ -15,10 +15,10 @@ export function registerHumanizeCompatibility(): void {
     typeof metadata !== 'object' ||
     metadata === null ||
     !('version' in metadata) ||
-    metadata.version !== '0.6.0'
+    (metadata.version !== '0.6.0' && metadata.version !== '0.6.1')
   ) {
     throw new Error(
-      'Humanize compatibility is verified only for CloakBrowser 0.6.0; update the bridge before enabling humanize with another version',
+      'Humanize compatibility is verified only for CloakBrowser 0.6.0 and 0.6.1; update the bridge before enabling humanize with another version',
     );
   }
   const uRL = new URL('./humanizeCompatibilityLoader.js', import.meta.url);

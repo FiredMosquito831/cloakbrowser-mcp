@@ -1,12 +1,11 @@
 import { spawn, type SpawnOptions } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFile, mkdir, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createConnection } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { binaryInfo } from 'cloakbrowser';
 import { type BrowserContext, chromium } from 'playwright';
 import { expect, type TestContext } from 'vitest';
 import { ModuleKind, transpileModule } from 'typescript';
@@ -29,19 +28,6 @@ export interface OfficialExtension {
   directory: string;
   id: string;
   version: string;
-}
-
-export async function findFreeExecutable(): Promise<string> {
-  const info = binaryInfo();
-  const cache = path.dirname(info.cacheDir);
-  const entries = await readdir(cache);
-  for (const entry of entries.sort().reverse()) {
-    if (!/^chromium-[\d.]+$/u.test(entry)) continue;
-    const version = entry.slice('chromium-'.length);
-    const candidate = binaryInfo(version);
-    if (candidate.installed && candidate.tier === 'free') return await realpath(candidate.binaryPath);
-  }
-  throw new Error('Extension E2E requires a cached verified Free CloakBrowser binary');
 }
 
 export async function prepareControlledExtension(runtime: FreeBrowserRuntime): Promise<URL> {

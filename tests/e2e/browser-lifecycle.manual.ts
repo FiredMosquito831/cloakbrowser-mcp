@@ -15,8 +15,11 @@ import {
   packAndInstallCurrentPackage,
 } from '@tests/e2e/distributionHarness.js';
 import { startNpmBrowserFixture } from '@tests/e2e/npm-browser-fixture.js';
-import { findFreeExecutable } from '@tests/helpers/browser-extension.js';
-import { createFreeBrowserRuntime, type FreeBrowserRuntime } from '@tests/helpers/browser-test-runtime.js';
+import {
+  createFreeBrowserRuntime,
+  type FreeBrowserRuntime,
+  resolveFreeBrowserExecutable,
+} from '@tests/helpers/browser-test-runtime.js';
 
 const disposalTimeout = 10000;
 const cycles = 5;
@@ -45,7 +48,9 @@ interface ToolResult {
 
 beforeAll(async () => {
   const command = packAndInstallCurrentPackage();
-  const executable = await findFreeExecutable();
+  const downloadRoot = createTempRoot('cloak-browser-download-');
+  const binary = await resolveFreeBrowserExecutable(downloadRoot);
+  const executable = binary.executable;
   const root = createTempRoot('cloak-lifecycle-');
   const parentEnv = { ...command.env };
   for (const key of Object.keys(parentEnv)) {

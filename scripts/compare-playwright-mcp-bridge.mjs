@@ -12,6 +12,7 @@ import {
   expectedDefaultTools,
   localToolNames,
   normalizeToolResponseText,
+  supportsFindFilename,
 } from '#scripts/lib/playwright-mcp-parity';
 const sliceResult = process.argv.slice(2);
 const { image, reportPath } = parseArgs(sliceResult);
@@ -219,12 +220,7 @@ async function runScenario(target, fixtureUrl) {
   const upstreamTools = tools.filter((tool) => !localToolNames.includes(tool.name));
   const upstreamToolNames = upstreamTools.map((tool) => tool.name).sort();
   const screenshotSchema = assertScreenshotSchemaSupportsWebp(tools, target.mode);
-  const findFilenameSchema = tools.find((tool) => tool.name === 'browser_find')?.inputSchema?.properties
-    ?.filename;
-  if (findFilenameSchema?.type !== 'string') {
-    const message8 = `${target.mode} browser_find schema does not support filename`;
-    throw new Error(message8);
-  }
+  const findFilenameSupported = supportsFindFilename(tools);
   const calls = [];
   const message9 = `${target.mode} upstream tool list`;
   assertEqual(upstreamToolNames, expectedDefaultTools, message9);
@@ -282,11 +278,13 @@ async function runScenario(target, fixtureUrl) {
   assertSnapshotIncludesBoxes(snapshot, target.mode);
   const callOptions4 = { text: 'Cloak MCP fixture' };
   await call('browser_find', callOptions4);
-  const callOptions5 = { text: 'Cloak MCP fixture', filename: '/data/find-results.md' };
-  await call('browser_find', callOptions5);
-  if (!readFileSync(target.findOutputPath, 'utf8').includes('Cloak MCP fixture')) {
-    const message13 = `${target.mode} browser_find did not save the expected result`;
-    throw new Error(message13);
+  if (findFilenameSupported) {
+    const callOptions5 = { text: 'Cloak MCP fixture', filename: '/data/find-results.md' };
+    await call('browser_find', callOptions5);
+    if (!readFileSync(target.findOutputPath, 'utf8').includes('Cloak MCP fixture')) {
+      const message13 = `${target.mode} browser_find did not save the expected result`;
+      throw new Error(message13);
+    }
   }
   const callOptions6 = { text: 'Cloak MCP fixture' };
   await call('browser_wait_for', callOptions6);
@@ -355,7 +353,14 @@ async function runScenario(target, fixtureUrl) {
   const covered = [...argumentValue].sort();
   const message14 = `${target.mode} covered tools`;
   assertEqual(covered, expectedDefaultTools, message14);
-  return { mode: target.mode, tools: upstreamToolNames, toolSchemas: upstreamTools, screenshotSchema, calls };
+  return {
+    mode: target.mode,
+    tools: upstreamToolNames,
+    toolSchemas: upstreamTools,
+    screenshotSchema,
+    findFilenameSupported,
+    calls,
+  };
 }
 async function runHumanizationScenario(target, fixtureUrl) {
   const { tools } = await target.client.listTools();
@@ -697,6 +702,7 @@ function createReport(baselineRun, cloakRun, humanizationRun, devtoolsRun, webmc
     result: {
       matched: true,
       comparedCalls: baselineRun.calls.length,
+      findFilenameSupported: baselineRun.findFilenameSupported,
     },
     humanization: {
       actionAfterNavigation: true,

@@ -46,3 +46,11 @@ export function assertEqual(actual, expected, label) {
     throw new Error(message);
   }
 }
+
+/** Respect the selected upstream version's optional find-file contract. */
+export function supportsFindFilename(tools) {
+  const schema = tools.find((tool) => tool.name === 'browser_find')?.inputSchema?.properties?.filename;
+  if (schema === undefined) return false;
+  if (schema.type !== 'string') throw new Error('Unsupported upstream browser_find filename schema');
+  return true;
+}

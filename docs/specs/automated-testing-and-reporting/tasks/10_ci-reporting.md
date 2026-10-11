@@ -119,7 +119,7 @@ dispatch and publication remain separate. No downstream packet is authorized.
 Existing CI emits sanitized producers with distinct OS/architecture/Node/browser/
 job/level identities and always uploads them for 14 days. Existing test commands,
 required-ci dependencies, Codecov and coverage thresholds remain intact. Expected
-PR inventory is 85 producers. The new schedule/manual-only workflow covers five
+PR inventory is 90 producers, including managed CDP on every native platform and Linux Node 22. The new schedule/manual-only workflow covers five
 native environments on Node 24 and both Docker architectures: 26 producers.
 The actual workflow environment declarations are checked against that inventory.
 

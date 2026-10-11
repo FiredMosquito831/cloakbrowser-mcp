@@ -138,3 +138,26 @@ environment values. Both worktrees contain the fixes. On the reporting tree,
 probe passed. The release-tree reporting suite passed all 27 tests. Remote
 CodeQL and native Windows validation remain unverified for these local changes.
 The agent owns source preparation and checks; the user authorized commit and push on 2026-10-11. Completed remote CI will be inspected only when requested.
+
+## CI gap fixes — 2026-10-11
+
+Run 38130650831 exposed three setup/contract defects: a missing cold Cloak cache,
+console Chromium revision mismatch, and an unconditional npm-only filename
+expectation against Docker MCP 0.0.82. Local production E2E additionally exposed
+CloakBrowser humanization's missing optional `playwright-core` peer.
+
+Managed CDP now belongs to the E2E matrix on all five native environments with
+Node 26; an additional Linux Node 22 cell preserves minimum-major coverage.
+The required E2E gate includes all six CDP cells. The report inventory is 90
+producers. Cold-cache acquisition is shared by npm, CDP, proxy, extensions and
+lifecycle suites; downloads use isolated caches without inherited licenses.
+Windows/macOS inspect only the owned browser PID using native OS commands.
+
+Console tests explicitly select the installed Chromium executable. npm declares
+a compatible stable `playwright-core` production peer for humanization; the
+Docker package links that peer to the core from the official base image.
+Docker parity checks complete upstream schemas and records optional filename
+support; npm E2E separately requires filename persistence. Docker 0.0.82 success
+must never be presented as 0.0.83 validation. Release/Docker version blockers
+remain in force. Native Windows/macOS acceptance requires a new CI run; the
+agent will inspect completed remote results only when the user requests it.

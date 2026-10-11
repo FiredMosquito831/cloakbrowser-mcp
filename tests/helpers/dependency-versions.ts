@@ -10,6 +10,7 @@ const lockfile = JSON.parse(fileSyncResult) as {
   >;
 };
 const freezeOptions = {
+  productionPlaywrightCore: lockedVersion('node_modules/playwright-core'),
   playwrightMcp: lockedVersion('node_modules/@playwright/mcp'),
   upstreamPlaywright: lockedVersion('node_modules/@playwright/mcp/node_modules/playwright'),
   upstreamPlaywrightCore: lockedVersion('node_modules/@playwright/mcp/node_modules/playwright-core'),

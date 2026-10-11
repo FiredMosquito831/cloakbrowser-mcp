@@ -59,7 +59,12 @@ export function ciPlan(lane, platforms, nodes) {
     const quality = nodes.flatMap((node) =>
       levels.map((level) => `${environment}-node${node}-none-pr-quality-${level}`),
     );
-    return [...quality, `${environment}-node26-none-pr-cli`, `${environment}-node26-playwright-pr-console`];
+    return [
+      ...quality,
+      `${environment}-node26-none-pr-cli`,
+      `${environment}-node26-playwright-pr-console`,
+      `${environment}-node26-mixed-pr-cdp`,
+    ];
   });
   if (lane === 'pr') {
     ids.push('linux-x64-node22-mixed-pr-cdp');

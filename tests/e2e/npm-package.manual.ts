@@ -1,12 +1,12 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { readdir, realpath } from 'node:fs/promises';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
+import { tmpdir } from 'node:os';
 import { setTimeout } from 'node:timers/promises';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { binaryInfo } from 'cloakbrowser';
 import { type Browser, chromium } from 'playwright';
-import { afterEach, describe, expect, it, type TestContext } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, type TestContext } from 'vitest';
 import {
   cleanupDistributionE2e,
   createTempRoot,
@@ -18,6 +18,7 @@ import {
   createFreeBrowserRuntime,
   type FreeBrowserRuntime,
   killOwnedProcess,
+  resolveFreeBrowserExecutable,
   withCleanupDeadline,
 } from '@tests/helpers/browser-test-runtime.js';
 import { LOCAL_TOOL_BINARY_INFO, LOCAL_TOOL_BRIDGE_INFO } from '@/bridge/tools.js';
@@ -39,28 +40,20 @@ afterEach(async () => {
   }
 });
 
+let freeBinary: ReturnType<typeof resolveFreeBrowserExecutable> | undefined;
+let downloadRoot: string;
+beforeAll(async () => {
+  const directory = tmpdir();
+  const prefix = path.join(directory, 'cloak-npm-download-');
+  downloadRoot = await mkdtemp(prefix);
+});
+afterAll(async () => {
+  const options = { recursive: true, force: true };
+  if (downloadRoot) await rm(downloadRoot, options);
+});
 async function packFreePackage() {
-  const installed = binaryInfo();
-  const cache = path.dirname(installed.cacheDir);
-  const entries = await readdir(cache);
-  const versions = entries
-    .filter((entry) => /^chromium-[\d.]+$/u.test(entry))
-    .sort()
-    .reverse();
-  const override = process.env.CLOAKBROWSER_BINARY_PATH;
-  const requested = override ? await realpath(override) : undefined;
-  let executable: string | undefined;
-  for (const entry of versions) {
-    const version = entry.slice('chromium-'.length);
-    const info = binaryInfo(version);
-    if (info.tier !== 'free' || !info.installed) continue;
-    const candidate = await realpath(info.binaryPath);
-    if (!requested || requested === candidate) {
-      executable = candidate;
-      break;
-    }
-  }
-  if (!executable) throw new Error('npm E2E requires a cached, verified Free CloakBrowser binary');
+  freeBinary ??= resolveFreeBrowserExecutable(downloadRoot);
+  const { executable } = await freeBinary;
   const command = packAndInstallCurrentPackage();
   const root = createTempRoot('cloak-npm-runtime-');
   const parentEnv = { ...command.env };

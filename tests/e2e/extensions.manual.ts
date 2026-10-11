@@ -2,7 +2,11 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { createFreeBrowserRuntime, type FreeBrowserRuntime } from '@tests/helpers/browser-test-runtime.js';
+import {
+  createFreeBrowserRuntime,
+  type FreeBrowserRuntime,
+  resolveFreeBrowserExecutable,
+} from '@tests/helpers/browser-test-runtime.js';
 import {
   cleanupDistributionE2e,
   createTempRoot,
@@ -10,7 +14,6 @@ import {
 } from '@tests/e2e/distributionHarness.js';
 import { type NpmBrowserFixture, startNpmBrowserFixture } from '@tests/e2e/npm-browser-fixture.js';
 import {
-  findFreeExecutable,
   observedValue,
   type OfficialExtension,
   prepareControlledExtension,
@@ -24,7 +27,9 @@ let command: ReturnType<typeof packAndInstallCurrentPackage>;
 let fixture: NpmBrowserFixture;
 let official: OfficialExtension;
 beforeAll(async () => {
-  const executable = await findFreeExecutable();
+  const downloadRoot = createTempRoot('cloak-browser-download-');
+  const binary = await resolveFreeBrowserExecutable(downloadRoot);
+  const executable = binary.executable;
   const root = createTempRoot('cloak-extension-runtime-');
   const parentEnv = { ...process.env };
   for (const key of Object.keys(parentEnv)) {

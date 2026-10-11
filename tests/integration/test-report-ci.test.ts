@@ -200,12 +200,12 @@ describe('CI reporting trust and matrix aggregation', () => {
     const ci = await readFile('.github/workflows/ci.yml', 'utf8');
     const periodic = await readFile('.github/workflows/test-reporting.yml', 'utf8');
     const config = await readFile('vitest.config.ts', 'utf8');
-    const jobs = ['npm-audit', 'quality', 'e2e', 'cdp-e2e', 'coverage', 'docs', 'docker'];
+    const jobs = ['npm-audit', 'quality', 'e2e', 'coverage', 'docs', 'docker'];
     const encoded = JSON.stringify(jobs);
     const required = ci.slice(ci.indexOf('  required-ci:'));
     for (const job of jobs) expect(required).toContain(`- ${job}`);
     expect(required).toContain(
-      "const requiredJobs = ['npm-audit', 'quality', 'e2e', 'cdp-e2e', 'coverage', 'docs', 'docker']",
+      "const requiredJobs = ['npm-audit', 'quality', 'e2e', 'coverage', 'docs', 'docker']",
     );
     expect(encoded).not.toContain('test-report');
     expect(ci).toContain('files: ./coverage/lcov.info');
@@ -219,7 +219,7 @@ describe('CI reporting trust and matrix aggregation', () => {
     expect(periodic).toContain('retention-days: 14');
     expect(periodic).toContain('actions: read');
     for (const [workflow, lane, count] of [
-      [ci, 'pr', 85],
+      [ci, 'pr', 90],
       [periodic, 'periodic', 26],
     ] as const) {
       const platformValue = /^ {2}CLOAK_REPORT_PLATFORMS: '([^']+)'$/m.exec(workflow)?.[1];
@@ -231,6 +231,9 @@ describe('CI reporting trust and matrix aggregation', () => {
     }
     expect(ci).toContain('if: always()');
     expect(ci).not.toContain('continue-on-error: true');
+    expect(ci).not.toContain('  cdp-e2e:');
+    expect(ci).toContain('name: Run managed CDP with both browser engines');
+    expect(ci).toContain('CLOAKBROWSER_MCP_CDP_EXPECTED_ARCHITECTURE: ${{ matrix.native-architecture }}');
   });
   it('merges distinct producers, keeps attachments and reports a failing environment', async () => {
     const f = await fixture();
@@ -365,6 +368,7 @@ describe('CI reporting trust and matrix aggregation', () => {
     for (const environment of ['linux-x64', 'linux-arm64', 'darwin-arm64', 'darwin-x64', 'win32-x64']) {
       expect(periodic.some((id) => id.startsWith(environment) && id.includes('npm'))).toBe(true);
       expect(pr.some((id) => id.startsWith(environment) && id.includes('quality-unit'))).toBe(true);
+      expect(pr).toContain(`${environment}-node26-mixed-pr-cdp`);
     }
     expect(pr.some((id) => /proxy-geoip|extensions|lifecycle/.test(id))).toBe(false);
   });

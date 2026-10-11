@@ -329,8 +329,8 @@ describe('packaged CLI end-to-end', () => {
         packagePath: expect.any(String),
       },
       playwrightCore: {
-        version: null,
-        packagePath: null,
+        version: expectedDependencyVersions.productionPlaywrightCore,
+        packagePath: expect.any(String),
         bundlePath: expect.stringContaining('coreBundle'),
       },
     } as const;

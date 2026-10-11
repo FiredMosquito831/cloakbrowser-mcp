@@ -1,15 +1,14 @@
-import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
+import { type ChildProcessWithoutNullStreams, execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { readdir, readFile, realpath } from 'node:fs/promises';
+import { promisify } from 'node:util';
+import { readFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { request as createHttpsRequest } from 'node:https';
-import { dirname } from 'node:path';
 import { existsSync } from 'node:fs';
 import type { Readable } from 'node:stream';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { binaryInfo } from 'cloakbrowser';
 import { type Browser, chromium, type Page } from 'playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { type RawData, WebSocket } from 'ws';
@@ -21,7 +20,12 @@ import {
   type DistributionCommand,
   packAndInstallCurrentPackage,
 } from '@tests/e2e/distributionHarness.js';
-import { createFreeBrowserRuntime, type FreeBrowserRuntime } from '@tests/helpers/browser-test-runtime.js';
+import {
+  createFreeBrowserRuntime,
+  type FreeBrowserRuntime,
+  ownedProcessCommand,
+  resolveFreeBrowserExecutable,
+} from '@tests/helpers/browser-test-runtime.js';
 import { startTestTlsTerminator } from '@tests/helpers/tls-terminator.js';
 type BrowserEngine = 'cloak' | 'playwright';
 const nodeBrowserEngines = ['cloak', 'playwright'] as const satisfies readonly BrowserEngine[];
@@ -77,26 +81,9 @@ interface RunningBridge {
 let packagedCommand: DistributionCommand;
 let freeRuntime: FreeBrowserRuntime;
 beforeAll(async () => {
-  const cache = dirname(binaryInfo().cacheDir);
-  const entries = await readdir(cache);
-  const versions = entries
-    .filter((entry) => /^chromium-[\d.]+$/u.test(entry))
-    .sort()
-    .reverse();
-  const override = process.env.CLOAKBROWSER_BINARY_PATH;
-  const requested = override ? await realpath(override) : undefined;
-  let executable: string | undefined;
-  for (const entry of versions) {
-    const version = entry.slice('chromium-'.length);
-    const info = binaryInfo(version);
-    if (!info.installed || info.tier !== 'free') continue;
-    const candidate = await realpath(info.binaryPath);
-    if (!requested || requested === candidate) {
-      executable = candidate;
-      break;
-    }
-  }
-  if (!executable) throw new Error('CDP E2E requires a cached, verified Free CloakBrowser binary');
+  const downloadRoot = createTempRoot('cloak-cdp-download-');
+  const freeBinary = await resolveFreeBrowserExecutable(downloadRoot);
+  const executable = freeBinary.executable;
   const playwrightExecutable = chromium.executablePath();
   const installed = existsSync(playwrightExecutable);
   if (!installed) throw new Error('CDP E2E requires an installed controlled Playwright Chromium executable');
@@ -1093,8 +1080,11 @@ async function readManagedBrowserProcess(browser: Browser): Promise<{ arguments:
       const bytes = await readFile(filename);
       arguments_ = bytes.toString('utf8').split('\0').filter(Boolean);
     } else {
-      const commandLine = await session.send('Browser.getBrowserCommandLine');
-      arguments_ = commandLine.arguments;
+      const command = ownedProcessCommand(processInfo.id, process.platform);
+      const execute = promisify(execFile);
+      const options = { timeout: 5000, maxBuffer: 65536 };
+      const result = await execute(command.command, command.args, options);
+      arguments_ = [result.stdout.trim()];
     }
     return { arguments: arguments_, pid: processInfo.id };
   } finally {
@@ -1209,10 +1199,11 @@ function safeErrorMessage(error: unknown): string {
 function redactCdpCapabilities(value: string): string {
   return value.replace(/\/cdp\/[A-Za-z0-9_-]{43}(?=[/?#]|$)/gu, '/cdp/<redacted>');
 }
-function readNativeArchitecture(): 'linux/amd64' | 'linux/arm64' {
-  if (process.platform !== 'linux') throw new Error('Managed CDP runtime evidence requires Linux');
-  if (process.arch === 'x64') return 'linux/amd64';
-  if (process.arch === 'arm64') return 'linux/arm64';
+function readNativeArchitecture(): string {
+  const platforms = ['linux', 'darwin', 'win32'];
+  if (!platforms.includes(process.platform)) throw new Error('Unsupported managed CDP runtime platform');
+  if (process.arch === 'x64') return `${process.platform}/amd64`;
+  if (process.arch === 'arm64') return `${process.platform}/arm64`;
   const message23 = `Unsupported managed CDP runtime architecture: ${process.arch}`;
   throw new Error(message23);
 }

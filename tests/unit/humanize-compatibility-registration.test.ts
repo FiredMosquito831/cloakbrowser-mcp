@@ -14,31 +14,35 @@ afterEach(() => {
   metadata.mockReset();
 });
 describe('humanize compatibility registration', () => {
-  const values: readonly string[] = ['0.5.11', '0.6.1'];
+  const values: readonly string[] = ['0.5.11', '0.6.2'];
   it.each(values)('rejects unverified dependency version %s', async (version) => {
     const stringifyOptions = { version } as const;
     const serializedValue = JSON.stringify(stringifyOptions);
     metadata.mockReturnValue(serializedValue);
     const { registerHumanizeCompatibility } = await import('@/runtime/humanizeCompatibility.js');
-    expect(() => registerHumanizeCompatibility()).toThrow('verified only for CloakBrowser 0.6.0');
+    expect(() => registerHumanizeCompatibility()).toThrow('verified only for CloakBrowser 0.6.0 and 0.6.1');
     expect(register).not.toHaveBeenCalled();
   });
-  it('registers one loader per upstream process even across repeated initialization', async () => {
-    const stringifyOptions2 = { version: '0.6.0' } as const;
-    const serializedValue2 = JSON.stringify(stringifyOptions2);
-    metadata.mockReturnValue(serializedValue2);
-    const { registerHumanizeCompatibility } = await import('@/runtime/humanizeCompatibility.js');
-    for (let attempt = 0; attempt < 1000; attempt += 1) registerHumanizeCompatibility();
-    expect(register).toHaveBeenCalledTimes(1);
-    expect(metadata).toHaveBeenCalledTimes(1);
-    const receiverActual = register;
-    const anyResult = expect.any(URL);
-    const toHaveBeenCalledWithOptions = {
-      data: {
-        helpersUrl: expect.stringMatching(/\/human\/worldHelpers\.js$/u),
-        worldUrl: expect.stringMatching(/\/human\/world\.js$/u),
-      },
-    } as const;
-    expect(receiverActual).toHaveBeenCalledWith(anyResult, toHaveBeenCalledWithOptions);
-  });
+  const verifiedVersions = ['0.6.0', '0.6.1'] as const;
+  it.each(verifiedVersions)(
+    'registers one loader for %s even across repeated initialization',
+    async (version) => {
+      const stringifyOptions2 = { version } as const;
+      const serializedValue2 = JSON.stringify(stringifyOptions2);
+      metadata.mockReturnValue(serializedValue2);
+      const { registerHumanizeCompatibility } = await import('@/runtime/humanizeCompatibility.js');
+      for (let attempt = 0; attempt < 1000; attempt += 1) registerHumanizeCompatibility();
+      expect(register).toHaveBeenCalledTimes(1);
+      expect(metadata).toHaveBeenCalledTimes(1);
+      const receiverActual = register;
+      const anyResult = expect.any(URL);
+      const toHaveBeenCalledWithOptions = {
+        data: {
+          helpersUrl: expect.stringMatching(/\/human\/worldHelpers\.js$/u),
+          worldUrl: expect.stringMatching(/\/human\/world\.js$/u),
+        },
+      } as const;
+      expect(receiverActual).toHaveBeenCalledWith(anyResult, toHaveBeenCalledWithOptions);
+    },
+  );
 });

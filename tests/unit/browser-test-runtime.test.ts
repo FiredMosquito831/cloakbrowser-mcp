@@ -5,7 +5,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createFreeBrowserRuntime, withCleanupDeadline } from '@tests/helpers/browser-test-runtime.js';
+import {
+  createFreeBrowserRuntime,
+  ownedProcessCommand,
+  withCleanupDeadline,
+} from '@tests/helpers/browser-test-runtime.js';
 
 const executeFile = promisify(execFile);
 const disposers: Array<() => Promise<void>> = [];
@@ -206,3 +210,19 @@ describe('owned Free browser test runtime', () => {
     disposers.pop();
   });
 });
+
+const invalidPids = [0, -1, Number.NaN, Number.POSITIVE_INFINITY, 1.5, Number.MAX_SAFE_INTEGER + 1];
+it.each(invalidPids)('refuses unsafe process inspection PID %s', (pid) => {
+  expect(() => ownedProcessCommand(pid, 'win32')).toThrow('Invalid owned process PID');
+});
+it.each(['darwin', 'win32'] as const)(
+  'limits native process inspection to the owned PID on %s',
+  (platform) => {
+    const command = ownedProcessCommand(42, platform);
+    const text = command.args.join(' ');
+    expect(text).toContain('42');
+    expect(text).not.toContain('Get-Process');
+    expect(command.args).not.toContain('-A');
+    expect(command.args).not.toContain('-e');
+  },
+);

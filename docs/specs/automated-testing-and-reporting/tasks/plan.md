@@ -890,7 +890,7 @@ Complete local workflow acceptance. Existing PR jobs now publish sanitized uniqu
 producers with always-upload/14-day retention. An independent non-required job
 validates and merges them into Allure HTML and Job Summary. No extra PR browser
 scenarios, changed required gates, coverage thresholds or Codecov behavior.
-Expected inventory: 85 PR producers. A weekly/manual workflow covers five native
+Expected inventory: 90 PR producers, including managed CDP on every native platform and Linux Node 22. A weekly/manual workflow covers five native
 platforms on Node 24 and both existing Docker architectures: 26 producers.
 
 Default-branch successful scheduled/manual history is scoped by repository, lane

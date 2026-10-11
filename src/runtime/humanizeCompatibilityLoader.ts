@@ -6,16 +6,20 @@ export function initialize(data: { helpersUrl: string; worldUrl: string }): void
   helpersUrl = data.helpersUrl;
   worldUrl = data.worldUrl;
 }
-const helperHash = '3b698b81b3ceb5dc400237b088eb80178fbbc3ce6ab0fcf84ce3d83041913919';
-const worldHash = '2949df4184c14d6022bac0f552d0428481ab199fb7658e4ed584e96071d81258';
-function requireSource(source: string, hash: string): void {
-  if (createHash('sha256').update(source).digest('hex') !== hash) {
-    throw new Error('CloakBrowser 0.6.0 humanize source does not match the verified compatibility patch');
+const helperHashes = [
+  '3b698b81b3ceb5dc400237b088eb80178fbbc3ce6ab0fcf84ce3d83041913919',
+  '189fb94cf919c1c6993adf7d5868f87f0e9288e4cf1e16c1c15c41d98d47525d',
+] as const;
+const worldHashes = ['2949df4184c14d6022bac0f552d0428481ab199fb7658e4ed584e96071d81258'] as const;
+function requireSource(source: string, hashes: readonly string[]): void {
+  const actualHash = createHash('sha256').update(source).digest('hex');
+  if (!hashes.includes(actualHash)) {
+    throw new Error('CloakBrowser humanize source does not match the verified compatibility patch');
   }
 }
 // Patch only the verified dependency sources; never write to node_modules.
 export function patchHelpers(source: string): string {
-  requireSource(source, helperHash);
+  requireSource(source, helperHashes);
   return source
     .replace(
       "const els = new Map(); let seq = 0;\nconst put = (e) => { const id = ++seq; els.set(id, e); return id; };\nconst get = (id) => { const e = els.get(id); if (!e) throw new Error('cloak:stale-element'); return e; };",
@@ -35,7 +39,7 @@ const get = (id) => { const e = els.get(id)?.deref(); if (!e) throw new Error('c
     .replace('I.elementState(e, s)', 'I.elementState(e, s, frameVisible)');
 }
 export function patchWorld(source: string): string {
-  requireSource(source, worldHash);
+  requireSource(source, worldHashes);
   return source.replace(
     '    call(frame, method, ...args) {',
     `    async call(frame, method, ...args) {

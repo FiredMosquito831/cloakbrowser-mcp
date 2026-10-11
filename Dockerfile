@@ -57,6 +57,10 @@ LABEL org.opencontainers.image.base.digest="${PLAYWRIGHT_MCP_IMAGE_DIGEST}"
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=prod-deps --chown=node:node /src/node_modules ./node_modules
+# CloakBrowser humanization must resolve the core shipped with the official MCP image.
+RUN test -f /app/node_modules/playwright-core/package.json \
+ && rm -rf node_modules/playwright-core \
+ && ln -s /app/node_modules/playwright-core node_modules/playwright-core
 COPY --from=build --chown=node:node /src/dist ./dist
 COPY --from=build --chown=node:node /src/package.json ./package.json
 RUN install -d -m 1777 /tmp/.X11-unix

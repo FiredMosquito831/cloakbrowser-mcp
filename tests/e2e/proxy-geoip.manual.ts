@@ -1,13 +1,16 @@
 import { createHash } from 'node:crypto';
-import { copyFile, mkdir, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { binaryInfo } from 'cloakbrowser';
 import { Reader } from 'mmdb-lib';
 import { afterAll, beforeAll, describe, expect, it, type TestContext } from 'vitest';
-import { createFreeBrowserRuntime, type FreeBrowserRuntime } from '@tests/helpers/browser-test-runtime.js';
+import {
+  createFreeBrowserRuntime,
+  type FreeBrowserRuntime,
+  resolveFreeBrowserExecutable,
+} from '@tests/helpers/browser-test-runtime.js';
 import {
   cleanupDistributionE2e,
   createTempRoot,
@@ -47,21 +50,10 @@ const proxyModes = ['http', 'authenticated-http', 'socks'] as const;
 const geoipFaults = ['no-record', 'corrupt-db', 'missing-db', 'timeout'] as const;
 
 beforeAll(async () => {
-  const info = binaryInfo();
-  const cache = path.dirname(info.cacheDir);
-  const entries = await readdir(cache);
-  let executable: string | undefined;
-  for (const entry of entries.sort().reverse()) {
-    if (!/^chromium-[\d.]+$/u.test(entry)) continue;
-    const version = entry.slice('chromium-'.length);
-    const candidate = binaryInfo(version);
-    if (candidate.installed && candidate.tier === 'free') {
-      executable = await realpath(candidate.binaryPath);
-      freeChromium = version;
-      break;
-    }
-  }
-  if (!executable) throw new Error('Proxy E2E requires a cached verified Free CloakBrowser binary');
+  const downloadRoot = createTempRoot('cloak-proxy-download-');
+  const binary = await resolveFreeBrowserExecutable(downloadRoot);
+  const executable = binary.executable;
+  freeChromium = binary.version;
   command = packAndInstallCurrentPackage();
   const executableDirectory = path.dirname(command.command);
   const packageDirectory = path.dirname(executableDirectory);

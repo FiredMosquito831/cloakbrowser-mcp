@@ -7,6 +7,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { describe, expect, it } from 'vitest';
+import { chromium } from 'playwright';
 const uRL = new URL('../../dist/cli.js', import.meta.url);
 const cliPath = fileURLToPath(uRL);
 type ProbePhase =
@@ -62,6 +63,7 @@ async function runConsoleProbe(fixtureUrl: string, attempt: number): Promise<Con
     PLAYWRIGHT_MCP_BROWSER_ENGINE: 'playwright',
     PLAYWRIGHT_MCP_HEADLESS: 'true',
     PLAYWRIGHT_MCP_ISOLATED: 'true',
+    PLAYWRIGHT_MCP_EXECUTABLE_PATH: chromium.executablePath(),
     PLAYWRIGHT_MCP_OUTPUT_DIR: path.join(runtimeRoot, 'output'),
     CLOAK_PLAYWRIGHT_MCP_CONSOLE_FALLBACK: 'false',
     ...(process.platform === 'linux' ? { CLOAK_PLAYWRIGHT_MCP_EXTRA_ARGS: '--no-sandbox' } : {}),

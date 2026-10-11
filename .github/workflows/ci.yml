@@ -85,19 +85,39 @@ jobs:
           if-no-files-found: error
 
   e2e:
-    name: e2e (${{ matrix.os }}, node 26)
+    name: e2e (${{ matrix.os }}, node ${{ matrix.node-version }})
     needs: node-versions
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         os: ${{ fromJSON(needs.node-versions.outputs.platforms) }}
+        node-version: [26]
+        include:
+          - os: ubuntu-latest
+            node-version: 26
+            native-architecture: linux/amd64
+          - os: ubuntu-24.04-arm
+            node-version: 26
+            native-architecture: linux/arm64
+          - os: macos-latest
+            node-version: 26
+            native-architecture: darwin/arm64
+          - os: macos-15-intel
+            node-version: 26
+            native-architecture: darwin/amd64
+          - os: windows-latest
+            node-version: 26
+            native-architecture: win32/amd64
+          - os: ubuntu-24.04
+            node-version: 22
+            native-architecture: linux/amd64
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 26
+          node-version: ${{ matrix.node-version }}
           package-manager-cache: false
       - name: Configure clean caches
         shell: node {0}
@@ -117,61 +137,44 @@ jobs:
         run: npm install --global npm@${{ env.NPM_VERSION }}
       - run: npm ci --ignore-scripts
       - name: Install Playwright Chromium
+        id: browser-install
         run: node node_modules/playwright/cli.js install chromium
       - run: npm run build
       - name: Configure cli reporting
+        if: matrix.node-version == 26
         run: node scripts/test-report.mjs ci-config
         env:
           CLOAK_REPORT_GROUP: cli
           CLOAK_REPORT_SUITE: cli
           CLOAK_REPORT_ENGINE: none
       - run: npm run test:e2e:run
+        if: matrix.node-version == 26
       - name: Configure console reporting
+        if: matrix.node-version == 26
         run: node scripts/test-report.mjs ci-config
         env:
           CLOAK_REPORT_GROUP: console
           CLOAK_REPORT_SUITE: console
           CLOAK_REPORT_ENGINE: playwright
       - run: npm run test:e2e:playwright-console:run
-      - name: Upload sanitized test evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: test-results-e2e-${{ matrix.os }}
-          path: ${{ env.CLOAK_REPORT_ROOT }}
-          retention-days: 14
-          if-no-files-found: error
-
-  cdp-e2e:
-    name: managed CDP real-browser (linux/amd64, node 22)
-    needs: node-versions
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22
-          cache: npm
-      - name: Use npm ${{ env.NPM_VERSION }}
-        run: npm install --global npm@${{ env.NPM_VERSION }}
-      - run: npm ci --ignore-scripts
-      - name: Install Playwright Chromium
-        run: node node_modules/playwright/cli.js install chromium
-      - name: Configure cdp reporting
+        if: matrix.node-version == 26
+      - name: Configure CDP reporting
+        if: ${{ !cancelled() && steps.browser-install.outcome == 'success' }}
         run: node scripts/test-report.mjs ci-config
         env:
           CLOAK_REPORT_GROUP: cdp
           CLOAK_REPORT_SUITE: cdp
           CLOAK_REPORT_ENGINE: mixed
-      - run: npm run test:e2e:cdp
+      - name: Run managed CDP with both browser engines
+        if: ${{ !cancelled() && steps.browser-install.outcome == 'success' }}
+        run: npm run test:e2e:cdp
         env:
-          CLOAKBROWSER_MCP_CDP_EXPECTED_ARCHITECTURE: linux/amd64
+          CLOAKBROWSER_MCP_CDP_EXPECTED_ARCHITECTURE: ${{ matrix.native-architecture }}
       - name: Upload sanitized test evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: test-results-cdp-linux-amd64
+          name: test-results-e2e-${{ matrix.os }}-node${{ matrix.node-version }}
           path: ${{ env.CLOAK_REPORT_ROOT }}
           retention-days: 14
           if-no-files-found: error
@@ -399,7 +402,6 @@ jobs:
       - npm-audit
       - quality
       - e2e
-      - cdp-e2e
       - coverage
       - docs
       - docker
@@ -411,7 +413,7 @@ jobs:
           NEEDS_JSON: ${{ toJSON(needs) }}
         run: |
           node <<'EOF'
-          const requiredJobs = ['npm-audit', 'quality', 'e2e', 'cdp-e2e', 'coverage', 'docs', 'docker'];
+          const requiredJobs = ['npm-audit', 'quality', 'e2e', 'coverage', 'docs', 'docker'];
           const needs = JSON.parse(process.env.NEEDS_JSON);
           const failedJobs = requiredJobs
             .filter((jobName) => needs[jobName]?.result !== 'success')
@@ -426,7 +428,7 @@ jobs:
   test-report:
     name: Combined test report
     if: ${{ always() }}
-    needs: [node-versions, quality, e2e, cdp-e2e, coverage, docker]
+    needs: [node-versions, quality, e2e, coverage, docker]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
