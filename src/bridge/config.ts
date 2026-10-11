@@ -13,6 +13,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { isIP } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,6 +36,7 @@ export type HumanPreset = (typeof humanPresets)[number];
 export const releaseChannels = ['stable', 'preview'] as const;
 export type ReleaseChannel = (typeof releaseChannels)[number];
 const codegenLanguages = ['typescript', 'python', 'java', 'csharp', 'none'] as const;
+const fingerprintWebrtcIpFlag = '--fingerprint-webrtc-ip';
 type CodegenLanguage = (typeof codegenLanguages)[number];
 type CloakBuildLaunchOptions = typeof buildLaunchOptions;
 type CloakLaunchOptions = NonNullable<Parameters<CloakBuildLaunchOptions>[0]>;
@@ -644,13 +646,18 @@ async function resolveCloakLaunchOptions(
   const proxy = resolveConfiguredProxy(options.env, options.args, options.proxy);
   const geoip = options.geoip && proxy !== undefined;
   const cloakOptions = createCloakLaunchOptions(options, proxy, geoip);
+  if (geoip) {
+    // A user-supplied spoof must not suppress or impersonate actual GeoIP discovery.
+    cloakOptions.args = options.args.filter((arg) => !isWebrtcIpArg(arg));
+  }
   const launchOptions = await suppressStdout(() =>
     withCloakBinaryPath(options.cloakBinaryPath, () => options.buildCloakLaunchOptions(cloakOptions)),
   );
   const generatedLicenseKey = launchOptions.env?.CLOAKBROWSER_LICENSE_KEY;
   const argumentValue3 = options.args;
-  const stringArrayResult = readStringArray(launchOptions.args);
-  const extractCloakGeneratedArgsResult = extractCloakGeneratedArgs(stringArrayResult);
+  const generatedArgs = readStringArray(launchOptions.args);
+  const validatedArgs = geoip ? validateGeoipExitArgs(options.args, generatedArgs) : generatedArgs;
+  const extractCloakGeneratedArgsResult = extractCloakGeneratedArgs(validatedArgs);
   const mergeLaunchArgsResult = mergeLaunchArgs(argumentValue3, extractCloakGeneratedArgsResult);
   const propertyValue = launchOptions.proxy;
   const propertyValue2 = typeof generatedLicenseKey === 'string' ? generatedLicenseKey : undefined;
@@ -659,6 +666,23 @@ async function resolveCloakLaunchOptions(
     proxy: propertyValue,
     licenseKey: propertyValue2,
   };
+}
+function isWebrtcIpArg(arg: string): boolean {
+  const key = launchArgKey(arg);
+  return key === fingerprintWebrtcIpFlag;
+}
+function validateGeoipExitArgs(originalArgs: readonly string[], generatedArgs: string[]): string[] {
+  const exitIp = findLaunchArgValue(generatedArgs, fingerprintWebrtcIpFlag);
+  if (exitIp === undefined || isIP(exitIp) === 0) {
+    throw new BridgeRuntimeConfigurationError(
+      'GeoIP resolution failed: could not discover the proxy exit IP',
+    );
+  }
+  const explicitIp = findLaunchArgValue(originalArgs, fingerprintWebrtcIpFlag);
+  // Restore explicit spoofing only after discovery; "auto" keeps the resolved IP.
+  return explicitIp !== undefined && explicitIp !== 'auto'
+    ? generatedArgs.filter((arg) => !isWebrtcIpArg(arg))
+    : generatedArgs;
 }
 function createCloakLaunchOptions(
   options: ResolveCloakLaunchOptionsOptions,
@@ -1197,7 +1221,7 @@ const values2: Iterable<string> | null | undefined = ['--start-maximized'];
 const exactCloakGeneratedArgs = new Set(values2);
 const prefixedCloakGeneratedArgs = [
   '--fingerprint-timezone=',
-  '--fingerprint-webrtc-ip=',
+  `${fingerprintWebrtcIpFlag}=`,
   '--lang=',
   '--fingerprint-locale=',
   '--proxy-server=',

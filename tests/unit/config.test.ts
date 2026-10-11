@@ -1082,6 +1082,96 @@ describe('bridge config generation', () => {
     expect(runtime.childEnv.PLAYWRIGHT_MCP_PROXY_BYPASS).toBeUndefined();
     runtime.dispose();
   });
+  const missingExitValues = [undefined, 'auto', 'off', 'not-an-ip'];
+  it.for(missingExitValues)(
+    'rejects an unresolved GeoIP exit IP (%s) and releases the profile',
+    async (exitIp) => {
+      const root = createTempRoot();
+      const outputDir = path.join(root, 'artifacts');
+      const profile = path.join(root, 'profile');
+      const lockPath = path.join(profile, profileLockFileName);
+      const extraArgs = [
+        '--fingerprint-timezone=Asia/Tokyo',
+        '--lang=ja-JP',
+        '--fingerprint-webrtc-ip=198.51.100.8',
+      ];
+      const encoded = JSON.stringify(extraArgs);
+      const env = {
+        PLAYWRIGHT_MCP_OUTPUT_DIR: outputDir,
+        PLAYWRIGHT_MCP_USER_DATA_DIR: profile,
+        PLAYWRIGHT_MCP_PROXY_SERVER: 'http://user:password-canary@proxy.example:8080',
+        CLOAK_PLAYWRIGHT_MCP_EXTRA_ARGS: encoded,
+        CLOAK_PLAYWRIGHT_MCP_CONSOLE_FALLBACK: 'false',
+      };
+      const options: import('@/bridge/config.js').PrepareBridgeRuntimeOptions = {
+        tempRoot: root,
+        geoipProxyMatch: true,
+        ensureCloakBinary: async () => fakeCloakBinaryPath,
+        buildCloakLaunchOptions: async (options) => {
+          const args = [...(options?.args ?? [])];
+          if (exitIp !== undefined) {
+            const flag = `--fingerprint-webrtc-ip=${exitIp}`;
+            args.push(flag);
+          }
+          return { executablePath: fakeCloakBinaryPath, headless: true, args };
+        },
+        env,
+      };
+      const startup = prepareBridgeRuntime(options);
+      await expect(startup).rejects.toThrow('GeoIP resolution failed: could not discover the proxy exit IP');
+      const locked = existsSync(lockPath);
+      expect(locked).toBe(false);
+      const successfulOptions: import('@/bridge/config.js').PrepareBridgeRuntimeOptions = {
+        ...options,
+        buildCloakLaunchOptions: async (options) => {
+          const args = [...(options?.args ?? []), '--fingerprint-webrtc-ip=203.0.113.10'];
+          return { executablePath: fakeCloakBinaryPath, headless: true, args };
+        },
+      };
+      const runtime = await prepareBridgeRuntime(successfulOptions);
+      runtime.dispose();
+    },
+  );
+
+  const explicitWebrtcValues = ['198.51.100.8', 'off', 'auto'];
+  it.for(explicitWebrtcValues)(
+    'keeps WebRTC override %s after independent GeoIP exit validation',
+    async (override) => {
+      const root = createTempRoot();
+      const outputDir = path.join(root, 'artifacts');
+      const rawFlag = `--fingerprint-webrtc-ip=${override}`;
+      const flags = [rawFlag, '--fingerprint-timezone=Asia/Tokyo', '--lang=ja-JP'];
+      const encoded = JSON.stringify(flags);
+      const options: import('@/bridge/config.js').PrepareBridgeRuntimeOptions = {
+        tempRoot: root,
+        geoipProxyMatch: true,
+        ensureCloakBinary: async () => fakeCloakBinaryPath,
+        env: {
+          PLAYWRIGHT_MCP_OUTPUT_DIR: outputDir,
+          PLAYWRIGHT_MCP_PROXY_SERVER: 'http://proxy.example:8080',
+          CLOAK_PLAYWRIGHT_MCP_EXTRA_ARGS: encoded,
+          CLOAK_PLAYWRIGHT_MCP_CONSOLE_FALLBACK: 'false',
+        },
+        buildCloakLaunchOptions: async (options) => {
+          const supplied = options?.args;
+          expect(supplied).not.toContain(rawFlag);
+          const args = [...(supplied ?? []), '--fingerprint-webrtc-ip=2001:db8::2'];
+          return { executablePath: fakeCloakBinaryPath, headless: true, args };
+        },
+      };
+      const runtime = await prepareBridgeRuntime(options);
+      try {
+        const args = runtime.config.browser?.launchOptions?.args ?? [];
+        const actual = args.filter((arg) => arg.startsWith('--fingerprint-webrtc-ip='));
+        const expected = [override === 'auto' ? '--fingerprint-webrtc-ip=2001:db8::2' : rawFlag];
+        expect(actual).toEqual(expected);
+        expect(args).toContain('--fingerprint-timezone=Asia/Tokyo');
+        expect(args).toContain('--lang=ja-JP');
+      } finally {
+        runtime.dispose();
+      }
+    },
+  );
   it('retains the CloakBrowser proxy option when native inline authentication is unavailable', async () => {
     const root = createTempRoot();
     const prepareBridgeRuntimeOptions39:
@@ -1401,7 +1491,12 @@ describe('bridge config generation', () => {
         return {
           executablePath: fakeCloakBinaryPath,
           headless: true,
-          args: [...(options.args ?? []), '--fingerprint-timezone=Europe/Paris', '--lang=fr-FR'],
+          args: [
+            ...(options.args ?? []),
+            '--fingerprint-timezone=Europe/Paris',
+            '--lang=fr-FR',
+            '--fingerprint-webrtc-ip=203.0.113.10',
+          ],
         };
       },
       env: {
@@ -1413,7 +1508,12 @@ describe('bridge config generation', () => {
     };
     const runtime = await prepareBridgeRuntime(prepareBridgeRuntimeOptions50);
     const receiver34Actual = runtime.config.browser?.launchOptions?.args;
-    const values18: string[] = ['--no-sandbox', '--fingerprint-timezone=Europe/Paris', '--lang=fr-FR'];
+    const values18: string[] = [
+      '--no-sandbox',
+      '--fingerprint-timezone=Europe/Paris',
+      '--lang=fr-FR',
+      '--fingerprint-webrtc-ip=203.0.113.10',
+    ];
     expect(receiver34Actual).toEqual(values18);
     runtime.dispose();
   });
