@@ -102,6 +102,10 @@ Task-specific commands include `npm run test:unit`, `npm run test:integration`,
 Generic engineering workflows are installed globally through Engineer Agent Workflows.
 Use the active skill catalog and matching skill by name. Do not vendor global workflow
 copies into this repository or hardcode plugin-cache paths.
+Keep generic workflow instructions, interview guides, and task-packet contracts in
+the global skills; do not maintain local copies or references duplicating them.
+Use Codex's standard **Request User Input** tool (`request_user_input`) for unresolved
+user decisions, following the tool's current host constraints.
 
 - `/spec` routes to `spec-driven-development`.
 - `/plan` routes to `planning-and-task-breakdown`.
