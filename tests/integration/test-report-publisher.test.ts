@@ -14,6 +14,7 @@ interface Identity {
 }
 type Api = (method: string, endpoint: string, body?: unknown) => Promise<unknown>;
 interface Publisher {
+  resolveIdentity: (api: Api, id: number, trigger?: Record<string, unknown>) => Promise<Identity | undefined>;
   preparePublicReport: (options: Record<string, unknown>) => Promise<Record<string, unknown>>;
   updateReportComment: (
     api: Api,
@@ -265,7 +266,16 @@ describe('trusted report publisher', () => {
     const workflow = await readFile('.github/workflows/publish-test-report.yml', 'utf8');
     expect(workflow).toContain("vars.TEST_REPORT_PUBLICATION_ENABLED == 'true'");
     expect(workflow).toContain("github.event.workflow_run.event == 'pull_request'");
-    expect(workflow).toContain('ref: ${{ github.event.repository.default_branch }}');
+    expect(workflow).toContain('  workflow_call:');
+    expect(workflow).toContain('github.event.pull_request.head.repo.full_name == github.repository');
+    expect(workflow).toContain('github.event.workflow_run.head_repository.full_name != github.repository');
+    expect(workflow).toContain('github.event.repository.default_branch || github.sha');
+    expect(workflow).toContain("if: steps.identity.outputs.eligible == 'true'");
+    const ci = await readFile('.github/workflows/ci.yml', 'utf8');
+    expect(ci).toContain('    needs: test-report');
+    expect(ci).toContain('    uses: ./.github/workflows/publish-test-report.yml');
+    expect(ci).not.toContain('secrets: inherit');
+    expect(ci).toContain('TEST_REPORT_APP_PRIVATE_KEY: ${{ secrets.TEST_REPORT_APP_PRIVATE_KEY }}');
     expect(workflow).not.toMatch(/^\s+(?:contents|pages): write/m);
     expect(workflow).not.toContain('github.event.workflow_run.head_sha');
     expect(workflow).toContain('persist-credentials: false');
@@ -273,6 +283,37 @@ describe('trusted report publisher', () => {
     expect(workflow.indexOf('run: node scripts/publish-test-report.mjs prepare')).toBeLessThan(
       workflow.indexOf('uses: actions/create-github-app-token@'),
     );
+  });
+  it('resolves the active caller against API identity and skips manual runs without an open PR', async () => {
+    const source = { id: 10, full_name: 'swimmwatch/cloakbrowser-mcp' };
+    const active = {
+      ...run,
+      status: 'in_progress',
+      event: 'workflow_dispatch',
+      workflow_id: 4,
+      repository: source,
+      head_repository: source,
+    };
+    const current = { ...pr, head: { sha, repo: source }, base: { repo: source } };
+    let associations: unknown[] = [current];
+    const api: Api = async (_method, endpoint) => {
+      if (endpoint === base) return source;
+      if (endpoint === `${base}/actions/workflows/ci.yml`) return { id: 4 };
+      if (endpoint === `${base}/actions/runs/20`) return active;
+      if (endpoint.startsWith(`${base}/commits/${sha}/pulls?`)) return associations;
+      if (endpoint === `${base}/pulls/7`) return current;
+      throw new Error(`Unexpected API access: ${endpoint}`);
+    };
+    const trigger = { event: 'workflow_dispatch', activeRun: { id: 20, attempt: 2 } };
+    expect(await publisher.resolveIdentity(api, 20, trigger)).toEqual(identity);
+    const wrongAttempt = { ...trigger, activeRun: { id: 20, attempt: 3 } };
+    await expect(publisher.resolveIdentity(api, 20, wrongAttempt)).rejects.toThrow('workflow identity');
+    const wrongEvent = { ...trigger, event: 'pull_request' };
+    await expect(publisher.resolveIdentity(api, 20, wrongEvent)).rejects.toThrow('workflow identity');
+    associations = [];
+    expect(await publisher.resolveIdentity(api, 20, trigger)).toBeUndefined();
+    associations = [current, { ...current, number: 8 }];
+    await expect(publisher.resolveIdentity(api, 20, trigger)).rejects.toThrow('unique current PR');
   });
   it('verifies both successful Pages build identity and exact entrypoint bytes', async () => {
     const bytes = Buffer.from('<html>trusted</html>');

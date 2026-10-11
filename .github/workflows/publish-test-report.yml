@@ -1,8 +1,13 @@
 name: Publish test report
 
-# Privileged handoff is intentional: trusted default-branch code validates data,
+# Same-repository CI calls its reviewed revision; fork notifications use default-branch code.
+# Privileged handoff is intentional: publication code validates data,
 # regenerates HTML, disables caches and obtains destination-only credentials afterward.
 on: # zizmor: ignore[dangerous-triggers]
+  workflow_call:
+    secrets:
+      TEST_REPORT_APP_PRIVATE_KEY:
+        required: true
   workflow_run:
     workflows: [CI]
     types: [completed]
@@ -19,7 +24,13 @@ concurrency:
 
 jobs:
   publish:
-    if: vars.TEST_REPORT_PUBLICATION_ENABLED == 'true' && (github.event_name == 'schedule' || github.event.workflow_run.event == 'pull_request')
+    if: >-
+      vars.TEST_REPORT_PUBLICATION_ENABLED == 'true' &&
+      (github.event_name == 'schedule' ||
+       (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request' &&
+        github.event.workflow_run.head_repository.full_name != github.repository) ||
+       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+       github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -35,10 +46,10 @@ jobs:
       CLOAK_REPORT_PLATFORMS: '["ubuntu-latest","ubuntu-24.04-arm","macos-latest","macos-15-intel","windows-latest"]'
       NODE_CHECK_VERSIONS: '["22","24","25","26"]'
     steps:
-      - name: Check out only trusted default-branch publication code
+      - name: Check out publication code from the trusted caller or default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ (github.event_name == 'workflow_run' || github.event_name == 'schedule') && github.event.repository.default_branch || github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -50,13 +61,13 @@ jobs:
         run: node scripts/publish-test-report.mjs config
       - name: Resolve run and current PR through GitHub API
         id: identity
-        if: github.event_name == 'workflow_run'
+        if: github.event_name != 'schedule'
         run: node scripts/publish-test-report.mjs identity
       - name: Prepare isolated producer download directory
-        if: github.event_name == 'workflow_run'
+        if: steps.identity.outputs.eligible == 'true'
         run: mkdir -p "$REPORT_INPUT"
       - name: Download this API-verified run's producer data
-        if: github.event_name == 'workflow_run'
+        if: steps.identity.outputs.eligible == 'true'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           github-token: ${{ github.token }}
@@ -65,9 +76,10 @@ jobs:
           merge-multiple: false
           path: ${{ env.REPORT_INPUT }}
       - name: Validate, redact and regenerate public HTML using trusted tooling
-        if: github.event_name == 'workflow_run'
+        if: steps.identity.outputs.eligible == 'true'
         run: node scripts/publish-test-report.mjs prepare
       - name: Create short-lived reports-only installation credential
+        if: github.event_name == 'schedule' || steps.identity.outputs.eligible == 'true'
         id: app
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -78,6 +90,7 @@ jobs:
           permission-contents: write
           permission-pages: read
       - name: Check out destination gh-pages for immutable-path and retention checks
+        if: github.event_name == 'schedule' || steps.identity.outputs.eligible == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ env.REPORTS_REPOSITORY }}
@@ -87,10 +100,10 @@ jobs:
           path: ${{ env.REPORTS_CHECKOUT }}
       - name: Preserve an already published immutable run
         id: stage
-        if: github.event_name == 'workflow_run'
+        if: steps.identity.outputs.eligible == 'true'
         run: node scripts/publish-test-report.mjs stage
       - name: Publish only trusted regenerated public tree
-        if: github.event_name == 'workflow_run' && steps.stage.outputs.publish == 'true'
+        if: steps.identity.outputs.eligible == 'true' && steps.stage.outputs.publish == 'true'
         uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.1.0
         with:
           personal_token: ${{ steps.app.outputs.token }}
@@ -100,7 +113,7 @@ jobs:
           keep_files: true
           force_orphan: false
       - name: Verify Pages build and exact report URL before guarded comment
-        if: github.event_name == 'workflow_run'
+        if: steps.identity.outputs.eligible == 'true'
         run: node scripts/publish-test-report.mjs link
         env:
           REPORTS_TOKEN: ${{ steps.app.outputs.token }}
@@ -110,5 +123,5 @@ jobs:
         env:
           REPORTS_TOKEN: ${{ steps.app.outputs.token }}
       - name: State unavailable publication with Actions fallback
-        if: failure() && github.event_name == 'workflow_run' && steps.identity.outcome == 'success'
+        if: failure() && steps.identity.outputs.eligible == 'true'
         run: node scripts/publish-test-report.mjs unavailable

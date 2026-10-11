@@ -46,8 +46,43 @@ async function jsonFile(filename) {
   return JSON.parse(text);
 }
 
+function supportedRunEvent(run) {
+  return (
+    run.event === 'pull_request' ||
+    (run.event === 'workflow_dispatch' &&
+      Number.isSafeInteger(run.repository?.id) &&
+      run.head_repository?.id === run.repository.id)
+  );
+}
+
+/** Resolve only the current caller or a completed workflow notification. */
+export function publicationTrigger(env, event) {
+  if (env.GITHUB_EVENT_NAME === 'workflow_run') return { id: event.workflow_run?.id };
+  if (!['pull_request', 'workflow_dispatch'].includes(env.GITHUB_EVENT_NAME))
+    throw new Error('Report publication: unsupported caller event');
+  if (
+    env.GITHUB_EVENT_NAME === 'pull_request' &&
+    event.pull_request?.head?.repo?.full_name !== sourceRepository
+  )
+    throw new Error('Report publication: fork caller cannot receive publication credentials');
+  const id = Number(env.GITHUB_RUN_ID);
+  const attempt = Number(env.GITHUB_RUN_ATTEMPT);
+  if (![id, attempt].every((value) => Number.isSafeInteger(value) && value > 0))
+    throw new Error('Report publication: invalid current execution');
+  return { id, activeRun: { id, attempt }, event: env.GITHUB_EVENT_NAME };
+}
+
+function matchesActiveRun(run, source, activeRun) {
+  return (
+    activeRun?.id === run.id &&
+    activeRun?.attempt === run.run_attempt &&
+    run.head_repository?.id === source.id
+  );
+}
+
 /** Derive public identity from GitHub API records, never producer metadata. */
-export function reportIdentity(run, pr, source) {
+export function reportIdentity(run, pr, source, activeRun) {
+  const current = matchesActiveRun(run, source, activeRun);
   if (
     source.full_name !== sourceRepository ||
     run.repository?.id !== source.id ||
@@ -56,8 +91,8 @@ export function reportIdentity(run, pr, source) {
     pr.head?.repo?.id !== run.head_repository?.id ||
     pr.head?.sha !== run.head_sha ||
     pr.state !== 'open' ||
-    run.status !== 'completed' ||
-    run.event !== 'pull_request' ||
+    (run.status !== 'completed' && !(current && run.status === 'in_progress')) ||
+    !supportedRunEvent(run) ||
     run.path !== '.github/workflows/ci.yml' ||
     !/^[a-f0-9]{40}$/.test(run.head_sha) ||
     ![run.id, run.run_attempt, pr.number].every((value) => Number.isSafeInteger(value) && value > 0)
@@ -92,9 +127,7 @@ export function freshPublication(identity, pr, runs, comments) {
   if (pr.state !== 'open' || pr.head?.sha !== identity.sha || pr.number !== identity.pr) return false;
   const eligible = runs.filter(
     (run) =>
-      run.head_sha === identity.sha &&
-      run.event === 'pull_request' &&
-      run.path === '.github/workflows/ci.yml',
+      run.head_sha === identity.sha && supportedRunEvent(run) && run.path === '.github/workflows/ci.yml',
   );
   const newest = eligible.sort((a, b) => b.id - a.id || b.run_attempt - a.run_attempt)[0];
   if (!newest || newest.id !== identity.run || newest.run_attempt !== identity.attempt) return false;
@@ -352,7 +385,7 @@ async function publicBytes(href) {
   return responseBytes(response, 32 * 1024 * 1024);
 }
 
-async function resolveIdentity(api, id) {
+export async function resolveIdentity(api, id, trigger = {}) {
   if (!Number.isSafeInteger(id) || id <= 0) throw new Error('Report publication: invalid trigger run');
   const base = `/repos/${sourceRepository}`;
   const source = await api('GET', base);
@@ -361,6 +394,8 @@ async function resolveIdentity(api, id) {
   if (
     run.workflow_id !== workflow.id ||
     run.repository?.id !== source.id ||
+    (trigger.event && run.event !== trigger.event) ||
+    (trigger.activeRun && !matchesActiveRun(run, source, trigger.activeRun)) ||
     !/^[a-f0-9]{40}$/.test(run.head_sha)
   )
     throw new Error('Report publication: unexpected workflow identity');
@@ -372,9 +407,10 @@ async function resolveIdentity(api, id) {
       pr.head?.repo?.id === run.head_repository?.id &&
       pr.base?.repo?.id === source.id,
   );
+  if (eligible.length === 0 && run.event === 'workflow_dispatch') return undefined;
   if (eligible.length !== 1) throw new Error('Report publication: no unique current PR association');
   const pr = await api('GET', `${base}/pulls/${eligible[0].number}`);
-  return reportIdentity(run, pr, source);
+  return reportIdentity(run, pr, source, trigger.activeRun);
 }
 
 async function writeOutput(values) {
@@ -466,6 +502,26 @@ async function cleanupCommand(api, repository) {
   await fs.appendFile(process.env.GITHUB_STEP_SUMMARY, `Expired owned reports: ${removed.length}.\n`);
 }
 
+async function initializePublication(api, env, repository, filename) {
+  const event = await jsonFile(env.GITHUB_EVENT_PATH);
+  const trigger = publicationTrigger(env, event);
+  const identity = await resolveIdentity(api, trigger.id, trigger);
+  if (!identity) {
+    await fs.appendFile(
+      env.GITHUB_STEP_SUMMARY,
+      'Pages publication skipped: this manual CI run has no current open PR. The Actions artifact remains available.\n',
+    );
+    return writeOutput({ eligible: 'false' });
+  }
+  await saveState(filename, { repository, identity });
+  return writeOutput({
+    eligible: 'true',
+    'run-id': identity.run,
+    'repository-name': repository.split('/')[1],
+    owner: repository.split('/')[0],
+  });
+}
+
 async function main() {
   const [command] = process.argv.slice(2);
   const env = process.env;
@@ -477,16 +533,7 @@ async function main() {
   const filename = path.join(env.RUNNER_TEMP, 'cloak-report-publication.json');
   if (command === 'config')
     return writeOutput({ 'repository-name': repository.split('/')[1], owner: repository.split('/')[0] });
-  if (command === 'identity') {
-    const event = await jsonFile(env.GITHUB_EVENT_PATH);
-    const identity = await resolveIdentity(api, event.workflow_run?.id);
-    await saveState(filename, { repository, identity });
-    return writeOutput({
-      'run-id': identity.run,
-      'repository-name': repository.split('/')[1],
-      owner: repository.split('/')[0],
-    });
-  }
+  if (command === 'identity') return initializePublication(api, env, repository, filename);
   if (command === 'cleanup') return cleanupCommand(api, repository);
   const state = await jsonFile(filename);
   if (state.repository !== repository) throw new Error('Report publication: destination changed');

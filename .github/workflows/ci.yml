@@ -461,3 +461,18 @@ jobs:
           path: ${{ env.CLOAK_REPORT_OUTPUT }}
           retention-days: 14
           if-no-files-found: error
+
+  publish-test-report:
+    name: Publish PR test report
+    needs: test-report
+    if: >-
+      always() && !cancelled() && vars.TEST_REPORT_PUBLICATION_ENABLED == 'true' &&
+      ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+       github.event_name == 'workflow_dispatch')
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    uses: ./.github/workflows/publish-test-report.yml
+    secrets:
+      TEST_REPORT_APP_PRIVATE_KEY: ${{ secrets.TEST_REPORT_APP_PRIVATE_KEY }}

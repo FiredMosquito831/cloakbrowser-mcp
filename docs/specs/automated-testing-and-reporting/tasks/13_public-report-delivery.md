@@ -112,12 +112,19 @@ The report repository's exact owner/name must be confirmed before external setup
 
 ### Publication flow and security
 
-1. A trusted default-branch `workflow_run` publisher handles completed CI runs,
-   including failed tests. Fetch PR/run/SHA/attempt identity through GitHub's API,
-   not an artifact-supplied PR number or destination.
+1. CI calls the reusable publisher after merged report generation for a PR whose
+   head repository matches the source repository. A manual CI run may publish only
+   when GitHub's API associates its exact head SHA with one current open PR.
+   This route works before merging the publication workflow into the default branch.
+   Fork PR reports use the trusted default-branch `workflow_run` publisher after
+   CI completes. Fetch PR/run/SHA/attempt identity through GitHub's API, never from
+   artifact-supplied metadata. Active publication accepts only the current caller's
+   exact run ID and attempt; older executions cannot replace a newer report.
 2. Download only that run's expected data artifacts and validate bounded schema,
    identities, paths, attachments, omissions and redaction. Never checkout/execute
-   PR code or publish its supplied HTML/config/JavaScript. Generate HTML using
+   fork PR code or publish producer-supplied HTML/config/JavaScript. Same-repository
+   callers use their reviewed workflow revision; fork notifications and retention
+   use the default-branch publisher. Generate HTML using
    trusted pinned reporting code/assets; reject unsafe evidence.
 3. Publish one merged report retaining OS/architecture/Node/engine/level variants.
    Immutable path: `pr/<number>/run/<id>-attempt-<attempt>/<sha>/`.
@@ -267,8 +274,10 @@ These instructions are not authorization for external actions.
    private key only in Actions secret `TEST_REPORT_APP_PRIVATE_KEY`; never
    in files, logs or chat. The publisher job's source token has contents/actions
    read and pull-requests write.
-5. Deliver the reviewed workflow to the trusted default branch through separately
-   authorized commit/push/PR steps. Leave `TEST_REPORT_PUBLICATION_ENABLED`
+5. Deliver the reviewed workflow and CI caller together through separately
+   authorized commit/push/PR steps. Same-repository PR publication uses that CI
+   revision directly; the default-branch delivery is needed for fork notifications
+   and scheduled retention. Leave `TEST_REPORT_PUBLICATION_ENABLED`
    unset/false until setup and public-report/automatic-comment activation are approved.
 6. Set that variable to `true` only after activation authorization. This enables
    both publication and daily cleanup. Existing documentation settings stay intact.
@@ -352,3 +361,23 @@ replacement PR was created. Publication remains dependent on delivering the
 trusted workflow to main. Existing Pages and App configuration are unchanged.
 Local validation and remaining ownership are recorded in the handoff.
 Packet 13 remains unchecked; no remote CI was launched, polled or awaited.
+
+
+## Publication caller correction — 2026-10-11
+
+The successful CI run `38141041561` uploaded its combined artifact but did not
+publish Pages: `workflow_run` was not installed on the default branch and the
+publisher excluded manual runs. CI now calls `publish-test-report.yml` through
+`workflow_call` after `test-report`, with explicit source permissions and only the
+reports App key. Same-repository PR and manual callers use `github.sha`; fork
+notifications and retention use the default branch. Direct fork callers are
+rejected before credentials are created. Manual runs without an open PR skip
+publication explicitly while retaining their Actions artifact. Public HTML is
+still regenerated from validated producer evidence, and a link is written only
+after the Pages build and exact entrypoint digest have been verified.
+
+Independent 6.1 Sol review found no actionable defects. Publisher unit and
+integration tests passed (39/39); pinned actionlint and offline zizmor passed.
+The reviewer did not run tests or exercise live publication. Actual
+Pages publication remains unverified: the release branch currently has no open
+PR, and this change does not create a replacement PR or modify Pages/App settings.
