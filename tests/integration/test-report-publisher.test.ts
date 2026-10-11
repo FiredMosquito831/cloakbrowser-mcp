@@ -1,5 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  truncate,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -16,6 +26,8 @@ type Api = (method: string, endpoint: string, body?: unknown) => Promise<unknown
 interface Publisher {
   resolveIdentity: (api: Api, id: number, trigger?: Record<string, unknown>) => Promise<Identity | undefined>;
   preparePublicReport: (options: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  copyGeneratedReport: (report: string, target: string) => Promise<Array<{ path: string; digest: string }>>;
+  maxReportFileBytes: number;
   updateReportComment: (
     api: Api,
     identity: Identity,
@@ -200,12 +212,54 @@ describe('trusted report publisher', () => {
     const summary = await publisher.preparePublicReport(options);
     expect(summary).toMatchObject({ total: 2, failed: 1 });
     const published = path.join(output, identity.path);
-    expect((await readdir(published)).sort()).toEqual(['index.html', 'publication.json']);
+    const entries = await readdir(published);
+    expect(entries).toContain('index.html');
+    expect(entries).toContain('data');
+    expect(entries).toContain('widgets');
+    const hasScript = entries.some((filename) => filename.endsWith('.js'));
+    expect(hasScript).toBe(true);
+    const excluded = ['results', 'history.jsonl', 'report.json', 'test-results.json'];
+    for (const filename of excluded) expect(entries).not.toContain(filename);
     const html = await readFile(path.join(published, 'index.html'), 'utf8');
     expect(html).toContain('<html');
     expect(html).not.toContain('synthetic-secret');
     expect(html).not.toContain('second-pass-secret');
     expect(html).not.toContain('<img src=x onerror=');
+    expect(html).not.toContain('data:text/javascript;base64,');
+    const files = await readdir(published, { recursive: true });
+    for (const filename of files.filter((name) => /\.(?:json|html|txt)$/.test(name))) {
+      const target = path.join(published, filename);
+      const text = await readFile(target, 'utf8');
+      expect(text).not.toContain('synthetic-secret');
+      expect(text).not.toContain('second-pass-secret');
+    }
+    const statisticsPath = path.join(published, 'widgets/statistic.json');
+    const statistics = JSON.parse(await readFile(statisticsPath, 'utf8')) as {
+      total: number;
+      failed: number;
+    };
+    const expectedStatistics = { total: 2, failed: 1 };
+    expect(statistics).toMatchObject(expectedStatistics);
+    const publicationPath = path.join(published, 'publication.json');
+    const publication = JSON.parse(await readFile(publicationPath, 'utf8')) as {
+      digest: string;
+      assets: Array<{ path: string; digest: string }>;
+    };
+    const request = async (href: string) => {
+      const relative = href === reportUrl ? 'index.html' : href.slice(reportUrl.length);
+      const filename = path.join(published, relative);
+      return readFile(filename);
+    };
+    const api: Api = async () => ({ status: 'built', commit: sha });
+    const verification = {
+      ...publication,
+      repository: 'swimmwatch/cloakbrowser-mcp-reports',
+      commit: sha,
+      url: reportUrl,
+    };
+    await publisher.verifyPublicReport(api, request, verification);
+    const hasStatistics = publication.assets.some((asset) => asset.path === 'widgets/statistic.json');
+    expect(hasStatistics).toBe(true);
     const f = fakeApi();
     await publisher.updateReportComment(f.api, identity, summary, reportUrl);
     expect(JSON.stringify(f.writes)).not.toContain('synthetic-secret');
@@ -331,6 +385,63 @@ describe('trusted report publisher', () => {
     await expect(publisher.verifyPublicReport(api, wrong, options)).rejects.toThrow('entrypoint');
     const pending: Api = async () => ({ status: 'building', commit: sha });
     await expect(publisher.verifyPublicReport(pending, request, options)).rejects.toThrow('deployment');
+  });
+  it('rejects deployment with missing or substituted report resources', async () => {
+    const html = Buffer.from('<html>trusted</html>');
+    const script = Buffer.from('trusted generated script');
+    const digest = createHash('sha256').update(html).digest('hex');
+    const assetDigest = createHash('sha256').update(script).digest('hex');
+    const asset = { path: 'app.js', digest: assetDigest };
+    const options = {
+      repository: 'swimmwatch/cloakbrowser-mcp-reports',
+      commit: sha,
+      url: reportUrl,
+      digest,
+      assets: [asset],
+    };
+    const api: Api = async () => ({ status: 'built', commit: sha });
+    const valid = async (href: string) => (href === reportUrl ? html : script);
+    await publisher.verifyPublicReport(api, valid, options);
+    const missing = async (href: string) => {
+      if (href === reportUrl) return html;
+      throw new Error('HTTP status 404');
+    };
+    const missingResult = publisher.verifyPublicReport(api, missing, options);
+    await expect(missingResult).rejects.toThrow('404');
+    const substituted = async () => html;
+    const substitutedResult = publisher.verifyPublicReport(api, substituted, options);
+    await expect(substitutedResult).rejects.toThrow('resource does not match');
+    const unsafe = { ...options, assets: [{ ...asset, path: '../other-report/app.js' }] };
+    const unsafeResult = publisher.verifyPublicReport(api, valid, unsafe);
+    await expect(unsafeResult).rejects.toThrow('unsafe resource identity');
+  });
+  it('rejects oversized generated resources before they enter the publication tree', async () => {
+    const root = await fixture();
+    const source = path.join(root, 'report');
+    const target = path.join(root, 'public');
+    await mkdir(source);
+    const filename = path.join(source, 'app.js');
+    await writeFile(filename, '');
+    const oversized = publisher.maxReportFileBytes + 1;
+    await truncate(filename, oversized);
+    const copying = publisher.copyGeneratedReport(source, target);
+    await expect(copying).rejects.toThrow('exceeds the GitHub 100 MiB file limit');
+    const files = await readdir(target);
+    expect(files).toHaveLength(0);
+  });
+  it('rejects links in generated resources instead of copying files outside the report', async () => {
+    const root = await fixture();
+    const source = path.join(root, 'report');
+    const target = path.join(root, 'public');
+    const outside = path.join(root, 'outside');
+    await mkdir(source);
+    await mkdir(outside);
+    const link = path.join(source, 'data');
+    await symlink(outside, link, 'junction');
+    const copying = publisher.copyGeneratedReport(source, target);
+    await expect(copying).rejects.toThrow('symlink in generated report');
+    const files = await readdir(target);
+    expect(files).toHaveLength(0);
   });
   it('cleans expired owned paths while preserving live and unrelated files', async () => {
     const tree = await fixture();

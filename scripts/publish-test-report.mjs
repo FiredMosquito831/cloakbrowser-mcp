@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { constants, createReadStream } from 'node:fs';
 import { execFile } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
@@ -11,6 +12,48 @@ const sourceRepository = 'swimmwatch/cloakbrowser-mcp';
 const reportPath = /^pr\/[1-9]\d*\/run\/[1-9]\d*-attempt-[1-9]\d*\/[a-f0-9]{40}$/;
 const retention = 14 * 24 * 60 * 60 * 1000;
 const marker = '<!-- cloakbrowser-report -->';
+export const maxReportFileBytes = 100 * 1024 * 1024;
+const privateReportEntries = new Set(['results', 'history.jsonl', 'report.json', 'test-results.json']);
+
+/** Copy only regenerated report resources, bounding every Git blob before publication. */
+export async function copyGeneratedReport(report, target) {
+  const source = await directory(report);
+  const destination = await directory(target, true);
+  const assets = [];
+  const visit = async (relative) => {
+    const owner = path.join(source, relative);
+    for (const entry of await fs.readdir(owner, { withFileTypes: true })) {
+      if (relative === '' && privateReportEntries.has(entry.name)) continue;
+      const filename = path.posix.join(relative, entry.name);
+      const input = path.join(source, filename);
+      const output = path.join(destination, filename);
+      const info = await fs.lstat(input);
+      if (info.isSymbolicLink()) throw new Error('Report publication: symlink in generated report');
+      if (info.isDirectory()) {
+        await fs.mkdir(output, { mode: 0o700 });
+        await visit(filename);
+      } else if (info.isFile()) {
+        if (info.size > maxReportFileBytes)
+          throw new Error(`Report publication: ${filename} exceeds the GitHub 100 MiB file limit`);
+        await fs.copyFile(input, output, constants.COPYFILE_EXCL);
+        if ((relative === '' && filename !== 'index.html') || filename === 'widgets/statistic.json') {
+          const digest = await fileDigest(output);
+          const asset = { path: filename, digest };
+          assets.push(asset);
+        }
+      } else throw new Error('Report publication: unsupported generated report file');
+    }
+  };
+  await visit('');
+  return assets;
+}
+
+async function fileDigest(filename) {
+  const digest = createHash('sha256');
+  const stream = createReadStream(filename);
+  for await (const chunk of stream) digest.update(chunk);
+  return digest.digest('hex');
+}
 
 function checkedIdentity(identity) {
   const expected = `pr/${identity.pr}/run/${identity.run}-attempt-${identity.attempt}/${identity.sha}`;
@@ -158,7 +201,7 @@ export function expiredReports(entries, now) {
     .map((entry) => entry.path);
 }
 
-/** Rebuild from validated producer data and expose only trusted generated HTML. */
+/** Rebuild from validated producer data and expose only trusted generated report resources. */
 export async function preparePublicReport({ input, output, identity, expected, secretValues = [] }) {
   checkedIdentity(identity);
   const parent = await directory(path.dirname(path.resolve(output)), true);
@@ -189,13 +232,12 @@ export async function preparePublicReport({ input, output, identity, expected, s
       if (['failed', 'broken'].includes(result.status)) environment.failed += 1;
     }
     summary.environments = environments;
-    const html = await fs.readFile(path.join(report, 'index.html'));
-    const digest = createHash('sha256').update(html).digest('hex');
     const tree = path.join(stage, 'public');
     const target = path.join(tree, identity.path);
-    await fs.mkdir(target, { recursive: true, mode: 0o700 });
-    await fs.writeFile(path.join(target, 'index.html'), html, { flag: 'wx', mode: 0o600 });
-    const publication = { version: 1, identity, created: Date.now(), digest, summary };
+    const assets = await copyGeneratedReport(report, target);
+    const index = path.join(target, 'index.html');
+    const digest = await fileDigest(index);
+    const publication = { version: 1, identity, created: Date.now(), digest, assets, summary };
     const encoded = JSON.stringify(publication);
     await fs.writeFile(path.join(target, 'publication.json'), encoded, { flag: 'wx', mode: 0o600 });
     // rename refuses to merge into an existing tree; no producer-provided files are copied.
@@ -275,8 +317,8 @@ export async function updateReportComment(api, identity, summary, href) {
   return body;
 }
 
-/** Verify successful branch Pages build and the exact regenerated entrypoint. */
-export async function verifyPublicReport(api, request, { repository, commit, url, digest }) {
+/** Verify the Pages build, entrypoint and resources required by the multi-file report. */
+export async function verifyPublicReport(api, request, { repository, commit, url, digest, assets = [] }) {
   const base = reportDestination(repository);
   if (!url.startsWith(base) || !/^[a-f0-9]{40}$/.test(commit) || !/^[a-f0-9]{64}$/.test(digest))
     throw new Error('Report publication: invalid deployment identity');
@@ -286,6 +328,20 @@ export async function verifyPublicReport(api, request, { repository, commit, url
   const bytes = await request(url);
   const actual = createHash('sha256').update(bytes).digest('hex');
   if (actual !== digest) throw new Error('Report publication: entrypoint does not match generated report');
+  for (const asset of assets) {
+    const parts = typeof asset.path === 'string' ? asset.path.split('/') : [];
+    if (
+      !parts.length ||
+      parts.some((part) => !/^[\w.-]+$/.test(part) || part === '.' || part === '..') ||
+      !/^[a-f0-9]{64}$/.test(asset.digest)
+    )
+      throw new Error('Report publication: unsafe resource identity');
+    const href = `${url}${asset.path}`;
+    const bytes = await request(href);
+    const actual = createHash('sha256').update(bytes).digest('hex');
+    if (actual !== asset.digest)
+      throw new Error('Report publication: resource does not match generated report');
+  }
 }
 
 /** Delete only expired validated owned report directories, without following links. */
@@ -582,6 +638,7 @@ async function main() {
       commit: reference.object.sha,
       url: `${reportDestination(repository)}${state.identity.path}/`,
       digest: state.publication.digest,
+      assets: state.publication.assets,
     };
     for (let attempt = 0; attempt < 30; attempt += 1) {
       try {

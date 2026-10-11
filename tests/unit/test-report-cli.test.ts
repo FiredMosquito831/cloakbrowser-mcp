@@ -63,6 +63,31 @@ describe('test reporting CLI boundaries', () => {
     const expected = cli.reportOpenCommand(index, process.platform);
     expect(spawn).toHaveBeenCalledWith(expected.command, expected.args, expect.any(Object));
   });
+  it('opens a multi-file CI report through the installed Allure viewer with trusted configuration', async () => {
+    const prefix = path.join(tmpdir(), 'report-open-multi-');
+    const temporary = await mkdtemp(prefix);
+    const root = await realpath(temporary);
+    roots.push(root);
+    const marker = { version: 1, generator: 'allure@3.20.1', complete: true, singleFile: false };
+    const markerPath = path.join(root, 'report.json');
+    const serialized = JSON.stringify(marker);
+    await writeFile(markerPath, serialized);
+    const index = path.join(root, 'index.html');
+    await writeFile(index, '<p>Controlled multi-file report</p>');
+    vi.mocked(spawn).mockImplementationOnce(() => {
+      const args = ['-e', ''];
+      const options = { stdio: 'ignore' } as const;
+      return originalChildProcess.spawn(process.execPath, args, options);
+    });
+    const code = await cli.openReport(root);
+    expect(code).toBe(0);
+    const project = path.resolve('.');
+    const script = path.join(project, 'node_modules/allure/cli.js');
+    const config = path.join(project, 'allure.config.mjs');
+    const args = [script, 'open', '--config', config, root];
+    const anyOptions = expect.any(Object);
+    expect(spawn).toHaveBeenCalledWith(process.execPath, args, anyOptions);
+  });
   it('detects generated report data in the archive inventory', () => {
     const clean = [{ path: 'dist/cli.js' }, { path: 'package.json' }];
     expect(() => cli.assertPackageExclusions(clean)).not.toThrow();

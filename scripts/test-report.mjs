@@ -269,7 +269,7 @@ export async function ciAggregate({ input, output, runId, expected, history, sco
       historyFile = path.join(historyRoot, 'history.jsonl');
       await validateCiHistory(historyFile);
     }
-    const generation = { input: run, output, history: historyFile, secretValues };
+    const generation = { input: run, output, history: historyFile, secretValues, singleFile: false };
     await generateReport(generation);
     return await writeCiSummary(output, missing);
   } finally {
@@ -554,7 +554,7 @@ export async function mergeReport({ input, output, expected, secretValues = [] }
 }
 
 /** Validate raw producer manifests and re-redact before the generator reads data. */
-export async function generateReport({ input, output, history, secretValues = [] }) {
+export async function generateReport({ input, output, history, secretValues = [], singleFile = true }) {
   const source = await producers(input);
   const parent = await canonicalDirectory(path.dirname(path.resolve(output)), true);
   const target = path.join(parent, checkedId(path.basename(output)));
@@ -601,7 +601,7 @@ export async function generateReport({ input, output, history, secretValues = []
       const name = labels.map((label) => label.value).join(', ');
       variants.set(id, { id, name, labels });
     }
-    const options = { historyPath, variants: [...variants.values()] };
+    const options = { historyPath, singleFile, variants: [...variants.values()] };
     const trustedConfig = new URL('../allure.config.mjs', import.meta.url).href;
     const configuration = `import { createAllureConfig } from ${JSON.stringify(trustedConfig)};\nexport default createAllureConfig(${JSON.stringify(options)});\n`;
     const configPath = path.join(stage, 'config.mjs');
@@ -615,7 +615,7 @@ export async function generateReport({ input, output, history, secretValues = []
     await fs.access(index);
     await fs.rename(results, path.join(report, 'results'));
     await fs.rename(historyPath, path.join(report, 'history.jsonl'));
-    const marker = { version: 1, generator: 'allure@3.20.1', complete: true };
+    const marker = { version: 1, generator: 'allure@3.20.1', complete: true, singleFile };
     await fs.writeFile(path.join(report, 'report.json'), JSON.stringify(marker), { flag: 'wx', mode: 0o600 });
     await fs.rename(report, target);
     return target;
@@ -642,7 +642,13 @@ export async function openReport(report) {
   const index = path.join(owner, 'index.html');
   const info = await fs.lstat(index);
   if (!info.isFile() || info.isSymbolicLink()) throw new Error('Test reporting: unsafe HTML entry');
-  const { command, args } = reportOpenCommand(index);
+  const script = path.join(cwd, 'node_modules/allure/cli.js');
+  const config = path.join(cwd, 'allure.config.mjs');
+  const viewer =
+    marker.singleFile === false
+      ? { command: process.execPath, args: [script, 'open', '--config', config, owner] }
+      : reportOpenCommand(index);
+  const { command, args } = viewer;
   const options = { cwd, stdio: 'inherit', windowsHide: true };
   const child = spawn(command, args, options);
   return new Promise((resolve, reject) => {
