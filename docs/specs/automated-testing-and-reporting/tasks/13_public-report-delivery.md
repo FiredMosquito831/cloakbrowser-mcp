@@ -1,19 +1,20 @@
 # 13 — Separate Pages publication and PR report link
 
-Status: Planned; specification approved; packet and external setup authorization required
+Status: Local implementation prepared; external activation and live proof pending — 2026-10-10
 Requirements: TEST-007, TEST-008, TEST-009 (delivery amendment)
 Dependencies: 10; external setup authorization before live publication
 Delivery order: after 10, before 11; existing packet IDs remain stable
 
 ## Pinned inputs and provenance
 
-- `source_version`: `785424ba80d8dbf709c51901135a288276377b0a5aa08958d25c7d6ba2988a83`
-- `specification_version`: `9eb3ca847f6421bd03834981a659066362922abcffcd79605c63d04cd9e30a7e`
-- `review_ref`: `28b4daa7-1f0e-4286-ace1-eace5f685e70`
+- `source_version`: `b5768150e20c92ec9131fc4c767229b1f076ed86e089fc5f9829e737eb09f9ba`
+- `specification_version`: `bce84e8b28612a6db2d677395921717b37003dab1f993d0ec867dee1dc2b7627`
+- `review_ref`: `10107cff-c8d4-488d-9294-ccb07412a357`
 - User instruction: `301e19f0-2621-412e-b6b4-dc23d3666ddd`, revision 1,
   recorded through scenario MCP on 2026-10-10.
 - Reconciliation approval: `95e828ec-3581-4edc-abd2-8808a24ecc0d`, revision 1.
-  Independent review passed 22/22 items with consistent whole-specification text;
+  Comment-handler decision: `4f47ba22-bd13-49e3-a54f-5690e27eb4a7`, revision 1.
+  Independent review passed 24/24 current items;
   MCP state is pass/reviewed, Approved, with a recorded approval checkpoint.
 - CWD: `/home/dmitry-vasiliev/.codex/worktrees/release-v1-15-0/cloakbrowser-mcp`
 
@@ -46,7 +47,7 @@ Use these components:
 | --- | --- | --- |
 | Generator | [Allure Report 3](https://github.com/allure-framework/allure3), development package `allure` | Generate one HTML report from validated merged results; packet 03 owns the version and compatibility probe |
 | Publisher | [peaceiris/actions-gh-pages](https://github.com/peaceiris/actions-gh-pages) | Publish trusted generated output to the separate reports repository |
-| PR report Action | [allure-framework/allure-action](https://github.com/allure-framework/allure-action) | Read trusted generated `summary.json`, present statistics and link the deployed URL through `remote-href`; it does not host reports |
+| PR comment handler | Project-owned `scripts/publish-test-report.mjs` | Render validated statistics and verified URL; update only one fixed-marker comment with verified bot authorship and current SHA/run/attempt |
 | Source repository | [swimmwatch/cloakbrowser-mcp](https://github.com/swimmwatch/cloakbrowser-mcp) | Own tests, aggregation, trusted publisher workflow and checks |
 | Reports repository | Proposed `swimmwatch/cloakbrowser-mcp-reports` | Own sanitized generated HTML and independent project Pages publication; exact identity and creation require separate authorization |
 
@@ -71,12 +72,10 @@ dependency or an audited implementation.
   `destination_dir` input. Guarded publisher cleanup owns explicit deletion of
   expired report paths; `keep_files` does not implement retention. Serialize
   publication and cleanup across the destination repository.
-- After successful deployment and URL verification, set the official Allure
-  Action's `remote-href` to the immutable URL. Read only summaries rebuilt by
-  trusted code. Verify its actual comment/update behavior, permissions and
-  summary compatibility before integration. Preserve the single bot-owned
-  comment, current-head/latest-run guards and Job Summary requirements below;
-  implement missing guards in the trusted publisher.
+- After successful deployment and exact entrypoint verification, use the trusted
+  project-owned handler for the immutable URL and regenerated statistics.
+  Never update or delete a user comment carrying the same marker. Re-fetch
+  current PR head, workflow runs and bot comments before updating.
 - Before adding workflow `uses:` entries, select supported releases, inspect
   both Actions and pin them to verified full commit SHAs with version comments.
   Record exact commits and permission checks in implementation evidence. This
@@ -101,7 +100,9 @@ After authorization, allowed source paths:
 `.github/workflows/publish-test-report.yml`, `scripts/publish-test-report.mjs`,
 report validation helpers from packets 02/03, reports-repository branch-based Pages
 setup instructions, publisher unit/integration tests and fixtures,
-and plan/checklist/handoff. The separate repository is an external delivery target,
+and plan/checklist/handoff. `eslint.config.js` is authorized only for the
+technical default-project-file limit 44 → 45; preserve all lint rules.
+The separate repository is an external delivery target,
 not another source checkout implicitly authorized for mutation.
 
 No edits to `release.yml`, documentation `site/`, existing Pages settings,
@@ -191,3 +192,163 @@ incomplete. Roll back by disabling only the report publisher and retaining sanit
 Actions results/summary; do not alter documentation deployment. Record commands,
 results, blockers and ownership in `todo.md`/`handoff.md`, recheck specification
 freshness and stop. Commit/push/PR and downstream packets need separate authorization.
+
+
+## Historical execution checkpoint — 2026-10-10
+
+Superseded by the local-verification checkpoint below. The component and ESLint
+decisions described here have since been resolved.
+
+The explicit invocation started local packet 13 preparation. No publisher workflow,
+external credentials, repository, Pages setting, PR comment or publication was added.
+Existing documentation deployment and packet 10 workflows remain untouched.
+
+Implemented initial pure policy functions in `scripts/publish-test-report.mjs`:
+API-record run/PR/source identity, separate destination validation, current-head/
+latest-run/attempt filtering, bot-comment freshness and owned 14-day report-path
+selection. These are preparatory helpers, not an executable publisher or completed
+acceptance. Fifteen unit cases pass. Restored mutations removing source-target,
+current-head and retention-path guards each fail the intended assertions. Initial
+RED was a missing module, so it is not behavior proof; PROVE provides that proof.
+Scoped ESLint passes with one complexity warning. Diff whitespace check passes.
+
+Required `npm run check` fails in ESLint: the new script takes default-project
+files beyond the existing limit 44. No limit or rule was weakened. A pending
+user question requests exact scope approval for `eslint.config.js` and 44 to 45.
+Full packet acceptance remains incomplete; integration, malicious-artifact,
+publisher workflow, actionlint/zizmor and authorized live proof are not executed.
+
+A material selected-component conflict was confirmed directly in the official
+Allure Action v0.11.0 source, SHA
+`1a856297ee7a92306bc462c26783245a98d4dcfb`:
+
+- `src/github.ts:17–18,43–50`: comment selection/update uses marker without author
+  verification; `:71–82` deletes marker comments without author verification.
+- `src/index.ts:431–499`: the Action owns summary/section comment updates and
+  deletions; a preflight cannot prevent a new user comment racing that lookup.
+- `action.yml`: no author-aware comment mode or statistics-only input.
+
+Source: https://github.com/allure-framework/allure-action/blob/1a856297ee7a92306bc462c26783245a98d4dcfb/src/github.ts
+
+The approved single-bot-owned-comment contract cannot be guaranteed by directly
+wiring this Action. Incremental implementation must not silently replace this
+explicitly selected component. Pending user choice: reconcile the specification
+so Allure 3 + peaceiris publication remain, while trusted project code owns guarded
+comments, or defer until an official Action satisfies the contract. This finding
+is an implementation blocker, not a completed security review or an upstream CVE.
+No confirmed guarantee about Allure HTML escaping is claimed; its malicious-input
+rendering tests remain mandatory before public output.
+
+Scout identified candidate upstream pins (not added to workflow):
+peaceiris/actions-gh-pages v4.1.0 `84c30a85c19949d7eee79c4ff27748b70285e453`,
+actions/create-github-app-token v3.2.0 `bcd2ba49218906704ab6c1aa796996da409d3eb1`.
+Main-agent audit of those exact sources remains pending before use. Exact report
+repository, external activation and credentials also remain separate user gates.
+
+Next owner: user chooses the component/scope decisions; separately authorized
+specification/planning owner reconciles the selected Action requirement; main
+agent resumes packet 13 and required verification afterward. Checklist 13 remains
+unchecked; no downstream packet is authorized. Scenario state was unchanged and
+Approved at start; managed workflow documents were not edited.
+
+## Activation and rollback instructions
+
+These instructions are not authorization for external actions.
+
+1. Confirm the exact reports-only repository under `swimmwatch`; proposed name:
+   `cloakbrowser-mcp-reports`. Separately authorize creation and public Pages.
+2. Initialize its `gh-pages` branch and `.nojekyll` before the first publisher
+   checkout. Select Pages → Deploy from a branch → `gh-pages` → root.
+3. Separately authorize a GitHub App installed only on that destination, with
+   Contents read/write, Pages read and implicit Metadata read. Do not install
+   it on the source repository for this operation.
+4. In source Actions variables, set `TEST_REPORT_REPOSITORY` to the confirmed
+   owner/name and `TEST_REPORT_APP_CLIENT_ID` to the App client ID. Store the
+   private key only in Actions secret `TEST_REPORT_APP_PRIVATE_KEY`; never
+   in files, logs or chat. The publisher job's source token has contents/actions
+   read and pull-requests write.
+5. Deliver the reviewed workflow to the trusted default branch through separately
+   authorized commit/push/PR steps. Leave `TEST_REPORT_PUBLICATION_ENABLED`
+   unset/false until setup and public-report/automatic-comment activation are approved.
+6. Set that variable to `true` only after activation authorization. This enables
+   both publication and daily cleanup. Existing documentation settings stay intact.
+7. When the user asks to inspect completed CI evidence, open the PR report link,
+   verify SHA/run/attempt and all matrix variants, then check the documentation
+   site and deployment. Do not launch or poll remote CI automatically.
+
+Retention is 14 days; validated expired report paths are removed, and only their
+exact bot-owned comment pointers become unavailable with an Actions fallback.
+Disable the enable flag to stop publishing and cleanup. Existing public reports
+remain until separately authorized removal; CI artifacts and Job Summary continue.
+
+## Local verification checkpoint — 2026-10-10
+
+The local implementation is verified; authorized live proof is pending.
+Checklist 13 remains unchecked. The historical component/lint blockers are resolved
+by the recorded user answers and the reviewed specification amendment.
+
+Verified publisher pins: peaceiris v4.1.0
+`84c30a85c19949d7eee79c4ff27748b70285e453` (peeled tag commit),
+create-github-app-token v3.2.0
+`bcd2ba49218906704ab6c1aa796996da409d3eb1`, and download-artifact v8.0.2
+`9000827ccba6bdab643e8b6fd33ac0654aef8333` from packet 10.
+Exact Action sources and tag resolution were checked before wiring.
+
+- Publisher tests: 31 passed (15 unit, 16 integration), including valid-manifest
+  executable artifacts, forged paths, post-write raw secrets, bot ownership,
+  duplicate events, wrong-target API writes, live owned reports and symlinks/junctions.
+- Relevant RED: `/tmp/packet13-boundary-red.log`; missing API export was a harness
+  failure followed by PROVE. A permission regex incorrectly matched the permitted
+  App input `permission-contents`; corrected to actual YAML permission keys.
+- Six restored mutations: author ownership, idempotency, allowed API methods,
+  live retention, source rights and trusted checkout. Each failed its assertion.
+  Logs: `/tmp/packet13-prove-{author,idempotency,api-write,live-retention,source-rights,trusted-checkout}.log`.
+  Earlier destination/head/path mutations remain recorded in the historical checkpoint.
+- `npm run check`: exit 0, 700 passed / 4 unchanged skips in 60 files, plus
+  six passing fast packaged CLI cases; `/tmp/packet13-check-final.log`.
+- Pinned actionlint and offline zizmor: exit 0.
+  `/tmp/packet13-actionlint-final.log`, `/tmp/packet13-zizmor-final.log`.
+  Online-only zizmor audits were not run.
+- The only new inline exception is `dangerous-triggers` for intentional
+  `workflow_run`. Trusted default-branch code, disabled caches, validated data,
+  HTML regeneration, delayed destination-only credentials and source-write
+  prohibition are guarded by tests. No global audit is disabled.
+  [Trigger audit](https://docs.zizmor.sh/audits/#dangerous-triggers);
+  [scoped ignores](https://docs.zizmor.sh/usage/#comments).
+- Actual regenerated failed-test HTML opened on verified Free Chromium
+  `146.0.7680.177.5`; test detail opened, injected script did not execute,
+  no executable `onerror` node or control secret appeared. Browser and all
+  temporary data were cleaned; no probe file retained.
+
+Evidence is Linux x64 / Node 24. Native macOS/Windows, public Pages URL, GitHub
+writes and documentation coexistence remain unverified. No external mutation,
+commit/push/PR or remote CI observation occurred.
+
+Next action: the user confirms the destination and separately authorizes setup
+and activation; the main agent performs only those approved actions and obtains
+live proof when completed CI evidence is requested. Packets 11/12 need separate
+authorization.
+
+## External activation checkpoint — 2026-10-11
+
+The user confirmed the proposed destination and authorized external setup and
+public report/comment activation. Repository swimmwatch/cloakbrowser-mcp-reports
+exists; Pages uses gh-pages/root. Source documentation Pages configuration is
+unchanged. Source destination variable is saved; enable flag remains false until
+App credentials and trusted workflow delivery are ready.
+
+GitHub App CloakBrowser MCP Reports is created and installed only on the reports
+repository (App ID 5267277, installation 170077714). The user confirmed access
+and generated the private key. Source Client ID variable and private-key Actions
+secret are saved. A temporary installation token verified exactly one repository,
+Contents write, Pages read and Metadata read; it was revoked after verification.
+Source documentation Pages configuration remains unchanged. Source main returns
+404 for the publisher workflow and lacks reporting prerequisites, so publisher-only
+delivery is insufficient. No report/comment publication has occurred.
+PR 167 was closed at the user's request on 2026-10-11 and its auto-merge
+was disabled. Source delivery is consolidated into `release/v1.15.0`, where
+reporting implementation, periodic suites and CI fixes are preserved. No
+replacement PR was created. Publication remains dependent on delivering the
+trusted workflow to main. Existing Pages and App configuration are unchanged.
+Local validation and remaining ownership are recorded in the handoff.
+Packet 13 remains unchecked; no remote CI was launched, polled or awaited.

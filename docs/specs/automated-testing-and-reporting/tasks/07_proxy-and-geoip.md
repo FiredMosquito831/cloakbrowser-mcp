@@ -1,6 +1,6 @@
 # 07 — Controlled proxy routing and GeoIP
 
-Status: Planned; execution requires explicit packet authorization
+Status: Complete; authorized fail-closed bridge correction and all required host checks passed
 Requirements: TEST-005, TEST-007, TEST-010, TEST-011
 Dependencies: 04 complete; observable navigation and safe fixtures pass
 
@@ -101,3 +101,37 @@ this packet. Review is optional and separately invoked.
 
 MANUAL GATES: explicit authorization for this packet; commit/push/PR, remote CI
 dispatch and publication remain separate. No downstream packet is authorized.
+
+## Execution evidence — 2026-10-10
+
+Completed after explicit user authorization to correct the discovered fail-closed
+regression. CloakBrowser 0.6.0 can return no exit IP after echo failure when both
+timezone and locale are explicit. The bridge now verifies the dependency-generated
+WebRTC IP using public `buildLaunchOptions` and standard `node:net.isIP` before
+accepting launch options. User WebRTC spoof arguments are withheld during discovery
+and restored afterward; `auto` uses the discovered IP. Missing or invalid IP stops
+preparation with an actionable error. Disabled matching and absent proxy retain
+existing behavior. No private fetch wrapper, new option or upstream tool change.
+
+Seven new unit cases observed behavioral RED and now pass. They cover missing,
+`auto`, `off` and malformed discovery values, profile-lock release and successful
+reacquisition, and explicit IP/`off`/`auto` precedence with IPv6 discovery.
+Two isolated mutations detected missing profile-lock release (four failures) and
+user spoof bypassing discovery (three failures); both were restored.
+
+All 15 controlled Proxy/GeoIP checks pass: two local fixture/MMDB checks and thirteen
+packaged Free Chromium scenarios. Actual HTTP/authenticated HTTP/SOCKS traffic,
+in-page fetch, synthetic-host bypass, trusted local CONNECT/TLS echo and MMDB,
+disabled matching, successful explicit overrides, proxy failure/recovery and
+lookup failure/recovery remain exercised. Local fixture cleanup awaits actual
+socket close events. Four earlier fixture mutations were detected and restored.
+
+Required checks passed: `npm run check` (648 unit/integration passes, four unchanged
+skips, six fast fake-upstream CLI E2E passes), `npm run package:verify` (177 files),
+reported `proxy-geoip` (15/15), Allure generation and `git diff --check`.
+Allure summary is passed/15; no synthetic credentials appear in 72 raw/report
+files. Reports are ignored artifacts; earlier failed reports remain available.
+Specification MCP remains pass/reviewed/Approved with unchanged pinned versions.
+
+See `handoff.md` for commands, report paths, environment and limitations.
+Packet 08 requires a separate invocation; no commit or external action authorized.

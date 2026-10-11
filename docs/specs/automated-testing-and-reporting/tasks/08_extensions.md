@@ -1,6 +1,6 @@
 # 08 — Real extension attachment
 
-Status: Planned; execution requires explicit packet authorization
+Status: Complete; both real extension mechanisms and required host checks passed
 Requirements: TEST-007, TEST-010, TEST-011
 Dependencies: 01 and 03 complete; Free ownership, safe reports and local pages available
 
@@ -101,3 +101,66 @@ this packet. Review is optional and separately invoked.
 
 MANUAL GATES: explicit authorization for this packet; commit/push/PR, remote CI
 dispatch and publication remain separate. No downstream packet is authorized.
+
+## Execution evidence — 2026-10-10
+
+Completed on explicit context-scouting/incremental-implementation invocation.
+Production code, upstream contracts, dependencies, release version and workflows
+remain unchanged. The previous packet's Approved pins and completed evidence were
+rechecked. Only this packet was executed.
+
+Seven real Free Chromium checks run through the installed npm package:
+
+| Scenario | Observable evidence |
+| --- | --- |
+| Unpacked content script | Persistent-profile page exposes the controlled dataset marker and a real click changes its output; actual browser PID terminates after bridge shutdown |
+| Official attachment | Source-built Extension 0.4.0 worker and UI token; local navigation/click changes a page observed independently in the owned browser; original browser PID unchanged |
+| Missing token | Process initialization fails with the documented non-empty token requirement; origin request count unchanged; browser stays usable and valid pairing works |
+| Wrong token | Actual official rejection UI and upstream connection timeout; origin request count unchanged; browser stays usable and fresh valid pairing works |
+| Disconnection/recovery | Actual pending-page marker observed before official UI Disconnect; pending MCP call fails explicitly; fresh client pairs and changes the page |
+| Profile isolation | Two headed profiles expose distinct synthetic UI tokens; neighbouring token rejected without origin traffic; both valid pairings act independently |
+| Partial startup | Headed browser starts without extension loading, actual PID is captured, worker readiness times out, browser terminates and profile is removed |
+
+The official source/lockfile is fetched at the pinned commit into an owned temporary
+checkout, installed with lifecycle scripts disabled and built with upstream Vite.
+Apache-2.0 source notices remain in that checkout until disposal. ID derives from
+its manifest key. The fixture preserves browser singleton behavior by omitting
+`--enable-automation`, creates the upstream-described installation directory, and
+uses the existing `PLAYWRIGHT_MCP_EXECUTABLE_PATH` to choose the verified Free binary
+for relay attachment. The relay engine remains Playwright; this is not Cloak
+launch-option injection. Automatic token pairing creates a controlled grouped tab,
+so the independent observation checks the owned context rather than assuming the
+initial page was selected. No private relay adapter or Web Store install.
+
+Controlled content source uses the existing TypeScript dependency to emit a classic
+content script in temporary data; no ESLint budget, dependency or check weakened.
+The owner closes clients/browser contexts, verifies actual PIDs and observed relay
+ports, and checks runtime removal before the distribution fallback cleanup.
+Tokens are read only from synthetic profiles, redacted from bounded messages and
+original stack traces; extension/token UI is never captured in screenshots.
+
+Initial helper absence was a collection failure, not behavioral RED. New reporter
+suite test observed behavioral RED (`unknown suite`) before selector implementation.
+Three isolated PROVE mutations detected: wrong content-script effect, replacing the
+wrong token with a valid one, and omitted profile removal. All were restored.
+An intermediate cleanup mutation first exposed lost error text after sanitization;
+that diagnostic was repaired and the rerun failed at the intended surviving-profile
+assertion. Scoped lint/type issues were corrected without rule suppression.
+
+Final report run: `packet08-complete-20261010`, seven passes, no skips; Allure 3.20.1
+summary matches seven passes and complete HTML. No synthetic invalid-token canary
+in 42 raw/report files. `npm run check`: 649 unit/integration passes, four unchanged
+skips across 57 files, and six fast fake-upstream CLI E2E passes. Focused config/CLI:
+103 passes. Package verification: 177 files. Final typecheck/scoped ESLint and
+`git diff --check` pass; repository lint retains ten existing warnings.
+Specification MCP remains pass/reviewed/Approved with unchanged pins.
+
+Linux x64 / Node 24.20.0 / DISPLAY :1 / Free Chromium 146.0.7680.177.5. Native
+macOS/Windows/arm64, Docker, coverage rerun and general heap/RSS measurements were
+not executed here. Missing/wrong-token and partial-startup resources are verified,
+but this does not establish platform compatibility or general memory-leak freedom.
+Preparation needs Git/npm network access; browser scenarios use local fixture pages.
+Wrong-token relay failure uses upstream's standard 30-second timeout.
+
+See current handoff for commands and report. Stop here; packet 09 requires a new
+explicit invocation. No commit, push, PR, remote CI or publication performed.

@@ -1,6 +1,6 @@
 # 10 — CI evidence, aggregation and periodic lanes
 
-Status: Planned; explicit packet authorization required
+Status: Complete — 2026-10-10; local workflow acceptance verified
 Requirements: TEST-002, TEST-006, TEST-007, TEST-009, TEST-010, TEST-011
 Dependencies: 03–09 complete; local reporting and key functional scenarios pass
 
@@ -113,3 +113,45 @@ this packet. Review is optional and separately invoked.
 
 MANUAL GATES: explicit authorization for this packet; commit/push/PR, remote CI
 dispatch and publication remain separate. No downstream packet is authorized.
+
+## Execution evidence — 2026-10-10
+
+Existing CI emits sanitized producers with distinct OS/architecture/Node/browser/
+job/level identities and always uploads them for 14 days. Existing test commands,
+required-ci dependencies, Codecov and coverage thresholds remain intact. Expected
+PR inventory is 85 producers. The new schedule/manual-only workflow covers five
+native environments on Node 24 and both Docker architectures: 26 producers.
+The actual workflow environment declarations are checked against that inventory.
+
+Aggregation validates manifests and result labels, rejects unexpected producers,
+symlinks and traversal, and creates broken evidence for missing jobs. It generates
+actual Allure 3 HTML and a safe status/duration/retry/missing-job summary. Trusted
+history is restricted to successful default-branch scheduled/manual runs with the
+same repository/lane/environment inventory; PRs cannot select or write it.
+History lookup is bounded to ten returned successful runs, and stored history to
+30 launches. No publication, write credential or PR comment is added.
+
+- 17 CI integration tests passed, including actual HTML, failed/missing/empty
+  evidence, secret redaction, spoofed labels, history trust, level splitting,
+  distinct quality/coverage cases and workflow inventory/gate preservation.
+- Relevant RED: missing implementation, accepted spoofed labels and an incorrect
+  periodic platform variable. Each was corrected and the assertion passed.
+- Restored PROVE mutations: allow PR history, omit missing evidence, misclassify
+  integration, remove Docker from required-ci. All corresponding checks failed.
+- `npm run test:report:probe` passed, including pass/failure/hook/import/unhandled
+  fixtures, history and npm archive exclusion.
+- Final `npm run check` with real ci-config reporting passed: 669 unit/integration
+  tests, four unchanged skips, six fast fake-upstream CLI cases. Ten lint warnings,
+  no errors. A new regex-style lint failure was corrected before this final run.
+- Local download-layout aggregation of those three actual producers passed:
+  679 cases, 675 passed, four skipped, zero failed/broken/missing, zero retries.
+  Report: `artifacts/test-report/packet10-local-20261010/index.html`.
+- Pinned actionlint passed; zizmor passed with no findings in its default offline
+  mode (online-only audits are not claimed). No suppressions were added.
+- Scenario MCP: pass/reviewed/Approved, source/specification/review pins unchanged.
+
+Only Linux x64 / Node 24.20.0 local tooling was executed. Fixtures and packaged
+CLI use fake upstream; this packet does not claim a new real Chromium run.
+Native macOS/Windows/arm64 and Docker runtime acceptance remains packet 11.
+The Docker base still contains MCP 0.0.82, not npm MCP 0.0.83. No commit, push,
+remote dispatch/polling or publication. Next packet: 13 on a separate invocation.

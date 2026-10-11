@@ -180,8 +180,10 @@ are uploaded; missing producer output is stated explicitly; Codecov remains inta
 After separately authorized activation, publish one combined report per CI run
 for the expected Linux/macOS/Windows and Node matrix, retaining every environment
 variant and explicitly identifying missing producers. Use Allure Report 3 for
-generation, `peaceiris/actions-gh-pages` for static publication and the official
-`allure-framework/allure-action` for statistics and the deployed report link.
+generation and `peaceiris/actions-gh-pages` for static publication. Project-owned
+trusted publication code renders statistics and the deployed report link in the
+PR comment and Job Summary. `allure-framework/allure-action` is not a required
+delivery component: its marker-only comment updates do not establish ownership.
 Select supported Action releases and verify full commit SHA pins before use.
 These selected components do not relax any publication or freshness guard.
 
@@ -211,6 +213,8 @@ comment and the publisher Job Summary. Include tested SHA, status counts and
 incomplete/environment-failure evidence. Old SHA/run/attempt results must not replace
 a newer link. A failed test still has a truthful report; missing results or failed
 publication must show an unavailable/incomplete state, never a broken success link.
+Identify the comment by its fixed marker and verified bot author; a user comment
+containing the same marker must never be updated or deleted by the publisher.
 Acceptance: merged matrix results remain individually identifiable; authorized
 live proof opens the matching report from the PR link and confirms the documentation
 site is intact. Controlled stale-run, malicious-artifact, duplicate-event and

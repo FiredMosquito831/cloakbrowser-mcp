@@ -20,11 +20,10 @@ part of their authorized implementation packets.
 
 Use [Allure Report 3](https://github.com/allure-framework/allure3) to generate one
 combined matrix report, [peaceiris/actions-gh-pages](https://github.com/peaceiris/actions-gh-pages)
-to publish it to a separate repository, and the official
-[allure-framework/allure-action](https://github.com/allure-framework/allure-action)
-to show statistics and its deployed link in the PR through `remote-href`.
-The Allure Action does not host reports. Select and audit supported Action
-releases, then pin full commit SHAs during implementation.
+to publish it to a separate repository, and project-owned trusted publication
+code to show statistics and its verified deployed link in the PR and Job Summary.
+Allure Action is not a delivery dependency: marker-only updates do not satisfy
+author-verified comment ownership. External Actions remain pinned to verified SHAs.
 
 The source remains `swimmwatch/cloakbrowser-mcp`; the proposed reports-only
 destination is `swimmwatch/cloakbrowser-mcp-reports` (exact identity and creation
@@ -47,9 +46,9 @@ it does not change scope or authorize implementation.
 
 - Repository: `/home/dmitry-vasiliev/.codex/worktrees/release-v1-15-0/cloakbrowser-mcp`
 - Branch: `release/v1.15.0`; inspected HEAD: `00fcaf51f188bdb6528da2284284f4b04c5ebcb2`
-- `source_version`: `785424ba80d8dbf709c51901135a288276377b0a5aa08958d25c7d6ba2988a83`
-- `specification_version`: `9eb3ca847f6421bd03834981a659066362922abcffcd79605c63d04cd9e30a7e`
-- `review_ref`: `28b4daa7-1f0e-4286-ace1-eace5f685e70`
+- `source_version`: `b5768150e20c92ec9131fc4c767229b1f076ed86e089fc5f9829e737eb09f9ba`
+- `specification_version`: `bce84e8b28612a6db2d677395921717b37003dab1f993d0ec867dee1dc2b7627`
+- `review_ref`: `10107cff-c8d4-488d-9294-ccb07412a357`
 - Scope and freshness checked through scenario MCP on 2026-10-10; pass/reviewed.
 - No separate profile artifacts are authorized: `planning_artifacts: []`.
   Applicable contracts are inline here and in task packets.
@@ -66,7 +65,11 @@ The specification owner reconciled TEST-007/008/009 and the scope manifest after
 the user's explicit approval. Independent review passed all 22 items, including
 whole-specification consistency; MCP reports pass/reviewed with an Approved
 document and recorded approval checkpoint. The pins above and all packet inputs
-now identify that reviewed amendment. Implementation and external setup remain
+now identify the subsequently approved comment-handler amendment:
+decision `4f47ba22-bd13-49e3-a54f-5690e27eb4a7`, revision 1. Independent
+review passed all 24 current items. ESLint scope decision
+`7acdf21f-948a-4eb9-8299-6e84aab5ff17`, revision 2, authorizes only the
+technical file limit 44 → 45. Implementation and external setup remain
 separately authorized actions.
 
 Before executing one explicitly authorized packet, inspect Git status including
@@ -655,3 +658,279 @@ binary, Docker, native macOS/Windows, coverage rerun, remote CI, publication or
 commit was performed. Codecov/thresholds and upstream contracts remain unchanged.
 Lint passed with warnings (seven new complexity warnings and three existing
 warnings), without exclusions or rule suppression.
+
+## Packet 03 execution evidence — 2026-10-10
+
+Completed on explicit incremental-implementation invocation. Public Vitest 5
+reporter plumbing and local Allure 3.20.1 are implemented; no private adapter,
+runtime/upstream contract change or remote publisher was added. The user approved
+the additional one-line ESLint default-project budget change from 42 to 44.
+Allure requires the transitive yaml update to 2.9.1; other existing versions stay
+unchanged.
+
+| Boundary | Evidence |
+| --- | --- |
+| Public reporter | Real child runner: pass, fail, runtime skip, retry success, import/collection/beforeAll/afterAll/unhandled failures |
+| Failure semantics | Empty run, write fault, absent manifest, existing run/report and expected-producer mismatch fail explicitly |
+| HTML and diagnostics | Real generator counts match runner; stack, flaky flag and redacted log attachment inspected in browser |
+| History and environment | Two real generations preserve a previous launch; Linux/Windows variants remain distinct using trusted Allure matchers |
+| Aggregation | CLI merge preserves a complete producer manifest; actual merge → generation succeeds with repeated validation |
+| Distribution | Actual npm inventory checked with reports present; generated results, HTML and history are Git-ignored and excluded from npm |
+
+Final `npm run check`: 56 unit/integration files, **623 cases, 619 passed,
+4 unchanged skips**, plus **6 passed fake-upstream CLI E2E**. New cases: 4 unit
+and 20 integration. `package:verify` passed (177 distribution files), and
+`test:report:probe` passed. Three restored PROVE mutations were detected: bypassed
+second redaction, archive report inclusion and absent-manifest validation.
+
+```mermaid
+flowchart TB
+  E["Fast CLI E2E: 6 passed; real Chromium not run in packet 03"]
+  I["Integration: 115 passed / 11 files"]
+  U["Unit: 504 passed + 4 skipped / 45 files"]
+  E --> I --> U
+```
+
+Ordinary test runs preserve default reporters, test selection, exit codes and
+coverage thresholds. Reports/history are local artifacts; owned preview servers,
+tabs and temporary inspection data were cleaned up. Reproduction commands and
+API/remaining requirements are in the current handoff.
+
+Optional audit failed with 14 pre-existing advisories (7 moderate, 6 high,
+1 critical); every affected package was already at the same version before this
+packet. No audit gate was weakened or vulnerability fix claimed. Coverage,
+native platform, Docker, real Free Chromium and remote CI evidence remain assigned
+to later packets. Packet 04 is next on a separate invocation; no external setup,
+commit or downstream execution is authorized by packet 03 completion.
+
+## Packet 04 execution — 2026-10-10
+
+Packet 04 is complete on Linux x64 with verified Free Chromium and the installed
+npm bridge. Exact upstream objects are compared, local tools are separated by name,
+and successful calls must equal the actual returned tool list. There is no fixed
+tool-count assertion. This runtime-derived coverage maps to these observations:
+
+| Returned tools | Observed scenario / assertion |
+| --- | --- |
+| browser_navigate, browser_snapshot | Local URL/marker immediately and after survival delay; negative navigation and healthy recovery |
+| browser_navigate_back, browser_tabs | Previous page restored; selected/new tab URL and action; close/reopen yields clean state |
+| browser_find | Named output file contains the controlled marker |
+| browser_resize | Actual viewport dimensions and PNG dimensions equal requested values |
+| browser_type, browser_press_key | Exact input readback; ControlOrMeta+A/Backspace clears it |
+| browser_fill_form, browser_select_option | Exact checkbox/select/name/date/range/color state |
+| browser_click, browser_wait_for | Controlled click and Shift state, dialog completion, missing-text timeout |
+| browser_hover, browser_drag, browser_drop | Hover state, original drag payload before drop, final dropped payload |
+| browser_file_upload | Selected filename plus exact server-received bytes; saved download has exact name/content |
+| browser_handle_dialog | Expected dialog text, closure and subsequent usable page |
+| browser_console_messages | Known local fixture warning |
+| browser_network_requests, browser_network_request | API request chosen by numbered URL, saved 200 status/MIME and exact JSON response bytes |
+| browser_emulate_media, browser_evaluate | Media state and actual DOM values; invalid field types propagate explicit errors |
+| browser_take_screenshot | Valid controlled 1200×900 PNG, registered transfer and Allure attachment |
+| browser_run_code_unsafe | Title, iframe click, viewport and public CDP PID; malformed input/closed page errors |
+| browser_close | Owned browser/bridge termination observed; fresh navigation restores local content |
+| cloakbrowser_binary_info, cloakbrowser_bridge_info | Actual executable/Free tier, bridge engine/runtime, upstream version/count and local names |
+
+All property-bearing upstream tools receive invalid field-type checks. Missing or
+ambiguous targets, invalid indices, absent modal state, malformed date, wait timeout,
+navigation and closed-page errors have explicit expectations and recovery checks.
+Defaults accepting omitted fields and lazy blank tabs follow verified upstream
+behavior; schemas and runtime code are not adapted.
+
+Four new regressions (three unit, one integration) cover screenshot transfer,
+portable npm argument arrays and pass/fail child-runner PNG/log reporting. Existing
+manual E2E cases are strengthened rather than duplicated. Final check: 638 passed
+and 4 unchanged skips in 57 unit/integration files, plus 6 fast CLI E2E passed.
+All 6 npm E2E and reported npm cases passed, including both humanize presets and
+concurrent cold-cache download. One npm case is explicitly fake-upstream; browser
+behavior uses real Free Chromium. Actual Allure HTML and package verification passed.
+
+Five restored PROVE mutations failed at the intended boundaries: download bytes,
+base64 canonicalization, PNG reporter wiring, Node/npm argument launching and
+observed schema equality. No mutation remains. Native macOS/Windows/arm64, Docker,
+coverage and long-running heap measurements remain unverified in this packet.
+
+Review corrections for 01–03 remain in place: portable ENOENT checks, canonical temp
+roots with symlink rejection, redacted/bounded history, native local report opening,
+interruption/process-tree cleanup and PNG CRC/metadata validation. Their regression
+checks pass in the current full check. Generic skill cleanup and unrelated files
+remain preserved. Packet 05 is next on a separate invocation; no external mutation,
+commit or downstream execution is authorized by packet 04 completion.
+
+
+### Packet 05 execution — 2026-10-10
+
+| Requirement / scenario | Executable evidence | Actual result |
+| --- | --- | --- |
+| TEST-003: persistent state restart and independent profiles | npm E2E `restores cookie and localStorage state after restart and isolates persistent profiles` | Passed with real Free Chromium; seed unchanged |
+| TEST-011: temporary state isolation | npm E2E `isolates concurrent in-memory sessions and discards state after recreation` | Passed; concurrent sessions and fresh session return absence |
+| TEST-011: contention and setup failure cleanup | npm E2E `rejects competing profile ownership and releases it after shutdown and failed setup` | Passed; expected diagnostics, original owner usable, state retained after reacquisition |
+| Seed/config regressions | Existing profile-seed, fallback and config unit suites | 107 passed |
+| TEST-007/010: diagnostic and resource ownership | Test-private npm session owner, sanitized expected-failure logs and actual Chromium/bridge PID checks | Passed on Linux x64; all owned clients, browsers and fixture resources closed |
+
+Full npm E2E and reported npm E2E: 8 passed each. Allure summary: total 8,
+passed 8. `npm run check`: 638 passed, 4 unchanged skips, 6 fast CLI E2E passed.
+Both controlled state-isolation mutations failed at their intended assertions and
+were restored. Runtime behavior and upstream contracts are unchanged. Native
+macOS/Windows/arm64, Docker and coverage remain unexecuted in this packet.
+Next packet is 06 and requires another explicit invocation.
+
+
+### Packet 06 execution — 2026-10-10
+
+| Scenario | Owning automated evidence | Actual result |
+| --- | --- | --- |
+| CLI/config and packaged stdio | Existing unit/config/doctor and 6 fast CLI E2E | Passed; no duplicate tests added |
+| Expired HTTP session | New `rejects an expired session and releases its upstream process before a fresh session is used` | HTTP 404, actual child exit and fresh child observed |
+| Upstream disconnect / neighbour isolation | New `keeps neighbouring sessions usable after an upstream exits and recovers with a fresh session` | Explicit failure, neighbour unaffected, fresh session succeeds and old ID rejected after DELETE |
+| In-flight cancellation | New `cancels an in-flight HTTP call without losing its session and terminates the owned child` | Fake child entry observed, SDK RequestTimeout, retained session usable, DELETE closes owned child |
+| Real CDP HTTP/WS, isolation, rotation and TLS | Existing `cdp-access.manual.ts` engine matrix, now forced verified Free / explicit Playwright / isolated profiles | All 10 real engine scenarios plus 4 guards passed without skips |
+| Real Playwright console | Existing console live probe with explicit executable revision 1246 | Passed across two clean sessions; default revision 1247 absent |
+| Diagnostics/reporting | Initial and verified CDP HTML summaries | Actual failed (13/14) and passed (14/14) statuses generated correctly |
+
+Unit: 516 passed and 4 unchanged skips / 46 files. Focused integration: 44 passed.
+Final check: 641 passed and 4 unchanged skips / 57 files; 6 fast E2E passed.
+Four controlled mutations failed and were restored. Initial npm flag-forwarding
+run was interrupted and is not acceptance evidence. The initial default-browser
+and short polling-deadline failures are recorded with their corrections in handoff.
+Native macOS/Windows/arm64, Docker, coverage rerun and heap measurements remain
+unexecuted; no release, remote CI or production contract change. Next packet: 07.
+
+### Packet 07 execution — 2026-10-10
+
+Complete after explicit authorization to fix the fail-closed regression. All 15
+controlled Proxy/GeoIP checks pass: two fixture/MMDB checks and thirteen packaged
+Free Chromium scenarios. The public-builder bridge guard validates the discovered
+exit IP independently of user WebRTC arguments, then restores explicit spoofing
+precedence. Seven new unit cases cover validation, profile release/reacquisition,
+and IP/off/auto including IPv6. Two additional mutations detected cleanup and
+spoof-bypass defects and were restored. No private dependency API, license,
+new runtime flag, tool contract or coverage threshold changed.
+
+`npm run check`: 648 passes and four unchanged skips across 57 unit/integration
+files; six fast fake-upstream CLI E2E passes. Config suite: 94 passes. Package
+verification: 177 files. Allure 3.20.1 summary: total 15, passed 15; 72 raw/report
+files contain no synthetic credentials. Earlier failed reports are retained.
+Specification freshness remains pass/reviewed/Approved with unchanged pins.
+Native macOS/Windows/arm64, Docker, coverage rerun and general heap measurements
+remain unexecuted. Packet 08 needs a separate invocation. No commit, remote CI,
+publication or downstream execution occurred.
+
+### Packet 08 execution — 2026-10-10
+
+Complete. New `tests/e2e/extensions.manual.ts` runs seven installed-npm real Free
+Chromium scenarios. `tests/helpers/browser-extension.ts` owns pinned upstream
+extension build, headed contexts, synthetic UI tokens, clients, bounded sanitized
+logs and stacks, and process/relay cleanup. `tests/fixtures/extensions/` contains
+only a controlled content script source/manifest and provenance; generated JS,
+official source and profiles live in owned temporary directories.
+
+Observable coverage: unpacked marker and click; actual official attachment in the
+owned context with stable browser PID; missing/wrong token rejection with no origin
+traffic and successful recovery; in-flight error after UI Disconnect plus fresh
+pairing; distinct profile tokens and independent actions; worker-readiness failure
+after browser startup with actual process exit and profile removal. Explicit
+custom executable allows Free in relay mode without production adaptation. The
+scout's contrary executable-selection inference was rejected using installed
+`resolveExtensionOptions`/`createExtensionBrowser` and a real attachment probe.
+
+All seven scenarios pass without skips. One new unit case protects reporter suite
+selection. Three deliberate mutations detected incorrect content effect, accepted
+wrong token and surviving profile; restored. `npm run check`: 649 passes and four
+unchanged skips across 57 unit/integration files, plus six fast fake-upstream CLI
+E2E passes. Config/CLI focused checks: 103 passes. `package:verify`: 177 files.
+Allure 3.20.1 HTML/summary: seven passes; no token canary in 42 raw/report files.
+Specification freshness pass/reviewed/Approved; pins unchanged. TypeScript source
+compiles with the existing dependency; no lint budget/rule/threshold changed.
+
+Linux x64 / Node 24.20.0 / Free 146.0.7680.177.5 / DISPLAY :1. Native platforms,
+Docker, coverage and general heap/RSS measurements remain unrun; no compatibility
+or general memory-leak pass claimed. Public documentation changes stay in packet
+12, after acceptance. No production, upstream contract, workflow, dependency,
+version, remote CI or external publication changes. Next: packet 09 on a separate
+explicit invocation. Current handoff owns reproducible commands/report paths.
+
+
+### Packet 09 execution — 2026-10-10
+
+Complete after review fixes and recovery of an asynchronous assertion race.
+`browser-lifecycle.manual.ts` runs four real Free cases with five cycles each,
+observing actual browser/upstream termination, CDP port closure, generation
+rotation and profile-lock release/reacquisition. Humanize retains both presets
+and strengthens duplicate-selection/Shift outcomes plus detached-reference
+collection and live-element validity. Cold-cache download verifies exact Free
+binary use, pure stdout, cache cleanup and real fixture navigation.
+
+Owned profile/extension teardown has a 10-second whole-operation deadline;
+force termination uses retained owned PIDs. Cold-cache launch rejection closes
+its HTTP fixture. Two unit tests verify deadline failure and timer removal.
+A reported browser-failure case exposed the test's immediate lock assertion:
+HTTP DELETE sends its response before disposal finishes. Actual lock removal now
+uses bounded polling inside the same aggregate deadline. This corrects the
+observation timing without changing the runtime or relaxing the approved bound.
+
+Failed Allure run `packet09-reviewed-20261010`: three passed, one failed.
+Final `packet09-complete-20261010`: four passed, twenty cycles, no skips,
+30.9 seconds. Both HTML reports persist. Focused tests: 28 passed. Final check:
+652 passed, four unchanged skips, six fast fake-upstream CLI E2E passed.
+Unchanged preceding real npm/extension runs are reused: eight/seven passed.
+An earlier npm failure has no recovered diagnosis; it remains explicitly unknown.
+Three restored mutations detect missing disposal, retained detached references
+and a click on the wrong duplicate. No active mutation remains.
+
+Linux x64 / Node 24.20.0 / Free 146.0.7680.177.5 / DISPLAY :1. macOS/Windows/arm64,
+Docker, coverage rerun and general heap/RSS remain unverified here. Specification
+freshness pass/reviewed/Approved; pins unchanged. No runtime contract, dependency,
+version, CI workflow, external publication or commit change in this completion.
+Next: packet 10 on a separate explicit invocation; stop after packet 09.
+
+
+### Packet 10 execution — 2026-10-10
+
+Complete local workflow acceptance. Existing PR jobs now publish sanitized unique
+producers with always-upload/14-day retention. An independent non-required job
+validates and merges them into Allure HTML and Job Summary. No extra PR browser
+scenarios, changed required gates, coverage thresholds or Codecov behavior.
+Expected inventory: 85 PR producers. A weekly/manual workflow covers five native
+platforms on Node 24 and both existing Docker architectures: 26 producers.
+
+Default-branch successful scheduled/manual history is scoped by repository, lane
+and environment inventory. PR/fork/non-default evidence cannot select or update
+it. Aggregation rejects forged labels, corrupt manifests, traversal and symlinks;
+missing producers become broken cases. Reports retain failed runner evidence.
+No publication, write credential or external action was performed.
+
+17 CI integration cases passed. Actual level-split output and distinct quality/
+coverage identities are exercised. RED/GREEN exposed and corrected spoofed labels
+and an incorrectly named workflow platform variable. Four restored mutations
+proved history exclusion, missing evidence, level separation and required Docker
+preservation. Reporting failure/history/package probe passed. Final check with
+ci-config reporting: 669 passes/four unchanged skips and six fast CLI passes.
+Local download-layout merge of actual producers generated 675 passes/four skips
+with zero missing producers: artifacts/test-report/packet10-local-20261010.
+Pinned actionlint and offline zizmor passed; no new suppressions. Ten ESLint
+warnings remain; no lint errors. Final diff whitespace check passed.
+
+Scenario MCP remains pass/reviewed/Approved with unchanged pins. Linux x64 /
+Node 24.20.0 local tooling only; no new real Chromium/platform/Docker execution.
+The Docker/npm upstream-version difference is preserved and explicitly unverified.
+Next packet: 13 on a separate invocation; remote acceptance remains packet 11.
+
+
+### Packet 13 checkpoint — 2026-10-10
+
+Initial local policies and 15 passing unit cases are prepared; no publisher
+workflow or external mutation exists. Three restored guard mutations fail as
+intended. Required check fails at ESLint's unchanged default-project-file limit
+44; exact approval for scope/45 is pending. Public-report integration and live
+proof are unexecuted; no completion claim.
+
+The selected official Allure Action v0.11.0 updates/deletes comments solely by
+marker, without checking author. Its actual source contradicts the approved
+single-bot-comment guarantee. A preflight does not remove this race. Incremental
+implementation stops at this material boundary; user choice and separately
+invoked specification/planning reconciliation are required before wiring write
+permissions. See packet 13/current handoff for exact source and next owners.
+
+### Packet 13 local verification — 2026-10-10
+
+Supersedes the earlier component/lint checkpoint. The approved project-owned handler and technical ESLint limit 45 are implemented. Publisher tests: 31 passed; check: 700 passed / 4 unchanged skips and six CLI cases; actionlint/offline zizmor passed. Six restored mutations and actual Free Chromium malicious-result rendering passed. Packet 13 owns setup instructions and complete local evidence; it remains unchecked until separately authorized live publication and documentation coexistence proof. No external action or remote CI polling occurred.

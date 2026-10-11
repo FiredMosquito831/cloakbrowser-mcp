@@ -1,6 +1,6 @@
 # 05 — Profile restart and session state isolation
 
-Status: Planned; execution requires explicit packet authorization
+Status: Complete — 2026-10-10; executed on explicit skill invocation
 Requirements: TEST-003, TEST-007, TEST-010, TEST-011
 Dependencies: 04 complete; installed-package scenario and controlled origin pass
 
@@ -82,3 +82,41 @@ this packet. Review is optional and separately invoked.
 
 MANUAL GATES: explicit authorization for this packet; commit/push/PR, remote CI
 dispatch and publication remain separate. No downstream packet is authorized.
+
+
+## Execution evidence — 2026-10-10
+
+- Installed-package tests now observe persistent cookies through `page.context().cookies()`
+  and localStorage through the controlled local page. The same fixture origin stays alive
+  across process restarts. Profile A retains both values and its seed; profile B starts
+  empty and cannot change A. Concurrent isolated sessions start empty and recreation
+  discards both values.
+- Separate installed bridge processes contend for the same profile. The rejected process
+  reports `Persistent profile is already active`; the original browser remains usable.
+  After normal shutdown, extension mode without its required process token fails after
+  lock acquisition. A normal Cloak launch then reacquires that profile and restores state.
+- A test-private owner closes browsers before stopping clients, verifies owned bridge and
+  Chromium PIDs terminate, and keeps bounded sanitized startup diagnostics. All profiles,
+  caches and the fixture server are owned and cleaned. Only ignored report artifacts remain.
+- Existing seed/config checks are retained: 107 unit tests passed. Existing cross-process
+  lock unit coverage at `tests/unit/config.test.ts:784` was reverified; the packaged scenario
+  adds real browser usability and failure/recovery observations rather than duplicating it.
+- Initial harness failure: upstream navigation returns a snapshot-file reference, so the
+  fixture marker is checked through real DOM observation. Initial state-loss failure:
+  closing only the MCP client does not flush a persistent browser context; the owner now
+  uses successful `browser_close` before stopping the bridge. No runtime defect was found.
+- PROVE: reopening profile A as B failed at the empty cookie/localStorage assertion;
+  reusing the first temporary session as the second failed at its absence assertion.
+  Mutations were applied separately and restored. No mutation or backup remains.
+- Host: Linux x64, Node 24.20.0, verified Free Chromium 146.0.7680.177.5,
+  npm Playwright MCP 0.0.83. No license used. Project remains 1.14.1.
+- Required checks passed: focused profile/config unit tests (107), full npm E2E (8),
+  reported npm E2E (8), and `npm run check` (638 unit/integration passed, 4 unchanged
+  skips; 6 fast fake-upstream/CLI E2E passed; 0 lint errors, 10 existing warnings).
+- Allure HTML generated at `artifacts/test-report/packet05-final-20261010/index.html`;
+  actual summary: total 8, passed 8. Expected contention/setup diagnostics retain PIDs.
+- Specification recheck: pass/reviewed/Approved with unchanged pinned versions.
+  Native macOS/Windows/arm64, Docker, coverage rerun and heap measurements were not run.
+  No remote CI dispatch/polling, commit, push, PR or publication occurred.
+
+Next eligible packet: 06, only after another explicit implementation invocation.
