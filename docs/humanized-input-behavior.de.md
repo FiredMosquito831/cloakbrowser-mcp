@@ -163,11 +163,15 @@ betrachtet werden.
 
 Für die Entscheidung zwischen upstream Playwright MCP und diesem Paket nutzen Sie den [Vergleich](comparison.md). Für kurze Aufgaben nutzen Sie die [Rezepte](recipes/index.md): persistentes Profil, Erweiterungen, reverse proxy, regionale QA, Claude Desktop, Codex CLI und CI-Smoke-Test.
 
-## CloakBrowser 0.6.1
+## CloakBrowser 0.6.2
+
+Für CloakBrowser 0.6.2 navigiert die Bridge vor der Eingabe in native Datums- und Uhrzeiteditoren mit `ArrowLeft` zum ersten Segment. So landen nach dem ersten Klick nicht alle Ziffern im Jahresfeld. Die Werte werden per Tastatur eingegeben, ohne programmatische Zuweisung.
+
+CloakBrowser 0.6.2 korrigiert die Sichtbarkeitsprüfungen humanisierter Aktionen mit Playwright 1.64. Die Bridge übergibt die tatsächliche Sichtbarkeit übergeordneter iframe an beide Prüfpfade für den Elementzustand statt des bedingungslosen `true` aus Upstream.
 
 Humanisierte Aktionen folgen der Playwright-Selektorsemantik einschließlich des strikten Modus. Mehrdeutige Locators und nicht unterstützte Aktionen lösen Fehler aus, statt still auf normale Aktionen zurückzufallen. Beispielsweise kann humanisiertes `fill()` kein `input[type=color]` bedienen; deaktivieren Sie humanize für eine Sitzung, die diesen Vorgang benötigt.
 
-Wenn humanize aktiviert ist, wendet die Bridge eine Kompatibilitätskorrektur für CloakBrowser 0.6.0/0.6.1 an: Sie prüft die Sichtbarkeit übergeordneter iframe und verwendet schwache Referenzen auf gefundene DOM-Elemente, sodass entfernte Elemente durch die Speicherbereinigung freigegeben werden können. Die Korrektur prüft die Version der Abhängigkeit und die Quellcode-Hashes. Andere Versionen oder geänderter Quellcode werden abgelehnt; verwenden Sie bis zur Unterstützung durch die Bridge `CLOAK_PLAYWRIGHT_MCP_HUMANIZE=false`.
+Wenn humanize aktiviert ist, wendet die Bridge eine Kompatibilitätskorrektur für CloakBrowser 0.6.0/0.6.1/0.6.2 an: Sie prüft die Sichtbarkeit übergeordneter iframe und verwendet schwache Referenzen auf gefundene DOM-Elemente, sodass entfernte Elemente durch die Speicherbereinigung freigegeben werden können. Die Korrektur prüft die Version der Abhängigkeit und die Quellcode-Hashes. Andere Versionen oder geänderter Quellcode werden abgelehnt; verwenden Sie bis zur Unterstützung durch die Bridge `CLOAK_PLAYWRIGHT_MCP_HUMANIZE=false`.
 
 CloakBrowser 0.6.1 führt `inputValue()`, `textContent()`, `innerText()`, `innerHTML()`, `getAttribute()` und `dispatchEvent()` für `Page`, `Frame`, `Locator` und `ElementHandle` im isolierten Kontext von humanize aus. Bei verborgenen oder überlappenden `ElementHandle`-Elementen sowie Ereignisargumenten mit einem `JSHandle` verwendet die Upstream-Implementierung für Lesezugriffe und Ereignisse den ursprünglichen Playwright-Aufruf als Rückfalllösung.
 

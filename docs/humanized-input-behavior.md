@@ -163,11 +163,15 @@ checks.
 - [Recipes](recipes/index.md) lists task-focused setup paths.
 - [Tools](tools.md) explains why upstream Playwright MCP browser tools are forwarded unchanged.
 
-## CloakBrowser 0.6.1
+## CloakBrowser 0.6.2
+
+For CloakBrowser 0.6.2, the bridge navigates to the first segment with `ArrowLeft` before typing into native date/time editors. This prevents an initial click from placing all digits in the year field. Values are entered with the keyboard, without programmatic assignment.
+
+CloakBrowser 0.6.2 restores humanized action visibility checks with Playwright 1.64. The bridge forwards the actual ancestor iframe visibility to both element-state check paths instead of using the unconditional `true` from upstream.
 
 Humanized actions follow Playwright selector semantics, including strict mode. Ambiguous locators and unsupported actions raise errors instead of silently falling back. For example, humanized `fill()` cannot drive `input[type=color]`; disable humanize for a session that needs this operation.
 
-When humanize is enabled, the bridge applies a compatibility fix for CloakBrowser 0.6.0 and 0.6.1: ancestor iframe visibility is checked and resolved DOM elements use weak references so detached elements can be collected. The fix verifies the dependency version and source hashes. Another version or modified source is rejected; use `CLOAK_PLAYWRIGHT_MCP_HUMANIZE=false` until the bridge supports it.
+When humanize is enabled, the bridge applies a compatibility fix for CloakBrowser 0.6.0, 0.6.1, and 0.6.2: ancestor iframe visibility is checked and resolved DOM elements use weak references so detached elements can be collected. The fix verifies the dependency version and source hashes. Another version or modified source is rejected; use `CLOAK_PLAYWRIGHT_MCP_HUMANIZE=false` until the bridge supports it.
 
 CloakBrowser 0.6.1 runs `inputValue()`, `textContent()`, `innerText()`, `innerHTML()`, `getAttribute()`, and `dispatchEvent()` through the humanize isolated world on `Page`, `Frame`, `Locator`, and `ElementHandle`. Hidden or overlapping `ElementHandle` targets, and event arguments containing a `JSHandle`, use the upstream raw Playwright fallback for reads and event dispatch.
 

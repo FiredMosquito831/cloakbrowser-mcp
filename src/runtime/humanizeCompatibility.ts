@@ -15,10 +15,10 @@ export function registerHumanizeCompatibility(): void {
     typeof metadata !== 'object' ||
     metadata === null ||
     !('version' in metadata) ||
-    (metadata.version !== '0.6.0' && metadata.version !== '0.6.1')
+    (metadata.version !== '0.6.0' && metadata.version !== '0.6.1' && metadata.version !== '0.6.2')
   ) {
     throw new Error(
-      'Humanize compatibility is verified only for CloakBrowser 0.6.0 and 0.6.1; update the bridge before enabling humanize with another version',
+      'Humanize compatibility is verified only for CloakBrowser 0.6.0, 0.6.1, and 0.6.2; update the bridge before enabling humanize with another version',
     );
   }
   const uRL = new URL('./humanizeCompatibilityLoader.js', import.meta.url);
@@ -26,9 +26,12 @@ export function registerHumanizeCompatibility(): void {
   const propertyValue = new URL('./human/worldHelpers.js', pathToFileURLResult).href;
   const pathToFileURLResult2 = pathToFileURL(entry);
   const propertyValue2 = new URL('./human/world.js', pathToFileURLResult2).href;
+  const engineModule = new URL('./human/engine.js', pathToFileURLResult);
+  const engineUrl = metadata.version === '0.6.2' ? engineModule.href : undefined;
   const options = {
     helpersUrl: propertyValue,
     worldUrl: propertyValue2,
+    engineUrl,
   } as const;
   const registerOptions = {
     data: options,

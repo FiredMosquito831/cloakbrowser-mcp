@@ -159,11 +159,15 @@ docker run --rm -p 127.0.0.1:3000:3000 \
 
 upstream Playwright MCP とこのパッケージのどちらを使うかは[比較](comparison.md)を参照してください。短い作業手順には[レシピ](recipes/index.md)を使います: 永続プロファイル、拡張機能、reverse proxy、リージョン QA、Claude Desktop、Codex CLI、CI スモークテスト。
 
-## CloakBrowser 0.6.1
+## CloakBrowser 0.6.2
+
+CloakBrowser 0.6.2 では、ブリッジはネイティブの日付・時刻エディターに入力する前に、`ArrowLeft` で最初のセグメントに移動します。これにより、最初のクリック後にすべての数字が年のフィールドに入力されることを防ぎます。値はキーボードで入力し、プログラムによる代入は行いません。
+
+CloakBrowser 0.6.2 は、Playwright 1.64 での humanize 操作の可視性チェックを修正します。ブリッジは、上流の無条件の `true` の代わりに、祖先 iframe の実際の可視性を両方の要素状態チェック経路に渡します。
 
 人間らしい操作は、厳密モードを含む Playwright のセレクターの意味に従います。曖昧なロケーターや未対応の操作は、通常の操作に暗黙に切り替わらず、エラーになります。例えば、人間らしい `fill()` は `input[type=color]` を操作できません。この操作が必要なセッションでは humanize を無効にしてください。
 
-humanize を有効にすると、ブリッジは CloakBrowser 0.6.0/0.6.1 向けの互換性修正を適用します。祖先 iframe の可視性を確認し、取得した DOM 要素には弱参照を使うことで、削除された要素をガベージコレクションできるようにします。修正は依存パッケージのバージョンとソースのハッシュを検証します。他のバージョンや変更されたソースは拒否されます。ブリッジが対応するまでは `CLOAK_PLAYWRIGHT_MCP_HUMANIZE=false` を使用してください。
+humanize を有効にすると、ブリッジは CloakBrowser 0.6.0/0.6.1/0.6.2 向けの互換性修正を適用します。祖先 iframe の可視性を確認し、取得した DOM 要素には弱参照を使うことで、削除された要素をガベージコレクションできるようにします。修正は依存パッケージのバージョンとソースのハッシュを検証します。他のバージョンや変更されたソースは拒否されます。ブリッジが対応するまでは `CLOAK_PLAYWRIGHT_MCP_HUMANIZE=false` を使用してください。
 
 CloakBrowser 0.6.1 は、`Page`、`Frame`、`Locator`、`ElementHandle` の `inputValue()`、`textContent()`、`innerText()`、`innerHTML()`、`getAttribute()`、`dispatchEvent()` を humanize の隔離コンテキストで実行します。非表示または重なった `ElementHandle` 要素と、`JSHandle` を含むイベント引数については、上流の実装が humanize を使わない Playwright にフォールバックして読み取りとイベント送信を行います。
 

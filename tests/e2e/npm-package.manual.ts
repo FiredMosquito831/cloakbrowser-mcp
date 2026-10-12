@@ -1031,16 +1031,33 @@ describe('npm package distribution E2E', () => {
         await page.locator('#name').press('ControlOrMeta+A');
         await page.locator('#name').press('Backspace');
         await page.locator('#date').fill('2026-10-09');
+        await page.locator('#month').fill('2026-10');
+        await page.locator('#week').fill('2026-W41');
+        await page.locator('#time').fill('15:24');
+        await page.locator('#datetime').fill('2026-10-09T15:24');
         await page.locator('#choice').selectOption('b');
         if (await page.locator('#name').inputValue() !== '') throw new Error('Select-all did not clear input');
         if (await page.locator('#choice').inputValue() !== 'b') throw new Error('Selection did not change');
         return { frame: await page.frameLocator('iframe').getByRole('button').innerText(),
-          date: await page.locator('#date').inputValue() };
+          date: await page.locator('#date').inputValue(),
+          month: await page.locator('#month').inputValue(),
+          week: await page.locator('#week').inputValue(),
+          time: await page.locator('#time').inputValue(),
+          datetime: await page.locator('#datetime').inputValue() };
       }`;
       const callOptions30 = { code } as const;
       const result = await call('browser_run_code_unsafe', callOptions30);
       expect(result).toContain('Frame clicked');
       expect(result).toContain('2026-10-09');
+      const nativeValues = evaluationValue(result);
+      const expectedNativeValues = {
+        date: '2026-10-09',
+        month: '2026-10',
+        week: '2026-W41',
+        time: '15:24',
+        datetime: '2026-10-09T15:24',
+      };
+      expect(nativeValues).toMatchObject(expectedNativeValues);
       for (const [code, expected] of [
         [
           "async (page) => { const clickOptions = { timeout: 1000 }; return page.locator('.duplicate').click(clickOptions); }",

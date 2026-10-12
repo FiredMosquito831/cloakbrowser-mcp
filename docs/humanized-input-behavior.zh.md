@@ -157,11 +157,15 @@ docker run --rm -p 127.0.0.1:3000:3000 \
 
 要在 upstream Playwright MCP 和本包之间选择，请查看[对比](comparison.md)。快速任务请使用[操作示例](recipes/index.md)：持久配置文件、扩展、reverse proxy、区域 QA、Claude Desktop、Codex CLI 和 CI 冒烟测试。
 
-## CloakBrowser 0.6.1
+## CloakBrowser 0.6.2
+
+对于 CloakBrowser 0.6.2，桥接器会在向原生日期或时间编辑器输入内容前，使用 `ArrowLeft` 导航到第一个字段。这可以防止首次点击后所有数字都被输入年份字段。数值通过键盘输入，不使用程序直接赋值。
+
+CloakBrowser 0.6.2 修复了 Playwright 1.64 下模拟人类操作的可见性检查。桥接器向两种元素状态检查路径传递祖先 iframe 的实际可见性，而不是使用上游无条件传入的 `true`。
 
 人性化操作遵循 Playwright 选择器语义，包括严格模式。存在歧义的定位器和不支持的操作会报错，而不会静默回退到普通操作。例如，人性化 `fill()` 无法操作 `input[type=color]`；需要此操作的会话应禁用 humanize。
 
-启用 humanize 时，桥接器会为 CloakBrowser 0.6.0/0.6.1 应用兼容性修复：检查祖先 iframe 的可见性，并对找到的 DOM 元素使用弱引用，使已移除的元素能够被垃圾回收。修复会验证依赖版本和源文件哈希。其他版本或修改过的源码会被拒绝；在桥接器支持之前，请使用 `CLOAK_PLAYWRIGHT_MCP_HUMANIZE=false`。
+启用 humanize 时，桥接器会为 CloakBrowser 0.6.0/0.6.1/0.6.2 应用兼容性修复：检查祖先 iframe 的可见性，并对找到的 DOM 元素使用弱引用，使已移除的元素能够被垃圾回收。修复会验证依赖版本和源文件哈希。其他版本或修改过的源码会被拒绝；在桥接器支持之前，请使用 `CLOAK_PLAYWRIGHT_MCP_HUMANIZE=false`。
 
 CloakBrowser 0.6.1 在 humanize 的隔离上下文中为 `Page`、`Frame`、`Locator` 和 `ElementHandle` 执行 `inputValue()`、`textContent()`、`innerText()`、`innerHTML()`、`getAttribute()` 和 `dispatchEvent()`。对于隐藏或重叠的 `ElementHandle` 元素，以及包含 `JSHandle` 的事件参数，上游会使用未启用 humanize 的 Playwright 作为读取和派发事件的备用路径。
 
