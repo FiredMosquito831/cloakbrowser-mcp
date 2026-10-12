@@ -1438,6 +1438,7 @@ describe('streamable HTTP bridge', () => {
       controller.abort();
       await expect(initialize).rejects.toThrow();
       releaseDisplay?.();
+      const cleanupWaitOptions = { timeout: 5000 } as const;
       await vi.waitFor(async () => {
         const ready = await fetchReady(server.url);
         const body = (await ready.json()) as {
@@ -1452,7 +1453,7 @@ describe('streamable HTTP bridge', () => {
         const receiver36Actual = body.sessions;
         const toEqualOptions3 = { active: 0, available: 1, max: 1, pending: 0 } as const;
         expect(receiver36Actual).toEqual(toEqualOptions3);
-      });
+      }, cleanupWaitOptions);
       const initializeRawHttpSessionOptions25 = { headless: true } as const;
       const initializeRawHttpSessionResult5 = initializeRawHttpSession(
         server,

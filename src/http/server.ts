@@ -342,6 +342,7 @@ class StreamableHttpBridgeController {
       } else {
         runtime = await prepareBridgeRuntime(runtimeOptions);
         await this.#prepareRuntimeEnvironment(runtime, runtimeOptions);
+        if (clientDisconnected) return;
         bridge = await (() => {
           const createBridgeServerOptions = {
             serverInfo: this.#options.serverInfo,
