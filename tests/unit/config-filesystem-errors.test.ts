@@ -1,4 +1,14 @@
-import { constants, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  constants,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -72,35 +82,46 @@ describe('configuration filesystem error boundaries', () => {
     await expect(preparing).rejects.toThrow('userDataDir must point to a writable directory');
     assertRuntimeRemoved(root);
   });
-  it('reports a profile lock creation failure without leaving a reservation or runtime', async () => {
-    const root = createRoot();
-    const profile = path.join(root, 'profile');
-    mkdirSync(profile);
-    const lock = path.join(profile, '.cloakbrowser-mcp-profile.lock');
-    fault.path = lock;
-    fault.open = true;
-    const output = path.join(root, 'output');
-    const env = {
-      PLAYWRIGHT_MCP_BROWSER_ENGINE: 'playwright',
-      PLAYWRIGHT_MCP_OUTPUT_DIR: output,
-      CLOAK_PLAYWRIGHT_MCP_CONSOLE_FALLBACK: 'false',
-    };
-    const options = { tempRoot: root, userDataDir: profile, env };
-    const preparing = prepareBridgeRuntime(options);
-    await expect(preparing).rejects.toThrow('Could not create profile lock');
-    const exists = existsSync(lock);
-    expect(exists).toBe(false);
-    assertRuntimeRemoved(root);
-    fault.open = false;
-    const runtime = await prepareBridgeRuntime(options);
-    try {
-      const reacquired = existsSync(lock);
-      expect(reacquired).toBe(true);
-    } finally {
-      runtime.dispose();
-    }
-    assertRuntimeRemoved(root);
-  });
+  it.each([false, true])(
+    'cleans up a profile lock creation failure with directory alias %s',
+    async (useAlias) => {
+      const root = createRoot();
+      const profile = path.join(root, 'profile');
+      mkdirSync(profile);
+      const canonicalProfile = realpathSync.native(profile);
+      const lock = path.join(canonicalProfile, '.cloakbrowser-mcp-profile.lock');
+      let userDataDir = profile;
+      if (useAlias) {
+        userDataDir = path.join(root, 'profile-alias');
+        symlinkSync(canonicalProfile, userDataDir, 'junction');
+      }
+      fault.path = lock;
+      fault.open = true;
+      const output = path.join(root, 'output');
+      const env = {
+        PLAYWRIGHT_MCP_BROWSER_ENGINE: 'playwright',
+        PLAYWRIGHT_MCP_OUTPUT_DIR: output,
+        CLOAK_PLAYWRIGHT_MCP_CONSOLE_FALLBACK: 'false',
+      };
+      const options = { tempRoot: root, userDataDir, env };
+      const preparing = prepareBridgeRuntime(options);
+      await expect(preparing).rejects.toThrow('Could not create profile lock');
+      const exists = existsSync(lock);
+      expect(exists).toBe(false);
+      assertRuntimeRemoved(root);
+      fault.open = false;
+      const runtime = await prepareBridgeRuntime(options);
+      try {
+        const reacquired = existsSync(lock);
+        expect(reacquired).toBe(true);
+      } finally {
+        runtime.dispose();
+      }
+      const lockRemains = existsSync(lock);
+      expect(lockRemains).toBe(false);
+      assertRuntimeRemoved(root);
+    },
+  );
   it('disposes and releases an active reservation even if the lock file was already removed', async () => {
     const root = createRoot();
     const profile = path.join(root, 'profile');
