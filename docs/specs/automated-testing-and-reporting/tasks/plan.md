@@ -1,6 +1,6 @@
 # Automated testing and reporting delivery plan
 
-Status: Planned; specification approved; explicit packet authorization required
+Status: Packets 01–10 are complete locally. Packet 13 remains open; publication evidence exists for a previous PR head. Packets 11 and 12 remain planned.
 Depth: Standard
 Profiles: core, operations, security
 

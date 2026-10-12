@@ -9,9 +9,11 @@ tags:
 
 Verwenden Sie das veröffentlichte npm-Paket oder das Docker-Image. Eine Installation aus dem Quellcode ist nur für Entwicklungszwecke erforderlich.
 
+Schrittweise Anleitungen: [Mit Claude Desktop verbinden](recipes/connect-claude-desktop.md), [Mit Codex CLI verbinden](recipes/connect-codex-cli.md), [Docker Streamable HTTP hinter Reverse Proxy](recipes/docker-streamable-http-reverse-proxy.md).
+
 Wählen Sie „npm“, wenn Ihr MCP-Client bereits auf Ihrem Rechner läuft und Node.js verfügbar ist. Wählen Sie „Docker“, wenn Sie eine reproduzierbare Laufzeitumgebung mit dem Upstream-Basisimage von Playwright MCP und dem im Container vorbereiteten CloakBrowser-Cache wünschen.
 
-Einen schnellen Überblick über häufig gestellte Fragen zur Einrichtung finden Sie in den [FAQ](faq.md).
+Einen schnellen Überblick über häufig gestellte Fragen zur Einrichtung finden Sie in den [Häufig gestellte Fragen](faq.md).
 
 ## npm
 
@@ -85,7 +87,7 @@ docker run --rm -i \
 
 Verwenden Sie Docker für eine reproduzierbare Laufzeitumgebung. Behalten Sie `-i` bei, damit stdio verbunden bleibt; das Image enthält bereits Tini, das Browser-Kindprozesse korrekt einsammelt. Starten Sie für Streamable-HTTP-Clients den Server separat und konfigurieren Sie die Client-URL als `http://127.0.0.1:3000/mcp` oder `https://127.0.0.1:3000/mcp`. Wenn `CLOAK_PLAYWRIGHT_MCP_HTTP_AUTH_TOKEN` oder `--http-auth-token` gesetzt ist, senden Sie denselben Bearer-Token an `/mcp`, `/healthz` und `/readyz`.
 
-## MCP-Client-Konfiguration
+## MCP-Client-Konfiguration { #mcp-client-config }
 
 Die meisten lokalen MCP-Clients lassen sich am besten mit stdio und npm nutzen:
 

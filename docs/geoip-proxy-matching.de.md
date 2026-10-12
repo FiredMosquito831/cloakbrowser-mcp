@@ -15,6 +15,8 @@ Durch den GeoIP-Proxy-Abgleich werden die Browser-Fingerprint-Einstellungen an d
 vom vorgelagerten Playwright MCP verwendeten Proxy-Standort angepasst. Dies ist nützlich, wenn die regionale Qualitätssicherung
 auf einen konsistenten Proxy, eine konsistente Zeitzone, Sprache und ein konsistentes Ländereinstellungsprofil angewiesen ist.
 
+Schrittweise Anleitungen: [Regionale QA über Proxy](recipes/regional-qa-through-proxy.md).
+
 Die Bridge erzeugt oder leitet keinen Proxy-Datenverkehr selbst weiter. Sie
 übergibt `PLAYWRIGHT_MCP_PROXY_SERVER` an die Startvorbereitung von
 CloakBrowser. Wenn das Matching aktiviert ist, ermittelt CloakBrowser den
@@ -169,7 +171,7 @@ Projektdateien festzuschreiben.
 | Bestehende Sitzungen | Behalten Proxy und GeoIP-Einstellung, die während `initialize` erfasst wurden. |
 | Authentifizierter HTTP-Proxy | Verwendet bei unterstützten Binärdateien die native Inline-Authentifizierung von CloakBrowser in der URL und bei älteren Binärdateien das Playwright-Proxyobjekt. |
 | Unverarbeitete Zeitzonen-/Ländereinstellungs-Flags | Explizite Werte für `--fingerprint-timezone`, `--lang` und `--fingerprint-locale` in `CLOAK_PLAYWRIGHT_MCP_EXTRA_ARGS` haben Vorrang vor GeoIP-abgeleiteten Werten und werden nicht dupliziert. |
-| Browser geolocation API | Wird von dieser Funktion nicht konfiguriert; sie gleicht nur die Fingerprint-Werte für Zeitzone, Sprache, Ländereinstellung und WebRTC-IP von CloakBrowser ab. |
+| Geolokalisierungs-API des Browsers | Wird von dieser Funktion nicht konfiguriert; sie gleicht nur die Fingerprint-Flags für Zeitzone, Sprache und Gebietsschema von CloakBrowser ab. |
 
 GeoIP-Standortdaten sind ungefähre Angaben und hängen von der Proxy-IP sowie der
 GeoIP-Datenbank von CloakBrowser ab. CloakBrowser lädt diese Offline-Datenbank bei der ersten
@@ -201,7 +203,7 @@ Download der Offline-GeoIP-Datenbank erfolgt getrennt und kann länger dauern.
 
 - [Konfiguration](configuration.md) listet alle Bridge- und Upstream-Umgebungsvariablen auf.
 - [Docker](docker.md) erläutert die Standardwerte für die Container-Laufzeit und die Streamable-HTTP-Veröffentlichung.
-- [Tools](tools.md) erläutert, warum die Upstream-Browser-Tools von Playwright MCP unverändert weitergeleitet werden.
+- [Werkzeuge](tools.md) erläutert, warum die Upstream-Browser-Tools von Playwright MCP unverändert weitergeleitet werden.
 
 ## Weitere praktische Pfade
 

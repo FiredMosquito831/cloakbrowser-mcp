@@ -4,7 +4,7 @@ confirmed: true
 rationale:
   - Preserve Node runtime, native Linux/macOS/Windows and existing Docker checks, Codecov and coverage thresholds.
   - Add planned reports-only Pages delivery and a PR link using the components explicitly requested and approved on 2026-10-10; keep source documentation publication independent.
-  - All key functional checks remain in scope. Implementation and external setup/public activation require separate authorization; no commits or PR creation.
+  - All key functional checks remain in scope. At initial planning, implementation, external setup, public activation, commits, and PR creation required separate authorization. Subsequent authorized actions are recorded in tasks/handoff.md.
 profiles:
   - id: core
     reason: Existing Vitest test tooling and unchanged browser/transport contracts.

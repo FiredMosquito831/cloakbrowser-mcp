@@ -7,6 +7,7 @@ import {
   renderHomepageTable,
   renderReadmeTable,
   replaceGeneratedBlock,
+  synchronizeLocalizedCompatibilityMetadata,
   validateRows,
 } from '#scripts/lib/version-compatibility';
 const checkOnly = process.argv.includes('--check');
@@ -44,11 +45,17 @@ const targets = [
   ...locales.flatMap((locale) => [
     {
       filePath: `docs/index.${locale}.md`,
-      generate: (content) => prependLocalizedCompatibilityRow(content, previousRow, currentRow),
+      generate: (content) => {
+        const synchronized = synchronizeLocalizedCompatibilityMetadata(content, rows, false);
+        return prependLocalizedCompatibilityRow(synchronized, previousRow, currentRow);
+      },
     },
     {
       filePath: `docs/version-compatibility.${locale}.md`,
-      generate: (content) => prependLocalizedCompatibilityRow(content, previousRow, currentRow),
+      generate: (content) => {
+        const synchronized = synchronizeLocalizedCompatibilityMetadata(content, rows, true);
+        return prependLocalizedCompatibilityRow(synchronized, previousRow, currentRow);
+      },
     },
   ]),
 ];

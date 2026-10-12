@@ -15,6 +15,8 @@ GeoIPプロキシのマッチング機能により、ブラウザのフィンガ
 上流のPlaywright MCPで使用されているプロキシの所在地と整合するようになります。これは、地域ごとのQAにおいて、
 一貫したプロキシ、タイムゾーン、言語、ロケールプロファイルが求められる場合に役立ちます。
 
+手順別のガイド： [プロキシ経由のリージョン QA](recipes/regional-qa-through-proxy.md).
+
 このブリッジ自体は、プロキシトラフィックを作成したりルーティングしたりしません。
 `PLAYWRIGHT_MCP_PROXY_SERVER` を CloakBrowser の起動準備に渡します。
 マッチングが有効な場合、CloakBrowser は設定されたプロキシの出口位置を解決し、
@@ -164,7 +166,7 @@ docker run --rm -p 127.0.0.1:3000:3000 \
 | 既存セッション | `initialize` 中に取得されたプロキシと GeoIP 設定を保持します。 |
 | 認証付き HTTP プロキシ | 対応するバイナリでは CloakBrowser のネイティブ URL 内インライン認証を使用し、古いバイナリでは Playwright のプロキシオブジェクトを使用します。 |
 | 生のタイムゾーン/ロケールフラグ | `CLOAK_PLAYWRIGHT_MCP_EXTRA_ARGS` 内の明示的な `--fingerprint-timezone`、`--lang`、`--fingerprint-locale` の値は GeoIP 由来の値より優先され、重複しません。 |
-| Browser geolocation API | この機能では設定されません。CloakBrowser のタイムゾーン、言語、ロケール、WebRTC IP のフィンガープリント値のみを合わせます。 |
+| ブラウザの位置情報 API | この機能では設定されません。CloakBrowser のタイムゾーン、言語、ロケールのフィンガープリントフラグのみを合わせます。 |
 
 GeoIPの位置情報は概算であり、プロキシのIPアドレスおよびCloakBrowserの
 GeoIPデータベースに依存します。CloakBrowserは、初回

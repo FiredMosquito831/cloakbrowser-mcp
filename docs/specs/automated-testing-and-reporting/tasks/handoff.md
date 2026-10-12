@@ -1,5 +1,21 @@
 # Current handoff
 
+## Reporting evidence checkpoint — 2026-10-12
+
+PR 169 CI run [38252904268](https://github.com/swimmwatch/cloakbrowser-mcp/actions/runs/38252904268)
+completed successfully for SHA `4a800b8d5d313676b39dc5a141dc367f5d442adb`.
+The combined report and publisher passed. The [published report](https://swimmwatch.github.io/cloakbrowser-mcp-reports/pr/169/run/38252904268-attempt-1/4a800b8d5d313676b39dc5a141dc367f5d442adb/)
+index and `widgets/statistic.json` returned HTTP 200: 20,559 total,
+20,375 passed, 184 skipped, and 48 retries. The [PR report comment](https://github.com/swimmwatch/cloakbrowser-mcp/pull/169#issuecomment-6109862289)
+points to that exact SHA/run/attempt. `TEST_REPORT_PUBLICATION_ENABLED` was true.
+
+At the inspection snapshot, the current PR head was
+`5c2ceba44526a2630dbf8b46ab4d20ce9399b7af` and
+[run 38298716895](https://github.com/swimmwatch/cloakbrowser-mcp/actions/runs/38298716895)
+was in progress. The previous run does not establish acceptance of that head
+or complete packet 13. Packets 11 and 12 remain planned. This checkpoint
+supersedes the setup status below; dated implementation evidence is retained.
+
 ## Packet 13 external setup in progress — 2026-10-11
 
 Only packet 13 is authorized. Packets 01–10 are complete; 13 stays unchecked.

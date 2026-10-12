@@ -9,9 +9,11 @@ tags:
 
 公開されている npm パッケージまたは Docker イメージを使用してください。ソースからのインストールは、開発時のみ必要です。
 
+手順別のガイド： [Claude Desktop に接続](recipes/connect-claude-desktop.md), [Codex CLI に接続](recipes/connect-codex-cli.md), [リバースプロキシ背後の Docker Streamable HTTP](recipes/docker-streamable-http-reverse-proxy.md).
+
 お使いのマシンですでにMCPクライアントが動作しており、Node.jsが利用可能な場合は、npmを選択してください。アップストリームのPlaywright MCPベースイメージを使用し、コンテナ内にCloakBrowserのキャッシュが事前に準備された、再現性のある実行環境が必要な場合は、Dockerを選択してください。
 
-設定に関するよくある質問の概要については、[FAQ](faq.md)をご覧ください。
+設定に関するよくある質問の概要については、[よくある質問](faq.md)をご覧ください。
 
 ## npm
 
@@ -85,7 +87,7 @@ docker run --rm -i \
 
 再現可能なランタイム環境には Docker を使用してください。stdio の接続を維持するために `-i` を残します。イメージにはブラウザーの子プロセスを正しく回収する Tini がすでに含まれています。Streamable HTTP クライアントではサーバーを別に起動し、クライアント URL を `http://127.0.0.1:3000/mcp` または `https://127.0.0.1:3000/mcp` に設定します。`CLOAK_PLAYWRIGHT_MCP_HTTP_AUTH_TOKEN` または `--http-auth-token` を設定した場合は、同じ Bearer トークンを `/mcp`、`/healthz`、`/readyz` に送信してください。
 
-## MCP クライアント設定
+## MCP クライアント設定 { #mcp-client-config }
 
 ほとんどのローカル MCP クライアントは、stdio と npm を使用すると最も快適に動作します：
 

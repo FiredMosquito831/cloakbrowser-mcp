@@ -224,9 +224,8 @@ The repository uses free security tooling:
 | `CI` / `Release` | Trivy | Docker build and release | Enable code scanning to view SARIF results. |
 | `CI` / npm release | `npm audit --omit=dev --audit-level=high` | PR CI and npm publish job | No external account or token. |
 
-Action SHA pinning is tracked as a future hardening pass. Current workflows use
-versioned action references so updates stay manageable while the release
-infrastructure is still young.
+External GitHub Actions are pinned to full commit SHAs with readable version
+comments. Keep those pins when updating workflows.
 
 ## Documentation Publishing
 

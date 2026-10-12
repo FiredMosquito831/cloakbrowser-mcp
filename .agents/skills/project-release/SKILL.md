@@ -144,7 +144,9 @@ the smallest release-relevant cause and rerun the relevant command.
   summary and validation list.
 - Call out security-sensitive release workflow changes, especially registry
   credentials, public image publishing, OIDC, or token behavior.
-- Wait for required PR checks to pass before merging.
+- Merge only after completed required PR checks have passed. Inspect remote CI
+  when the user requests verification; do not wait for completion or poll.
+  Pending jobs leave acceptance open.
 - After separate publication authorization, create a published GitHub Release
   for stable releases with:
   - tag `vX.Y.Z`;
@@ -157,16 +159,18 @@ the smallest release-relevant cause and rerun the relevant command.
 
 ## Post-Release Verification
 
-Watch the unified `Release` workflow until `metadata`, `npm`, `docker`,
-`mcp-registry`, `docs-build`, and `docs-deploy` complete. `docs-deploy`
-must run only after npm, Docker, and MCP Registry publishing have succeeded.
+Inspect the unified `Release` workflow when the user requests verification.
+If `metadata`, `npm`, `docker`, `mcp-registry`, `docs-build`, or `docs-deploy`
+is still running, leave verification open; do not wait or poll for completion.
+`docs-deploy` must run only after npm, Docker, and MCP Registry publishing have
+succeeded.
 
-Then verify:
+Once the required jobs have completed successfully, verify:
 
 ```bash
 npm view cloakbrowser-mcp@X.Y.Z version
 docker pull swimmwatch/cloakbrowser-mcp:X.Y.Z
-docker run --rm --init swimmwatch/cloakbrowser-mcp:X.Y.Z --help
+docker run --rm swimmwatch/cloakbrowser-mcp:X.Y.Z --help
 docker pull ghcr.io/swimmwatch/cloakbrowser-mcp:X.Y.Z
 npm run registry:check -- --version X.Y.Z
 ```

@@ -1,6 +1,6 @@
 # 13 — Separate Pages publication and PR report link
 
-Status: Local implementation prepared; external activation and live proof pending — 2026-10-10
+Status: Implemented and externally activated; publication verified for SHA 4a800b8d5d313676b39dc5a141dc367f5d442adb. Packet completion and acceptance of the current PR head remain open — 2026-10-12.
 Requirements: TEST-007, TEST-008, TEST-009 (delivery amendment)
 Dependencies: 10; external setup authorization before live publication
 Delivery order: after 10, before 11; existing packet IDs remain stable

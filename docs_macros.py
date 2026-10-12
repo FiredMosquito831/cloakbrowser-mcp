@@ -13,6 +13,8 @@ def read_project_metadata(root: Path | None = None) -> dict[str, str]:
     package = _read_json(package_path)
     version = package["version"]
     docker_version = version.replace("+", "-")
+    _validate_compatibility_entry(project_root, version)
+    dependencies = package["dependencies"]
 
     return {
         "version": version,
@@ -21,11 +23,11 @@ def read_project_metadata(root: Path | None = None) -> dict[str, str]:
         "npm_pin": f"cloakbrowser-mcp@{version}",
         "docker_image": f"swimmwatch/cloakbrowser-mcp:{docker_version}",
         "ghcr_image": f"ghcr.io/swimmwatch/cloakbrowser-mcp:{docker_version}",
-        **_read_compatibility_metadata(project_root, version),
+        **_read_dependency_metadata(project_root, dependencies),
     }
 
 
-def _read_compatibility_metadata(root: Path, project_version: str) -> dict[str, str]:
+def _validate_compatibility_entry(root: Path, project_version: str) -> None:
     compatibility_path = root / "docs" / "data" / "version-compatibility.json"
     compatibility = _read_json(compatibility_path)
     matching_rows = (item for item in compatibility if item["version"] == project_version)
@@ -36,22 +38,49 @@ def _read_compatibility_metadata(root: Path, project_version: str) -> dict[str, 
             f"package version {project_version!r}"
         )
         raise ValueError(message)
-    playwright_mcp_dependency = row["playwrightMcp"]
+
+
+def _read_dependency_metadata(root: Path, dependencies: dict[str, str]) -> dict[str, str]:
+    playwright_mcp_dependency = dependencies["@playwright/mcp"]
     playwright_mcp_version = _extract_version(playwright_mcp_dependency)
-    cloakbrowser_dependency = row["cloakbrowser"]
+    cloakbrowser_dependency = dependencies["cloakbrowser"]
     cloakbrowser_version = _extract_version(cloakbrowser_dependency)
+    docker_base = _read_docker_base(root)
 
     return {
         "playwright_mcp_dependency": playwright_mcp_dependency,
         "playwright_mcp_version": playwright_mcp_version,
         "playwright_mcp_package_tag": f"@playwright/mcp@{playwright_mcp_version}",
         "playwright_mcp_release_tag": f"v{playwright_mcp_version}",
-        "playwright_mcp_docker_base": row["playwrightMcpDockerBase"],
+        "playwright_mcp_docker_base": docker_base,
         "cloakbrowser_dependency": cloakbrowser_dependency,
         "cloakbrowser_version": cloakbrowser_version,
         "cloakbrowser_package_tag": f"cloakbrowser@{cloakbrowser_version}",
         "cloakbrowser_release_tag": f"v{cloakbrowser_version}",
     }
+
+
+def _read_docker_base(root: Path) -> str:
+    dockerfile_path = root / "Dockerfile"
+    dockerfile = dockerfile_path.read_text(encoding="utf-8")
+    argument_pattern = r"^ARG PLAYWRIGHT_MCP_IMAGE=(\S+)$"
+    references = re.findall(argument_pattern, dockerfile, re.MULTILINE)
+    reference_pattern = (
+        r"(mcr\.microsoft\.com/playwright/mcp:[0-9A-Za-z_.-]+)"
+        r"(?:@sha256:[a-f0-9]{64})?"
+    )
+    bases = set()
+    for reference in references:
+        match = re.fullmatch(reference_pattern, reference)
+        if match is None:
+            message = "Dockerfile contains an invalid PLAYWRIGHT_MCP_IMAGE base reference"
+            raise ValueError(message)
+        base = match.group(1)
+        bases.add(base)
+    if len(bases) != 1:
+        message = "Dockerfile must define one consistent PLAYWRIGHT_MCP_IMAGE base reference"
+        raise ValueError(message)
+    return bases.pop()
 
 
 def _extract_version(value: str) -> str:

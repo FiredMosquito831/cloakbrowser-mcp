@@ -34,16 +34,16 @@ docker run --rm -i \
 
 ## Праверыць
 
-1. Папытаеце кліента MCP адкрыць старонку ўваходу і ўвайсці.
-2. Спыніць сервер чыста.
+1. Папрасіце кліент MCP адкрыць старонку ўваходу і ўвайдзіце ў сістэму.
+2. Карэктна спыніце сервер.
 3. Запусціце яго зноў з тым жа `PLAYWRIGHT_MCP_USER_DATA_DIR`.
-4. Папрасіце кліента перагледзець сайт і пацвердзіць, што стан уваходу ўсё яшчэ прысутнічае.
+4. Папрасіце кліент зноў адкрыць сайт і пераканайцеся, што стан уваходу захаваўся.
 
 ## ЗВЯЗАНАЕ
 
-- [Configuration](../configuration.md)
-- [Docker](../docker.md)
-- [Load Chrome Extension](load-chrome-extension.md)
+- [Канфігурацыя](../configuration.md#streamable-http-runtime-metadata)
+- [Докер](../docker.md#persistent-profiles)
+- [Загрузка пашырэння Chrome](load-chrome-extension.md)
 
 ## CloakBrowser 0.6.0
 

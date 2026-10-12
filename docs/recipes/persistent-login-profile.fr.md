@@ -34,14 +34,15 @@ Utilisez des chemins de conteneur dans les variables d’environnement ; le chem
 
 ## Vérifier
 
-1. Sign in once.
-2. Restart with the same PLAYWRIGHT_MCP_USER_DATA_DIR.
-3. Confirm the session remains active.
+1. Demandez au client MCP d’ouvrir une page de connexion et connectez-vous.
+2. Arrêtez le serveur correctement.
+3. Redémarrez-le avec le même `PLAYWRIGHT_MCP_USER_DATA_DIR`.
+4. Demandez au client de revisiter le site et vérifiez que la connexion est conservée.
 
 ## Liens associés
 
-- [Configuration](../configuration.md)
-- [Docker](../docker.md)
+- [Configuration](../configuration.md#streamable-http-runtime-metadata)
+- [Docker](../docker.md#persistent-profiles)
 - [Charger une extension Chrome](load-chrome-extension.md)
 
 ## CloakBrowser 0.6.0

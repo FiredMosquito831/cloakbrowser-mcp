@@ -1,6 +1,6 @@
 # 01 — Inventory and owned Free fixtures
 
-Status: Planned; execution requires explicit packet authorization
+Status: Complete locally; execution evidence is recorded in plan.md, todo.md, and handoff.md.
 Requirements: TEST-001, TEST-007, TEST-010, TEST-011
 Dependencies: Approved specification
 

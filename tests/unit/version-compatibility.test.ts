@@ -9,6 +9,16 @@ interface VersionCompatibilityModule {
   renderTable(headers: string[], tableRows: string[][]): string;
   renderTableRow(row: string[], widths: number[]): string;
   replaceGeneratedBlock(content: string, heading: string, table: string): string;
+  synchronizeLocalizedCompatibilityMetadata(
+    content: string,
+    rows: CompatibilityRow[],
+    includeNode: boolean,
+  ): string;
+  prependLocalizedCompatibilityRow(
+    content: string,
+    previousRow: CompatibilityRow,
+    currentRow: CompatibilityRow,
+  ): string;
   validateRows(value: unknown, dataPath?: string): void;
 }
 interface CompatibilityRow {
@@ -117,5 +127,68 @@ describe('version compatibility helpers', () => {
     expect(codePlatformListResult).toBe('`linux/amd64`');
     const escapeRegexResult = compatibility.escapeRegex('a+b?');
     expect(escapeRegexResult).toBe('a\\+b\\?');
+  });
+  it('repairs existing localized dependency metadata while preserving prose and formatting', () => {
+    const lines = [
+      'Before',
+      '<!-- compatibility-table:start -->',
+      '| Версия | MCP | Docker | CloakBrowser | Транспорт | Проверка |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| `1.6.1`  | `outdated-mcp` | `outdated-image` | `outdated-cloak` | stdio | Сравнивается в CI |',
+      '<!-- compatibility-table:end -->',
+      'After',
+    ];
+    const content = lines.join('\n');
+    const rows = [row];
+    const updated = compatibility.synchronizeLocalizedCompatibilityMetadata(content, rows, false);
+    const expectedLine = '| `1.6.1`  | `0.0.77` | `v0.0.77` | `0.4.8` | stdio | Сравнивается в CI |';
+    const expectedLines = [...lines];
+    expectedLines[4] = expectedLine;
+    const expected = expectedLines.join('\n');
+    expect(updated).toBe(expected);
+    const repeated = compatibility.synchronizeLocalizedCompatibilityMetadata(updated, rows, false);
+    expect(repeated).toBe(updated);
+  });
+  it('preserves Node ranges containing pipes and later platform code cells', () => {
+    const current = { ...row, node: '^22.13.0 || >=24.0.0' };
+    const rows = [current];
+    const lines = [
+      '<!-- compatibility-table:start -->',
+      '| `1.6.1` | `old` | `old` | `old` | `^20.0.0 || >=22.0.0` | stdio | `linux/amd64` | Проверено |',
+      '<!-- compatibility-table:end -->',
+    ];
+    const content = lines.join('\n');
+    const updated = compatibility.synchronizeLocalizedCompatibilityMetadata(content, rows, true);
+    expect(updated).toContain('`^22.13.0 || >=24.0.0` | stdio | `linux/amd64` | Проверено');
+  });
+  it('fails clearly on malformed localized metadata instead of accepting a stale row', () => {
+    const rows = [row];
+    const missingMarkers = 'No compatibility block';
+    expect(() =>
+      compatibility.synchronizeLocalizedCompatibilityMetadata(missingMarkers, rows, false),
+    ).toThrow('markers are missing');
+    const lines = [
+      '<!-- compatibility-table:start -->',
+      '| `1.6.1` | unquoted | `old` | `old` | stdio |',
+      '<!-- compatibility-table:end -->',
+    ];
+    const content = lines.join('\n');
+    expect(() => compatibility.synchronizeLocalizedCompatibilityMetadata(content, rows, false)).toThrow(
+      'metadata is malformed for 1.6.1',
+    );
+  });
+  it('still requires translation before adding a release with changed non-version values', () => {
+    const current = { ...row, version: '1.7.0', playwrightMcp: '0.0.78' };
+    const rows = [current, row];
+    const lines = [
+      '<!-- compatibility-table:start -->',
+      '| `1.6.1` | `0.0.77` | `v0.0.77` | `0.4.8` | stdio | Проверено |',
+      '<!-- compatibility-table:end -->',
+    ];
+    const content = lines.join('\n');
+    const synchronized = compatibility.synchronizeLocalizedCompatibilityMetadata(content, rows, false);
+    expect(() => compatibility.prependLocalizedCompatibilityRow(synchronized, row, current)).toThrow(
+      'manual translation when non-version values change',
+    );
   });
 });

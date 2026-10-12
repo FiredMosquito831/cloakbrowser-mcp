@@ -20,15 +20,15 @@ tags:
 
 Настройте эти параметры перед первым выпуском.
 
-| Area | Required setting |
+| Область | Необходимая настройка |
 | --- | --- |
-| Actions | Enable GitHub Actions for the repository. |
-| Actions token | Allow workflows to request the permissions declared in each workflow. |
-| Branch protection | Require `Actionlint`, `CI`, `CodeQL`, and `Dependency Review` before merging to `main`. |
-| Pages | Set `Build and deployment -> Source` to `GitHub Actions`. |
-| Packages | Allow GitHub Actions to publish packages to GitHub Packages. |
-| Environments | Create `npm-production`, `docker-production`, `github-pages`, and `mcp-registry-production`. |
-| Code scanning | Enable code scanning to view CodeQL, Scorecard, and Trivy SARIF results. |
+| Actions | Включите GitHub Actions для репозитория. |
+| Токен Actions | Разрешите рабочим процессам запрашивать права, объявленные в каждом процессе. |
+| Защита ветки | Требуйте прохождения `Actionlint`, `CI`, `CodeQL` и `Dependency Review` перед слиянием в `main`. |
+| Pages | Установите `Build and deployment -> Source` в `GitHub Actions`. |
+| Packages | Разрешите GitHub Actions публиковать пакеты в GitHub Packages. |
+| Окружения | Создайте `npm-production`, `docker-production`, `github-pages` и `mcp-registry-production`. |
+| Сканирование кода | Включите сканирование кода для просмотра результатов CodeQL, Scorecard и Trivy в формате SARIF. |
 
 Добавьте необходимых рецензентов в `npm-production`, `docker-production` и
 `mcp-registry-production`, если для релизов требуется ручное утверждение после
@@ -42,13 +42,13 @@ Actions OIDC. Для публикации не используется `NPM_TOK
 
 Настройте доверенного издателя на сайте npmjs.com, указав именно следующие значения:
 
-| npm Trusted Publisher field | Value |
+| Поле npm Trusted Publisher | Значение |
 | --- | --- |
-| Provider | GitHub Actions |
-| Repository | `swimmwatch/cloakbrowser-mcp` |
-| Workflow filename | `release.yml` |
-| Environment | `npm-production` |
-| Allowed action | `npm publish` |
+| Провайдер | GitHub Actions |
+| Репозиторий | `swimmwatch/cloakbrowser-mcp` |
+| Имя файла рабочего процесса | `release.yml` |
+| Окружение | `npm-production` |
+| Разрешённое действие | `npm publish` |
 
 Задание `npm` выполняется на раннерах, размещённых на GitHub, использует Node.js 24 и сохраняет
 `id-token: write`, чтобы npm мог обменять токен OIDC GitHub Actions на
@@ -214,18 +214,16 @@ Registry. Репозиторий содержит `glama.json`, поэтому
 
 В репозитории используются бесплатные инструменты безопасности:
 
-| Workflow | Tool | Trigger | User setup |
+| Рабочий процесс | Инструмент | Условие запуска | Настройка пользователем |
 | --- | --- | --- | --- |
-| `CodeQL` | GitHub CodeQL | push, pull request, weekly, manual | Enable code scanning to view SARIF results. |
-| `Dependency Review` | GitHub Dependency Review | pull request | No external account or token. |
-| `OpenSSF Scorecard` | OpenSSF Scorecard | push, weekly, manual | Enable code scanning to view SARIF results. |
-| `Zizmor` | zizmor | workflow changes, manual | No external account or token. |
-| `CI` / `Release` | Trivy | Docker build and release | Enable code scanning to view SARIF results. |
-| `CI` / npm release | `npm audit --omit=dev --audit-level=high` | PR CI and npm publish job | No external account or token. |
+| `CodeQL` | GitHub CodeQL | push, pull request, еженедельно, вручную | Включите сканирование кода для просмотра результатов SARIF. |
+| `Dependency Review` | GitHub Dependency Review | pull request | Внешняя учётная запись или токен не требуются. |
+| `OpenSSF Scorecard` | OpenSSF Scorecard | push, еженедельно, вручную | Включите сканирование кода для просмотра результатов SARIF. |
+| `Zizmor` | zizmor | изменения рабочих процессов, вручную | Внешняя учётная запись или токен не требуются. |
+| `CI` / `Release` | Trivy | Сборка и выпуск Docker. | Включите сканирование кода для просмотра результатов SARIF. |
+| `CI` / npm release | `npm audit --omit=dev --audit-level=high` | CI для PR и задача публикации npm. | Внешняя учётная запись или токен не требуются. |
 
-Фиксация SHA-кодов действий планируется в рамках будущего этапа укрепления безопасности. В текущих рабочих процессах используются
-ссылки на действия с указанием версий, что позволяет контролировать обновления, пока инфраструктура
-релизов ещё находится на начальном этапе развития.
+Внешние GitHub Actions закреплены полными SHA коммитов с читаемыми комментариями версий. Сохраняйте эти закрепления при обновлении рабочих процессов.
 
 ## Публикация документации
 
@@ -278,10 +276,10 @@ npm run upstream:check
 
 ## Теги выпуска
 
-| Release type | GitHub Release setting | npm dist-tag | Docker tags |
+| Тип релиза | Настройка GitHub Release | Тег npm dist-tag | Теги Docker |
 | --- | --- | --- | --- |
-| Stable | Not prerelease | `latest` | `vX.Y.Z`, `X.Y.Z`, `X.Y`, `latest` |
-| Prerelease | Prerelease | `next` | `vX.Y.Z-prerelease`, `X.Y.Z-prerelease` |
+| Стабильный | Не предварительный релиз | `latest` | `vX.Y.Z`, `X.Y.Z`, `X.Y`, `latest` |
+| Предварительный релиз | Предварительный релиз | `next` | `vX.Y.Z-prerelease`, `X.Y.Z-prerelease` |
 
 ## Контрольный список
 

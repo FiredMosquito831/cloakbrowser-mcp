@@ -9,6 +9,8 @@ tags:
 
 Utilisez le paquet npm publié ou l'image Docker. L'installation à partir du code source n'est nécessaire que pour le développement.
 
+Guides pas à pas : [Connecter à Claude Desktop](recipes/connect-claude-desktop.md), [Connecter à Codex CLI](recipes/connect-codex-cli.md), [Docker Streamable HTTP derrière un proxy inverse](recipes/docker-streamable-http-reverse-proxy.md).
+
 Optez pour npm si votre client MCP est déjà installé sur votre machine et que Node.js est disponible. Optez pour Docker si vous souhaitez disposer d'un environnement d'exécution reproductible, avec l'image de base Playwright MCP fournie par le développeur et le cache CloakBrowser préconfiguré au sein du conteneur.
 
 Pour un aperçu rapide des questions courantes relatives à la configuration, consultez la [FAQ](faq.md).
@@ -85,7 +87,7 @@ docker run --rm -i \
 
 Utilisez Docker pour un environnement d'exécution reproductible. Conservez `-i` pour que stdio reste connecté ; l'image inclut déjà Tini, qui récupère correctement les processus enfants du navigateur. Pour les clients Streamable HTTP, démarrez le serveur séparément et configurez l'URL du client comme `http://127.0.0.1:3000/mcp` ou `https://127.0.0.1:3000/mcp`. Si `CLOAK_PLAYWRIGHT_MCP_HTTP_AUTH_TOKEN` ou `--http-auth-token` est défini, envoyez le même jeton Bearer à `/mcp`, `/healthz` et `/readyz`.
 
-## Configuration du client MCP
+## Configuration du client MCP { #mcp-client-config }
 
 La plupart des clients MCP locaux fonctionnent mieux avec stdio et npm :
 

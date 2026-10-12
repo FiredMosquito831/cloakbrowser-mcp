@@ -34,14 +34,15 @@ Verwenden Sie Containerpfade in Umgebungsvariablen; der Hostpfad steht nur im vo
 
 ## Prüfen
 
-1. Sign in once.
-2. Restart with the same PLAYWRIGHT_MCP_USER_DATA_DIR.
-3. Confirm the session remains active.
+1. Bitten Sie den MCP-Client, eine Anmeldeseite zu öffnen, und melden Sie sich an.
+2. Stoppen Sie den Server ordnungsgemäß.
+3. Starten Sie ihn mit demselben `PLAYWRIGHT_MCP_USER_DATA_DIR` erneut.
+4. Lassen Sie den Client die Website erneut besuchen und prüfen Sie, ob die Anmeldung erhalten bleibt.
 
 ## Verwandt
 
-- [Configuration](../configuration.md)
-- [Docker](../docker.md)
+- [Konfiguration](../configuration.md#streamable-http-runtime-metadata)
+- [Docker](../docker.md#persistent-profiles)
 - [Chrome-Erweiterung laden](load-chrome-extension.md)
 
 ## CloakBrowser 0.6.0

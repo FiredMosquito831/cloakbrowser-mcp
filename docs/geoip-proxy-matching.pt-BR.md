@@ -15,6 +15,8 @@ A correspondência de proxy por GeoIP mantém as configurações de impressão d
 do proxy utilizado pelo MCP do Playwright a montante. Isso é útil quando o controle de qualidade regional depende
 de um proxy, fuso horário, idioma e perfil de localização consistentes.
 
+Guias passo a passo: [QA regional via proxy](recipes/regional-qa-through-proxy.md).
+
 A ponte não cria nem roteia o tráfego de proxy por conta própria. Ela passa
 `PLAYWRIGHT_MCP_PROXY_SERVER` para a preparação da inicialização do
 CloakBrowser. Quando a correspondência está habilitada, o CloakBrowser resolve
@@ -169,7 +171,7 @@ arquivos do projeto.
 | Sessões existentes | Mantêm o proxy e a configuração GeoIP capturados durante `initialize`. |
 | Proxy HTTP autenticado | Usa autenticação nativa incorporada à URL do CloakBrowser em binários compatíveis e o objeto de proxy do Playwright em binários antigos. |
 | Sinalizadores brutos de fuso horário/localidade | Valores explícitos de `--fingerprint-timezone`, `--lang` e `--fingerprint-locale` em `CLOAK_PLAYWRIGHT_MCP_EXTRA_ARGS` têm precedência sobre os valores derivados do GeoIP e não são duplicados. |
-| Browser geolocation API | Não é configurada por este recurso; ele apenas alinha os valores de impressão digital de fuso horário, idioma, localidade e IP do WebRTC do CloakBrowser. |
+| API de geolocalização do navegador | Este recurso não a configura; ele apenas alinha as opções de impressão digital de fuso horário, idioma e localidade do CloakBrowser. |
 
 Os dados de localização do GeoIP são aproximados e dependem do IP do proxy e do
 banco de dados do GeoIP do CloakBrowser. O CloakBrowser baixa e armazena em cache esse banco de dados offline na primeira

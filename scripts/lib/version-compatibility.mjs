@@ -100,6 +100,49 @@ export function replaceGeneratedBlock(content, heading, table) {
   const templateValue3 = content.slice(tableEnd);
   return `${templateValue}${templateValue2}${templateValue3}`;
 }
+/** Synchronize version fields while preserving translated table cells. */
+export function synchronizeLocalizedCompatibilityMetadata(content, rows, includeNode) {
+  const startIndex = content.indexOf(startMarker);
+  const endIndex = content.indexOf(endMarker);
+  if (startIndex === -1 || endIndex <= startIndex) {
+    throw new Error('localized compatibility table markers are missing or malformed');
+  }
+  const tableStart = startIndex + startMarker.length;
+  const entries = rows.map((row) => [row.version, row]);
+  const rowByVersion = new Map(entries);
+  const fieldCount = includeNode ? 5 : 4;
+  const prefixSource = '^(?:\\|\\s*`[^`]*`\\s*){' + fieldCount + '}\\|';
+  const metadataPrefix = new RegExp(prefixSource, 'u');
+  const tableSource = content.slice(tableStart, endIndex);
+  const lines = tableSource.split('\n');
+  const updatedLines = lines.map((line) => {
+    const versionMatch = /^\|\s*`([^`]*)`\s*\|/u.exec(line);
+    const version = versionMatch?.[1];
+    const row = rowByVersion.get(version);
+    if (row === undefined) return line;
+    if (!metadataPrefix.test(line)) {
+      const message = `localized compatibility metadata is malformed for ${version}`;
+      throw new Error(message);
+    }
+    const values = [
+      row.version,
+      row.playwrightMcp,
+      row.playwrightMcpDockerBase,
+      row.cloakbrowser,
+      ...(includeNode ? [row.node] : []),
+    ];
+    let index = 0;
+    return line.replace(/`[^`]*`/gu, (cell) => {
+      if (index >= values.length) return cell;
+      const value = values[index++];
+      return code(value);
+    });
+  });
+  const table = updatedLines.join('\n');
+  const before = content.slice(0, tableStart);
+  const after = content.slice(endIndex);
+  return `${before}${table}${after}`;
+}
 export function prependLocalizedCompatibilityRow(content, previousRow, currentRow) {
   const startIndex = content.indexOf(startMarker);
   const endIndex = content.indexOf(endMarker);

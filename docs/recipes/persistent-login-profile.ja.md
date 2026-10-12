@@ -34,14 +34,15 @@ docker run --rm -i \
 
 ## 確認
 
-1. Sign in once.
-2. Restart with the same PLAYWRIGHT_MCP_USER_DATA_DIR.
-3. Confirm the session remains active.
+1. MCP クライアントにログインページを開かせてログインしてください。
+2. サーバーを正常に停止してください。
+3. 同じ `PLAYWRIGHT_MCP_USER_DATA_DIR` で再び起動してください。
+4. クライアントにサイトを再訪させ、ログイン状態が残っていることを確認してください。
 
 ## 関連
 
-- [Configuration](../configuration.md)
-- [Docker](../docker.md)
+- [設定](../configuration.md#streamable-http-runtime-metadata)
+- [Docker](../docker.md#persistent-profiles)
 - [Chrome 拡張機能を読み込む](load-chrome-extension.md)
 
 ## CloakBrowser 0.6.0

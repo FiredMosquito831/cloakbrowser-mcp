@@ -157,7 +157,7 @@ betrachtet werden.
 
 - [Konfiguration](configuration.md) listet alle Bridge- und Upstream-Umgebungsvariablen auf.
 - [GeoIP-Proxy-Zuordnung](geoip-proxy-matching.md) erläutert regionenkonsistente Proxy-Profile.
-- [Tools](tools.md) erläutert, warum Upstream-Browser-Tools von Playwright MCP unverändert weitergeleitet werden.
+- [Werkzeuge](tools.md) erläutert, warum Upstream-Browser-Tools von Playwright MCP unverändert weitergeleitet werden.
 
 ## Weitere praktische Pfade
 

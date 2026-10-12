@@ -1,7 +1,8 @@
 # Test execution and CI reports
 
-Run fast checks with `npm run check`. Real browser suites use installed npm
-packages and local fixture pages:
+Run fast checks with `npm run check`; its packaged CLI checks use fake upstream
+MCP and do not launch Chromium. Real browser suites use controlled Chromium
+executables and local fixture pages:
 
 - `npm run test:e2e:cdp`: managed CDP with Free CloakBrowser and Playwright.
 - `npm run test:e2e:playwright-console`: console methods across clean sessions.
@@ -23,8 +24,12 @@ revision mismatch with upstream MCP's bundled Playwright.
 CI uploads sanitized results from each matrix cell. The aggregation job expects
 90 producers, including six managed CDP producers, and generates a combined HTML
 report. Missing producers and failed tests make aggregation fail. Reports are
-available as Actions artifacts; public publication requires the trusted publisher
-workflow to reach the default branch.
+available as Actions artifacts. Public PR links require enabled publication,
+a configured reports repository and GitHub App credentials, an eligible current
+open PR, validated producer evidence, and successful Pages verification.
+Same-repository CI calls the reusable publisher; fork PR reports use
+default-branch publication code after CI completes. Publication failures fall
+back to the Actions run.
 
 Local reporting commands:
 

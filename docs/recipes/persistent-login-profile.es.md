@@ -34,14 +34,15 @@ Usa rutas del contenedor en variables de entorno; la ruta del host solo aparece 
 
 ## Verificar
 
-1. Sign in once.
-2. Restart with the same PLAYWRIGHT_MCP_USER_DATA_DIR.
-3. Confirm the session remains active.
+1. Pide al cliente MCP que abra una página de inicio de sesión e inicia sesión.
+2. Detén el servidor correctamente.
+3. Inícialo de nuevo con el mismo `PLAYWRIGHT_MCP_USER_DATA_DIR`.
+4. Pide al cliente que visite el sitio otra vez y confirma que conserva la sesión.
 
 ## Relacionado
 
-- [Configuration](../configuration.md)
-- [Docker](../docker.md)
+- [Configuración](../configuration.md#streamable-http-runtime-metadata)
+- [Docker](../docker.md#persistent-profiles)
 - [Cargar extensión de Chrome](load-chrome-extension.md)
 
 ## CloakBrowser 0.6.0

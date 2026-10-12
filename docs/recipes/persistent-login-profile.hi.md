@@ -34,14 +34,15 @@ Environment variables में container paths उपयोग करें; ho
 
 ## सत्यापन
 
-1. Sign in once.
-2. Restart with the same PLAYWRIGHT_MCP_USER_DATA_DIR.
-3. Confirm the session remains active.
+1. MCP क्लाइंट से लॉगिन पेज खोलने को कहें और लॉगिन करें।
+2. सर्वर सही तरीके से बंद करें।
+3. उसी `PLAYWRIGHT_MCP_USER_DATA_DIR` के साथ फिर शुरू करें।
+4. क्लाइंट से साइट दोबारा खोलने को कहें और सुनिश्चित करें कि लॉगिन स्थिति बनी है।
 
 ## संबंधित
 
-- [Configuration](../configuration.md)
-- [Docker](../docker.md)
+- [विन्यास](../configuration.md#streamable-http-runtime-metadata)
+- [डॉकर](../docker.md#persistent-profiles)
 - [Chrome एक्सटेंशन लोड करें](load-chrome-extension.md)
 
 ## CloakBrowser 0.6.0

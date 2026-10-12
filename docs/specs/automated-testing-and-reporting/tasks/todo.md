@@ -1,6 +1,6 @@
 # Execution checklist
 
-Status: Planned; specification approved; explicit packet authorization required
+Status: Packets 01–10 are complete locally. Packet 13 remains open; publication evidence exists for a previous PR head. Packets 11 and 12 remain planned.
 
 This is the sole completion checklist. A checked packet means all its required
 criteria and checks passed with evidence in the current handoff and plan.
@@ -29,8 +29,9 @@ Review is optional, and commit/push/PR/publication require separate authorizatio
 
 Selected delivery components are explicit in `plan.md` and packet 13:
 Allure Report 3, `peaceiris/actions-gh-pages` and
-the project-owned guarded PR comment handler; proposed destination
-`swimmwatch/cloakbrowser-mcp-reports`. Action pins are locally audited; external repository setup and live proof remain pending.
+the project-owned guarded PR comment handler. The configured destination is
+`swimmwatch/cloakbrowser-mcp-reports`. External setup and activation are recorded
+in `handoff.md`; publication evidence is tied to the verified source SHA and run.
 
 Specification reconciliation is complete: independent review passed 24/24 current items;
 MCP reports pass/reviewed and Approved. All packet pins were refreshed.
@@ -90,4 +91,4 @@ passes/four unchanged skips. Remote/platform execution remains unverified in 11;
 separate report repository/publication remains 13. Next: 13, separately invoked.
 
 
-Packet 13 remains unchecked because authorized live proof is pending. Local publisher implementation, 31 focused tests, check (700 passed / 4 skipped plus six CLI cases), actionlint, offline zizmor and controlled Free Chromium rendering pass. Setup/rollback instructions are in packet 13. No external activation occurred; current handoff owns remaining gates.
+Packet 13 remains unchecked pending its remaining acceptance gates. Local publisher implementation, 31 focused tests, check (700 passed / 4 skipped plus six CLI cases), actionlint, offline zizmor and controlled Free Chromium rendering pass. Setup/rollback instructions are in packet 13. External setup and activation were performed; publication was verified for the previous PR head. The current handoff owns remaining gates.

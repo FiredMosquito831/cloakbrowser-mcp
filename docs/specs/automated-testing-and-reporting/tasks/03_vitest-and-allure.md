@@ -1,6 +1,6 @@
 # 03 — Public Vitest reporting and local Allure
 
-Status: Planned; execution requires explicit packet authorization
+Status: Complete locally; execution evidence is recorded in plan.md, todo.md, and handoff.md.
 Requirements: TEST-002, TEST-006, TEST-007, TEST-008, TEST-009, TEST-010
 Dependencies: 02 complete; safe writer and multi-producer tests pass
 

@@ -1,5 +1,11 @@
 # Reporting source delivery
 
+Current delivery: consolidated into `release/v1.15.0` and PR 169. Publication is
+enabled. Verified publication evidence covers SHA
+`4a800b8d5d313676b39dc5a141dc367f5d442adb`; current-head acceptance remains open.
+
+## Initial preparation snapshot — 2026-10-11
+
 Prepared: 2026-10-11. No source commit, push, PR, merge or CI dispatch performed.
 Verified source main: `7e5ddd045e82f8ed1d8ddd8d37b9598393d9ae43`.
 
@@ -72,7 +78,7 @@ reporting changes against the verified main base; do not copy these files wholes
 - `TEST_REPORT_PUBLICATION_ENABLED=false`
 - Source documentation Pages configuration remains unchanged
 
-## Delivery and verification sequence
+## Original delivery and verification sequence — 2026-10-11
 
 1. Obtain separate authorization for source commit, push and PR actions.
 2. Prepare the reporting-only delivery against current main and inspect its full
@@ -86,7 +92,7 @@ reporting changes against the verified main base; do not copy these files wholes
    PR head SHA, run/attempt, matrix variants and preservation of documentation.
 
 Packet 13 stays incomplete until delivery, activation and requested live acceptance.
-Next owner: the main agent prepares the isolated delivery after the required source
+Original next owner: the main agent prepares the isolated delivery after the required source
 delivery authorization; the user owns authorization and merge decisions.
 
 ## Execution checkpoint — 2026-10-11
