@@ -49,6 +49,8 @@ export async function prepareControlledExtension(runtime: FreeBrowserRuntime): P
 
 /** Build the exact official source and lockfile in an owned disposable checkout. */
 export async function prepareOfficialExtension(runtime: FreeBrowserRuntime): Promise<OfficialExtension> {
+  const downloadStarted = Date.now();
+  process.stderr.write('Extension preparation: downloading pinned source\n');
   const checkout = path.join(runtime.root, 'playwright');
   await mkdir(checkout);
   const signal = AbortSignal.timeout(120000);
@@ -85,11 +87,18 @@ export async function prepareOfficialExtension(runtime: FreeBrowserRuntime): Pro
   checksum.update(bytes);
   const actual = checksum.digest('hex');
   if (actual !== sourceSha256) throw new Error('Official extension source archive checksum mismatch');
+  const downloadedIn = Date.now() - downloadStarted;
+  const verified = `Extension preparation: verified ${size} source bytes in ${downloadedIn}ms\n`;
+  process.stderr.write(verified);
   const archiveName = 'playwright-source.tar.gz';
   const archive = path.join(runtime.root, archiveName);
   await writeFile(archive, bytes);
   // GNU tar treats a drive-letter archive path as a remote host; relative names work on BSD tar too.
-  const extract = ['-xzf', archiveName, '-C', 'playwright', '--strip-components=1'];
+  // Keep the original root manifests and the extension's complete build inputs, without unrelated browser sources.
+  const archiveRoot = `playwright-${commit}`;
+  const inputs = ['package.json', 'package-lock.json', 'LICENSE', 'NOTICE', 'packages/extension'];
+  const members = inputs.map((input) => `${archiveRoot}/${input}`);
+  const extract = ['-xzf', archiveName, '-C', 'playwright', '--strip-components=1', ...members];
   try {
     await runTool(runtime, 'tar', extract, runtime.root, 'extract verified official source');
   } finally {
@@ -136,6 +145,8 @@ async function runTool(
   step: string,
 ): Promise<void> {
   const started = Date.now();
+  const starting = `Extension preparation: ${step} started\n`;
+  process.stderr.write(starting);
   const options: SpawnOptions = { cwd, env: runtime.env, stdio: ['ignore', 'pipe', 'pipe'] };
   const child = spawn(command, args, options);
   runtime.ownChild(child);
@@ -154,8 +165,12 @@ async function runTool(
     });
     child.once('close', (code, signal) => {
       clearTimeout(timer);
-      if (code === 0) resolve();
-      else {
+      if (code === 0) {
+        const elapsed = Date.now() - started;
+        const completed = `Extension preparation: ${step} completed in ${elapsed}ms\n`;
+        process.stderr.write(completed);
+        resolve();
+      } else {
         const safe = diagnostics.sanitizeDiagnostic(output);
         const elapsed = Date.now() - started;
         const message = `Extension preparation failed (${step}, ${command}, ${elapsed}ms, exit ${String(code)}, signal ${String(signal)}): ${safe}`;

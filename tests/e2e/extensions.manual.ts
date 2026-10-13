@@ -27,6 +27,13 @@ let command: ReturnType<typeof packAndInstallCurrentPackage>;
 let fixture: NpmBrowserFixture;
 let official: OfficialExtension;
 beforeAll(async () => {
+  const started = Date.now();
+  const progress = (step: string): void => {
+    const elapsed = Date.now() - started;
+    const message = `Extension E2E setup: ${step} at ${elapsed}ms\n`;
+    process.stderr.write(message);
+  };
+  progress('resolve Free browser');
   const downloadRoot = createTempRoot('cloak-browser-download-');
   const binary = await resolveFreeBrowserExecutable(downloadRoot);
   const executable = binary.executable;
@@ -37,10 +44,14 @@ beforeAll(async () => {
   }
   const options = { root, freeExecutable: executable, parentEnv };
   runtime = await createFreeBrowserRuntime(options);
+  progress('install packaged CLI');
   command = packAndInstallCurrentPackage();
+  progress('start local fixture');
   fixture = await startNpmBrowserFixture();
   runtime.ownCleanup(fixture.close);
+  progress('prepare official extension');
   official = await prepareOfficialExtension(runtime);
+  progress('ready');
 });
 afterAll(async () => {
   try {
