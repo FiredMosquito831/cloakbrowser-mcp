@@ -22,6 +22,7 @@ import {
 } from '#src/http/sessionStore';
 import { HttpStatus, JsonRpcErrorCode } from '#src/http/status';
 import type { BridgeLogger } from '#src/logging/logger';
+import { ManagedCdpBootstrapToolError } from '#src/cdp/session';
 import { MCP_SESSION_ID_HEADER } from '#src/protocol/constants';
 import { type BridgeServer, createBridgeServer, startManagedCdpBridge } from '#src/server';
 import {
@@ -370,6 +371,10 @@ class StreamableHttpBridgeController {
       if (sessionRegistered) await this.#closeSession(sessionId);
       else await bridge?.dispose();
       if (clientDisconnected) return;
+      if (error instanceof ManagedCdpBootstrapToolError) {
+        const fields = { stage: 'managed-cdp-bootstrap', reason: error.message };
+        this.#options.logger?.warn(fields, 'http session initialization failed');
+      }
       if (this.#handleInitializeError(res, error)) return;
       throw error;
     } finally {

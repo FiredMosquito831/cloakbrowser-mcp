@@ -197,6 +197,12 @@ async function withSession(
 async function navigate(client: Client, url: string): Promise<void> {
   const request = { name: 'browser_navigate', arguments: { url } };
   const result = await client.callTool(request);
+  if (result.isError) {
+    const encoded = JSON.stringify(result);
+    const safe = diagnostics.sanitizeDiagnostic(encoded, secrets);
+    const message = `Proxy fixture navigation failed: ${safe}`;
+    throw new Error(message);
+  }
   expect(result.isError).not.toBe(true);
   const observation = {
     name: 'browser_evaluate',

@@ -10,6 +10,8 @@ import type {
   ManagedCdpUpstreamOwner,
 } from '#src/cdp/types';
 export type { ManagedCdpSessionDependencies } from '#src/cdp/types';
+/** A bootstrap failure whose message contains only tool names and safe native termination codes. */
+export class ManagedCdpBootstrapToolError extends Error {}
 export interface ManagedCdpSession {
   readonly activeConnections: number;
   bootstrapGeneration(): Promise<void>;
@@ -533,7 +535,7 @@ function assertBootstrapToolSucceeded(result: unknown, name: string): void {
     const uniqueCodes = codeList.join(', ');
     const detail = uniqueCodes ? ` (${uniqueCodes})` : '';
     const message = `Managed CDP bootstrap tool ${name} failed${detail}`;
-    throw new Error(message);
+    throw new ManagedCdpBootstrapToolError(message);
   }
 }
 function createChallengePlacementFunction(propertyName: string, value: string, timeoutMs: number): string {

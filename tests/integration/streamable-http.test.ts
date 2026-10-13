@@ -11,6 +11,7 @@ import { WebSocket } from 'ws';
 import { prepareBridgeRuntime } from '@/bridge/config.js';
 import { LOCAL_TOOL_BINARY_INFO, LOCAL_TOOL_BRIDGE_INFO } from '@/bridge/tools.js';
 import { createCdpEndpointConfig } from '@/cdp/config.js';
+import { ManagedCdpBootstrapToolError } from '@/cdp/session.js';
 import { defaultStreamableHttpOptions } from '@/http/options.js';
 import { createSessionStore } from '@/http/sessionStore.js';
 import { startStreamableHttpBridge, type StreamableHttpBridgeServer } from '@/http/server.js';
@@ -51,6 +52,39 @@ function canonicalDirectory(directory: string): string {
   }
 }
 describe('streamable HTTP bridge', () => {
+  it('logs safe CDP bootstrap details while retaining a generic HTTP response and releasing admission', async () => {
+    await withFakeUpstream(async () => {
+      const warn = vi.fn();
+      const logger = {
+        debug: vi.fn(),
+        error: vi.fn(),
+        fatal: vi.fn(),
+        info: vi.fn(),
+        trace: vi.fn(),
+        warn,
+      } satisfies BridgeLogger;
+      const reason = 'Managed CDP bootstrap tool browser_tabs failed (exitCode=133, signal=SIGTRAP)';
+      const failure = new ManagedCdpBootstrapToolError(reason);
+      const start: ReturnType<typeof createFakeManagedCdpStarter>['start'] = async () => {
+        throw failure;
+      };
+      const cdpOptions = { processEnabled: false, portRange: '29040' } as const;
+      const cdp = createCdpEndpointConfig(cdpOptions);
+      const options = { cdp, logger, sessionMax: 1, startManagedCdpBridge: start };
+      const server = await startHttpBridge(options);
+      const sessionOptions = { cdpEnabled: true } as const;
+      const request = createInitializeRequest(sessionOptions);
+      const response = await postJsonRpc(server.url, request);
+      expect(response.status).toBe(HttpStatus.InternalServerError);
+      const body = await response.json();
+      const expectedBody = { error: { message: 'Internal server error' } };
+      expect(body).toMatchObject(expectedBody);
+      const fields = { stage: 'managed-cdp-bootstrap', reason };
+      expect(warn).toHaveBeenCalledWith(fields, 'http session initialization failed');
+      const ordinary = { cdpEnabled: false } as const;
+      await initializeRawHttpSession(server, ordinary);
+    });
+  });
   it('emits a fixed warning for managed CDP cleanup failures', async () => {
     await withFakeUpstream(async () => {
       const managed = createFakeManagedCdpStarter();
