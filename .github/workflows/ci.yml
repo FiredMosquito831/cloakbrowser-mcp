@@ -226,6 +226,12 @@ jobs:
       - name: Use pinned npm
         run: npm install --global npm@${{ env.NPM_VERSION }}
       - run: npm ci --ignore-scripts
+      - name: Configure functional reporting
+        run: node scripts/test-report.mjs ci-config
+        env:
+          CLOAK_REPORT_GROUP: ${{ matrix.suite }}
+          CLOAK_REPORT_SUITE: ${{ matrix.suite }}
+          CLOAK_REPORT_ENGINE: cloak
       - name: Configure isolated Free cache
         shell: node {0}
         run: |
@@ -241,35 +247,30 @@ jobs:
         shell: node {0}
         run: |
           (async () => {
-            const { binaryInfo, ensureBinary } = await import('cloakbrowser');
+            const { createRequire } = require('node:module');
+            const { resolve } = require('node:path');
+            const { pathToFileURL } = require('node:url');
+            const packageFile = resolve(process.cwd(), 'package.json');
+            const fromProject = createRequire(packageFile);
+            const moduleFile = fromProject.resolve('cloakbrowser');
+            const moduleUrl = pathToFileURL(moduleFile);
+            const { binaryInfo, ensureBinary } = await import(moduleUrl.href);
             const info = binaryInfo();
             if (info.tier !== 'free') throw new Error('Expected license-free Chromium');
             await ensureBinary(undefined, info.version);
           })().catch((error) => { process.stderr.write(error.message + '\n'); process.exitCode = 1; });
       - run: npm run build
-      - name: Configure functional reporting
-        run: node scripts/test-report.mjs ci-config
-        env:
-          CLOAK_REPORT_GROUP: ${{ matrix.suite }}
-          CLOAK_REPORT_SUITE: ${{ matrix.suite }}
-          CLOAK_REPORT_ENGINE: cloak
       - name: Run real browser suite with Linux display
         if: runner.os == 'Linux'
         env:
           REPORT_FILE: ${{ matrix.suite == 'npm' && 'npm-package.manual.ts' || matrix.suite == 'lifecycle' && 'browser-lifecycle.manual.ts' || format('{0}.manual.ts', matrix.suite) }}
-        run: xvfb-run -a node node_modules/vitest/vitest.mjs run --config vitest.distribution-e2e.config.mjs "tests/e2e/$REPORT_FILE"
+        run: xvfb-run -a npm exec -- vitest run --config vitest.distribution-e2e.config.mjs "tests/e2e/$REPORT_FILE"
       - name: Run real browser suite on native desktop
         if: runner.os != 'Linux'
         env:
           REPORT_FILE: ${{ matrix.suite == 'npm' && 'npm-package.manual.ts' || matrix.suite == 'lifecycle' && 'browser-lifecycle.manual.ts' || format('{0}.manual.ts', matrix.suite) }}
-        shell: node {0}
-        run: |
-          const { spawnSync } = require('node:child_process');
-          const file = `tests/e2e/${process.env.REPORT_FILE}`;
-          const args = ['node_modules/vitest/vitest.mjs', 'run', '--config', 'vitest.distribution-e2e.config.mjs', file];
-          const result = spawnSync(process.execPath, args, { stdio: 'inherit' });
-          if (result.error) throw result.error;
-          process.exitCode = result.status ?? 1;
+        shell: bash
+        run: npm exec -- vitest run --config vitest.distribution-e2e.config.mjs "tests/e2e/$REPORT_FILE"
       - name: Upload sanitized functional evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -65,6 +65,13 @@ npm run test:e2e:npm-package -- --maxWorkers=2
 Pass the flag to a direct Vitest npm script; `npm run check` is a chain of
 commands and does not forward it to every test stage.
 
+Distribution suites need npm's execution context to pack and install the CLI.
+For direct selection, use `npm exec` instead of invoking the Vitest Node entry point:
+
+```bash
+npm exec -- vitest run --config vitest.distribution-e2e.config.mjs --maxWorkers=4 tests/e2e/npm-package.manual.ts tests/e2e/proxy-geoip.manual.ts tests/e2e/extensions.manual.ts tests/e2e/browser-lifecycle.manual.ts
+```
+
 Artifact names include the CI attempt number to avoid upload conflicts on reruns.
 Partial reruns reuse unchanged jobs and select the latest evidence of each rerun
 job within the same CI run. Missing, failed or corrupt latest evidence never

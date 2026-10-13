@@ -13,9 +13,10 @@ const originalFs = await vi.importActual<typeof fs>('node:fs/promises');
 
 interface Results {
   writeTestResult: (options: Record<string, unknown>) => Promise<string>;
+  mergeTestResults: (options: Record<string, unknown>) => Promise<string>;
 }
 const moduleUrl = new URL('../../scripts/lib/test-results.mjs', import.meta.url);
-const { writeTestResult } = (await import(moduleUrl.href)) as Results;
+const { writeTestResult, mergeTestResults } = (await import(moduleUrl.href)) as Results;
 const roots: string[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -49,6 +50,91 @@ function record(status: string) {
 }
 
 describe('atomic producer evidence', () => {
+  it('drains a bounded parallel write batch before cleaning up a failed publication', async () => {
+    const input = await options();
+    const allocation = { length: 20 };
+    input.results = Array.from(allocation, () => record('passed'));
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let opened = 0;
+    let closed = 0;
+    let gated = false;
+    let settled = false;
+    vi.mocked(fs.open).mockImplementation(async (...args) => {
+      const handle = await originalFs.open(...args);
+      const sequence = ++opened;
+      const close = handle.close.bind(handle);
+      vi.spyOn(handle, 'close').mockImplementationOnce(async () => {
+        await close();
+        closed += 1;
+      });
+      vi.spyOn(handle, 'sync').mockImplementationOnce(async () => {
+        if (sequence === 1) throw new Error('Controlled flush failure');
+        gated = true;
+        await gate;
+      });
+      return handle;
+    });
+    const writing = writeTestResult(input);
+    void writing.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    try {
+      await expect.poll(() => gated).toBe(true);
+      expect(settled).toBe(false);
+      expect(opened).toBeGreaterThan(1);
+      expect(opened).toBeLessThan(input.results.length);
+      const runRoot = path.join(input.root, input.runId);
+      const pending = await originalFs.readdir(runRoot);
+      expect(pending).toHaveLength(1);
+    } finally {
+      release?.();
+      await writing.catch(() => undefined);
+    }
+    await expect(writing).rejects.toThrow('producer write/flush failed');
+    expect(closed).toBe(opened);
+    const runRoot = path.join(input.root, input.runId);
+    const remaining = await originalFs.readdir(runRoot);
+    expect(remaining).toHaveLength(0);
+  });
+
+  it('bounds read allocation to descriptor size and rejects growth before publishing', async () => {
+    const input = await options();
+    const directory = await writeTestResult(input);
+    const filename = `${input.results[0].uuid}-result.json`;
+    const target = path.join(directory, filename);
+    const bytes = await originalFs.readFile(target);
+    const capacity = bytes.length + 1;
+    const allocation = vi.spyOn(Buffer, 'alloc');
+    vi.mocked(fs.open).mockImplementation(async (...args) => {
+      const handle = await originalFs.open(...args);
+      if (args[0] === target) {
+        const stat = handle.stat.bind(handle);
+        vi.spyOn(handle, 'stat').mockImplementationOnce(async () => {
+          const snapshot = await stat();
+          await originalFs.appendFile(target, 'x');
+          return snapshot;
+        });
+      }
+      return handle;
+    });
+    const outputDir = path.join(input.root, 'merged');
+    const producerIds = [input.producerId];
+    const reading = { root: input.root, runId: input.runId, producerIds, outputDir };
+    const merging = mergeTestResults(reading);
+    await expect(merging).rejects.toThrow('changed evidence file');
+    expect(allocation).toHaveBeenCalledWith(capacity);
+    const entries = await originalFs.readdir(input.root);
+    expect(entries).not.toContain('merged');
+  });
+
   it('accepts canonical temporary roots while continuing to reject symlink aliases', async () => {
     const input = await options();
     const physical = path.join(input.root, 'physical');

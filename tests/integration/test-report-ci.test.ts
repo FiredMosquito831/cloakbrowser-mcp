@@ -91,6 +91,97 @@ async function producer(
   return path.join(artifact, runId, id);
 }
 describe('CI reporting trust and matrix aggregation', () => {
+  const browserTiers = ['free', 'pro'];
+  it.each(browserTiers)(
+    'resolves the actual CI installer from a temporary script with tier %s',
+    async (tier) => {
+      const f = await fixture();
+      const ci = await readFile('.github/workflows/ci.yml', 'utf8');
+      const start = ci.indexOf('      - name: Install only Free Chromium into isolated cache');
+      const stop = ci.indexOf('      - ', start + 10);
+      const step = ci.slice(start, stop);
+      const bodyStart = step.indexOf('        run: |\n') + '        run: |\n'.length;
+      const body = step
+        .slice(bodyStart)
+        .split('\n')
+        .map((line) => line.slice(10))
+        .join('\n');
+      const project = path.join(f.root, 'project');
+      const module = path.join(project, 'node_modules', 'cloakbrowser');
+      const create = { recursive: true };
+      await mkdir(module, create);
+      const packageFile = path.join(project, 'package.json');
+      await writeFile(packageFile, '{}');
+      const manifestPath = path.join(module, 'package.json');
+      const manifest = { name: 'cloakbrowser', type: 'module', exports: { '.': './index.mjs' } };
+      const encoded = JSON.stringify(manifest);
+      await writeFile(manifestPath, encoded);
+      const modulePath = path.join(module, 'index.mjs');
+      const source = `
+import { writeFileSync } from 'node:fs';
+export function binaryInfo() { return { tier: process.env.FIXTURE_TIER, version: 'controlled-free' }; }
+export async function ensureBinary(license, version) {
+  const payload = { licenseWasUndefined: license === undefined, version };
+  const encoded = JSON.stringify(payload);
+  writeFileSync(process.env.FIXTURE_MARKER, encoded);
+}
+`;
+      await writeFile(modulePath, source);
+      const script = path.join(f.root, 'runner-temp.cjs');
+      await writeFile(script, body);
+      const marker = path.join(f.root, 'installer-called.json');
+      const cache = path.join(f.root, 'free-cache');
+      const env = {
+        ...process.env,
+        FIXTURE_TIER: tier,
+        FIXTURE_MARKER: marker,
+        CLOAKBROWSER_LICENSE_KEY: '',
+        CLOAKBROWSER_CACHE_DIR: cache,
+      };
+      const options = { cwd: project, env };
+      const args = [script];
+      const outcome = await execute(process.execPath, args, options).then(
+        (result) => ({ code: 0, stderr: result.stderr }),
+        (error: unknown) => {
+          if (!(error instanceof Error) || !('code' in error) || !('stderr' in error)) throw error;
+          const stderr = String(error.stderr);
+          return { code: error.code, stderr };
+        },
+      );
+      const expectedCode = tier === 'free' ? 0 : 1;
+      expect(outcome.code).toBe(expectedCode);
+      const rejectedPro = outcome.stderr.includes('Expected license-free Chromium');
+      const expectedRejection = tier === 'pro';
+      expect(rejectedPro).toBe(expectedRejection);
+      const bytes = await readFile(marker, 'utf8').catch((error: unknown) => {
+        if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error;
+        return undefined;
+      });
+      const actual = bytes === undefined ? undefined : (JSON.parse(bytes) as Record<string, unknown>);
+      const expected =
+        tier === 'free' ? { licenseWasUndefined: true, version: 'controlled-free' } : undefined;
+      expect(actual).toEqual(expected);
+    },
+  );
+  it('configures functional evidence before browser installation and build can fail', async () => {
+    const ci = await readFile('.github/workflows/ci.yml', 'utf8');
+    const start = ci.indexOf('  functional:');
+    const stop = ci.indexOf('  docs:', start);
+    const functional = ci.slice(start, stop);
+    const reporting = functional.indexOf('name: Configure functional reporting');
+    const installation = functional.indexOf('name: Install only Free Chromium');
+    const build = functional.indexOf('run: npm run build');
+    expect(reporting).toBeGreaterThan(0);
+    expect(reporting).toBeLessThan(installation);
+    expect(reporting).toBeLessThan(build);
+    expect(functional).toContain('xvfb-run -a npm exec -- vitest');
+    const nativeStart = functional.indexOf('name: Run real browser suite on native desktop');
+    const nativeStop = functional.indexOf('name: Upload sanitized functional evidence', nativeStart);
+    const native = functional.slice(nativeStart, nativeStop);
+    expect(native).toContain('shell: bash');
+    expect(native).toContain('run: npm exec -- vitest');
+  });
+
   const firstAttempt = { runId: 'run-42-attempt-1' };
   const secondAttempt = { runId: 'run-42-attempt-2' };
   const downloadEntries = ['download'];

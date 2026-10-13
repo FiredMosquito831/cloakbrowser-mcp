@@ -16,6 +16,7 @@ const ATTACHMENT_FILE = /^[\da-f-]{36}-attachment\.(?:txt|png)$/i;
 const RESULT_LIMIT = 256 * 1024;
 const PRODUCER_LIMIT = 64 * 1024 * 1024;
 const MAX_RESULTS = 10000;
+const FILE_BATCH_SIZE = 8;
 const fileSizes = new WeakMap();
 const statuses = ['passed', 'failed', 'broken', 'skipped'];
 const environmentKeys = ['os', 'arch', 'node', 'browser', 'lane'];
@@ -107,15 +108,16 @@ async function readOwned(root, filename, limit) {
     const actual = await handle.stat();
     if (!actual.isFile() || actual.size > limit || actual.ino !== info.ino || actual.dev !== info.dev)
       invalid('changed evidence file');
-    // Read at most the policy limit even if an untrusted producer grows the file.
-    const bytes = Buffer.alloc(limit + 1);
+    // Descriptor size is policy-bounded above; one sentinel byte detects later growth.
+    const capacity = actual.size + 1;
+    const bytes = Buffer.alloc(capacity);
     let count = 0;
     while (count < bytes.length) {
       const { bytesRead } = await handle.read(bytes, count, bytes.length - count, count);
       if (bytesRead === 0) break;
       count += bytesRead;
     }
-    if (count > limit) invalid('oversized evidence file');
+    if (count > actual.size) invalid('changed evidence file');
     return bytes.subarray(0, count);
   } finally {
     await handle.close();
@@ -132,6 +134,18 @@ async function writeFlushed(filename, data) {
   }
 }
 
+async function processFiles(entries, operation) {
+  for (let offset = 0; offset < entries.length; offset += FILE_BATCH_SIZE) {
+    const end = offset + FILE_BATCH_SIZE;
+    const batch = entries.slice(offset, end);
+    const pending = batch.map(async (entry) => operation(entry));
+    // Drain the whole batch before callers remove their owned staging directory.
+    const completed = await Promise.allSettled(pending);
+    const failed = completed.find((result) => result.status === 'rejected');
+    if (failed) throw failed.reason;
+  }
+}
+
 async function publish(parent, name, files) {
   const target = path.join(parent, name);
   try {
@@ -143,7 +157,7 @@ async function publish(parent, name, files) {
   const stage = await fs.mkdtemp(path.join(parent, '.pending-'));
   try {
     const directories = new Set();
-    for (const [filename, data] of files) {
+    for (const filename of files.keys()) {
       const directory = path.dirname(filename);
       if (directory !== '.' && !directories.has(directory)) {
         const targetDirectory = path.join(stage, directory);
@@ -151,9 +165,12 @@ async function publish(parent, name, files) {
         await fs.mkdir(targetDirectory, options);
         directories.add(directory);
       }
+    }
+    const entries = [...files];
+    await processFiles(entries, async ([filename, data]) => {
       const targetFile = path.join(stage, filename);
       await writeFlushed(targetFile, data);
-    }
+    });
     await fs.rename(stage, target);
     return target;
   } finally {
@@ -358,7 +375,7 @@ async function collectProducer(root, runId, producerId, files, fingerprints, sec
     invalid('incomplete producer');
   const allowed = new Set(['producer.json', ...manifest.results]);
   let size = bytes.length;
-  for (const filename of manifest.results) {
+  await processFiles(manifest.results, async (filename) => {
     if (typeof filename !== 'string' || !RESULT_FILE.test(filename)) invalid('unsafe result path');
     const resultBytes = await readOwned(owner, filename, RESULT_LIMIT);
     checkFingerprint(fingerprints, filename, resultBytes);
@@ -391,7 +408,7 @@ async function collectProducer(root, runId, producerId, files, fingerprints, sec
     }
     if (size > PRODUCER_LIMIT) invalid('oversized producer');
     addUnique(files, filename, JSON.stringify(result));
-  }
+  });
   const entries = await fs.readdir(owner);
   if (entries.length !== allowed.size || entries.some((entry) => !allowed.has(entry)))
     invalid('unsupported producer files');
