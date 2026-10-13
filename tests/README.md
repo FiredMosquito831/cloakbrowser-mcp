@@ -83,9 +83,12 @@ Fingerprint mismatches retain the failing assertion and attach a comparison with
 direct Playwright using the same Free executable and explicit locale/timezone
 flags. This evidence helps distinguish browser behavior from bridge behavior.
 The current license-free macOS binary, Chromium 145.0.7632.109.2, has an
-[upstream locale defect](https://github.com/CloakHQ/CloakBrowser/discussions/376).
-The comparison also records the documented `--accept-lang` workaround. Full
-locale assertions remain required until an unlicensed macOS binary supports them.
+[upstream locale defect](https://github.com/CloakHQ/CloakBrowser/issues/82).
+The comparison also records the documented `--accept-lang` workaround. The three
+full-locale scenarios are temporarily skipped only on macOS; Linux and Windows
+continue to run them. Other macOS proxy/GeoIP scenarios and the deliberate
+fingerprint-mismatch diagnostic test remain enabled. Remove the skips after a
+keyless Free build passes the locale scenarios on both Intel and Apple Silicon.
 
 Partial reruns reuse unchanged jobs and select the latest evidence of each rerun
 job within the same CI run. Missing, failed or corrupt latest evidence never
