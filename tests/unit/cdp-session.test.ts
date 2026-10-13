@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { runInNewContext } from 'node:vm';
 import { isCdpCapability } from '@/cdp/capability.js';
 import {
   createManagedCdpChallenge,
@@ -6,6 +7,35 @@ import {
   startManagedCdpSession,
 } from '@/cdp/session.js';
 describe('managed CDP generation coordinator', () => {
+  it('places and cleans hostile challenge strings as data without executing them', async () => {
+    const propertyName = '__challenge";globalThis.injected=true;//</script>\u2028';
+    const value = '";globalThis.injected=true;//</script>\u2029';
+    const discoverError = new Error('Discovery failed after placement');
+    const options = { discoverError };
+    const harness = createHarness(options);
+    harness.dependencies.createChallenge = () => ({ propertyName, value });
+    const startup = startManagedCdpSession(harness.dependencies);
+    await expect(startup).rejects.toThrow(discoverError);
+    const evaluations = harness.callTool.mock.calls.filter(([name]) => name === 'browser_evaluate');
+    expect(evaluations).toHaveLength(2);
+    const setTimeout = vi.fn();
+    const sandbox: Record<string, unknown> = { injected: false, unrelated: 'retained', setTimeout };
+    for (const [index, [, arguments_]] of evaluations.entries()) {
+      const source = arguments_.function;
+      if (typeof source !== 'string') throw new Error('Expected a bootstrap function');
+      expect(source).not.toMatch(/<\/script|[\u2028\u2029]/iu);
+      const expression = `(${source})()`;
+      runInNewContext(expression, sandbox);
+      const expectedValue = index === 0 ? value : undefined;
+      expect(sandbox[propertyName]).toBe(expectedValue);
+    }
+    const remains = Object.hasOwn(sandbox, propertyName);
+    expect(remains).toBe(false);
+    expect(sandbox.injected).toBe(false);
+    expect(sandbox.unrelated).toBe('retained');
+    const callback = expect.any(Function);
+    expect(setTimeout).toHaveBeenCalledWith(callback, 60000);
+  });
   it('creates independent challenge property and value material with capability entropy', () => {
     const challenge = createManagedCdpChallenge();
     expect(challenge.propertyName).toMatch(/^__cloak_mcp_[A-Za-z0-9_-]{43}$/u);

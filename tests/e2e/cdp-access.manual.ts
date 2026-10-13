@@ -29,6 +29,7 @@ import {
 } from '@tests/helpers/browser-test-runtime.js';
 import { type ReservedPortRange, reservePortRange } from '@tests/helpers/port-reservation.js';
 import { startTestTlsTerminator, type TestTlsTerminator } from '@tests/helpers/tls-terminator.js';
+import { tlsCertificate } from '@tests/helpers/tls.js';
 type BrowserEngine = 'cloak' | 'playwright';
 const nodeBrowserEngines = ['cloak', 'playwright'] as const satisfies readonly BrowserEngine[];
 interface ReadyCdpInfo {
@@ -798,7 +799,7 @@ async function requestHttpsJson(url: URL): Promise<unknown> {
   return await new Promise((resolve, reject) => {
     const createHttpsRequestOptions = {
       headers: { Host: url.host, Origin: `${url.protocol}//${url.host}` },
-      rejectUnauthorized: false,
+      ca: tlsCertificate,
     } as const;
     const request = createHttpsRequest(url, createHttpsRequestOptions, (response) => {
       const chunks: Buffer[] = [];
@@ -835,7 +836,7 @@ async function openTlsWebSocket(url: string): Promise<WebSocket> {
   const parsed = new URL(url);
   const webSocketOptions = {
     headers: { Host: parsed.host, Origin: `https://${parsed.host}` },
-    rejectUnauthorized: false,
+    ca: tlsCertificate,
   } as const;
   const socket = new WebSocket(url, webSocketOptions);
   await new Promise<void>((resolve, reject) => {

@@ -6,6 +6,7 @@ import { CdpPortAllocator } from '@/cdp/allocator.js';
 import { type CdpHttpProxy, startCdpHttpProxy } from '@/cdp/httpProxy.js';
 import { type FakeChromiumCdpServer, startFakeChromiumCdp } from '@tests/fixtures/fake-chromium-cdp.js';
 import { startTestTlsTerminator, type TestTlsTerminator } from '@tests/helpers/tls-terminator.js';
+import { tlsCertificate } from '@tests/helpers/tls.js';
 const capability = 'CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk';
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -16,6 +17,30 @@ afterEach(async () => {
   await Promise.allSettled(mappedValues);
 });
 describe('operator TLS termination for managed CDP', () => {
+  it('requires a trusted certificate and verifies the TLS peer hostname', async () => {
+    const unusedUpstreamPort = 1;
+    const terminator = await startTestTlsTerminator(unusedUpstreamPort);
+    cleanup.push(async () => await terminator.close());
+    const cases = [
+      { ca: undefined, servername: 'localhost', code: 'DEPTH_ZERO_SELF_SIGNED_CERT' },
+      { ca: tlsCertificate, servername: 'wrong.example.test', code: 'ERR_TLS_CERT_ALTNAME_INVALID' },
+    ];
+    for (const { ca, servername, code } of cases) {
+      const result = new Promise<void>((resolve, reject) => {
+        const options = { host: terminator.host, port: terminator.port, ca, servername };
+        const request = createHttpsRequest(options, (response) => {
+          response.resume();
+          resolve();
+        });
+        request.once('error', reject);
+        request.end();
+      });
+      const expected = { code };
+      await expect(result).rejects.toMatchObject(expected);
+    }
+    expect(terminator.requests).toHaveLength(0);
+    expect(terminator.upgrades).toHaveLength(0);
+  });
   it('serves HTTPS and WSS while both internal hops remain plaintext', async () => {
     const fake = await startFakeChromiumCdp(
       (request, response) => {
@@ -139,7 +164,8 @@ async function requestHttps(
       method: 'GET',
       path,
       port: terminator.port,
-      rejectUnauthorized: false,
+      ca: tlsCertificate,
+      servername: 'localhost',
     } as const;
     const request = createHttpsRequest(createHttpsRequestOptions, (response) => {
       const chunks: Buffer[] = [];
@@ -165,7 +191,8 @@ async function connectWss(
   const message = `wss://${terminator.host}:${terminator.port}${path}`;
   const webSocketOptions = {
     headers: { Host: authority, Origin: `https://${authority}` },
-    rejectUnauthorized: false,
+    ca: tlsCertificate,
+    servername: 'localhost',
   } as const;
   const socket = new WebSocket(message, webSocketOptions);
   await new Promise<void>((resolve, reject) => {
@@ -183,7 +210,8 @@ async function connectWssFailure(
   const message2 = `wss://${terminator.host}:${terminator.port}${path}`;
   const webSocketOptions2 = {
     headers: { Host: authority, Origin: origin },
-    rejectUnauthorized: false,
+    ca: tlsCertificate,
+    servername: 'localhost',
   } as const;
   const socket = new WebSocket(message2, webSocketOptions2);
   return await new Promise<number>((resolve, reject) => {

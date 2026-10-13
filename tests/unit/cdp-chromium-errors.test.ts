@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { runInNewContext } from 'node:vm';
 import {
   createChromiumCdpClient,
   readAndDeletePageChallenge,
@@ -142,6 +143,41 @@ describe('Chromium CDP discovery failures', () => {
 });
 
 describe('Chromium ownership challenge failures and cleanup', () => {
+  it('reads and deletes hostile property names as data without executing them', async () => {
+    const propertyName = '__challenge";globalThis.injected=true;//</script>\u2028\u2029';
+    const sandbox: Record<string, unknown> = {
+      [propertyName]: 'owned',
+      unrelated: 'retained',
+      injected: false,
+    };
+    let expression: string | undefined;
+    const fake = await startFakeChromiumCdp(
+      (_request, response) => response.end(),
+      (socket) => {
+        socket.once('message', (data) => {
+          const serialized = Buffer.from(data as ArrayBuffer).toString();
+          const command = JSON.parse(serialized) as { params: { expression: string } };
+          expression = command.params.expression;
+          const response = { id: 1, result: { result: { value: 'owned' } } };
+          const message = JSON.stringify(response);
+          socket.send(message);
+        });
+      },
+    );
+    servers.push(fake);
+    const url = `ws://${fake.host}:${fake.port}/devtools/page/id`;
+    const signal = AbortSignal.timeout(2000);
+    const result = readAndDeletePageChallenge(url, propertyName, signal);
+    await expect(result).resolves.toBe('owned');
+    if (expression === undefined) throw new Error('Expected a challenge expression');
+    expect(expression).not.toMatch(/<\/script|[\u2028\u2029]/iu);
+    const observed = runInNewContext(expression, sandbox) as unknown;
+    expect(observed).toBe('owned');
+    const remains = Object.hasOwn(sandbox, propertyName);
+    expect(remains).toBe(false);
+    expect(sandbox.unrelated).toBe('retained');
+    expect(sandbox.injected).toBe(false);
+  });
   const failures: Array<[string, string]> = [
     ['{', 'challenge response is invalid'],
     ['{"id":1,"error":{"message":"private upstream details"}}', 'rejected the ownership challenge'],

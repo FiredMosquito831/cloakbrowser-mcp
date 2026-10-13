@@ -7,7 +7,7 @@ const uRL = new URL('../fixtures/tls/localhost-cert.pem', import.meta.url);
 export const tlsCertPath = fileURLToPath(uRL);
 const uRL2 = new URL('../fixtures/tls/localhost-key.pem', import.meta.url);
 export const tlsKeyPath = fileURLToPath(uRL2);
-const tlsCertificate = readFileSync(tlsCertPath);
+export const tlsCertificate = readFileSync(tlsCertPath);
 export const tlsConfig = {
   cert: tlsCertPath,
   key: tlsKeyPath,

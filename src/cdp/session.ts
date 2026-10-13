@@ -1,5 +1,6 @@
 import type { CdpHttpProxy } from '#src/cdp/httpProxy';
 import { generateCdpCapability } from '#src/cdp/capability';
+import { serializeJavaScriptString } from '#src/cdp/script';
 import type {
   ChromiumCdpClient,
   ManagedCdpReadyGeneration,
@@ -521,10 +522,14 @@ function assertBootstrapToolSucceeded(result: unknown, name: string): void {
   }
 }
 function createChallengePlacementFunction(propertyName: string, value: string, timeoutMs: number): string {
-  return `() => { globalThis[${JSON.stringify(propertyName)}] = ${JSON.stringify(value)}; const propertyName = ${JSON.stringify(propertyName)}; setTimeout(() => { Reflect.deleteProperty(globalThis, propertyName); }, ${String(timeoutMs)}); }`;
+  const propertyLiteral = serializeJavaScriptString(propertyName);
+  const valueLiteral = serializeJavaScriptString(value);
+  const timeoutLiteral = String(timeoutMs);
+  return `() => { globalThis[${propertyLiteral}] = ${valueLiteral}; const propertyName = ${propertyLiteral}; setTimeout(() => { Reflect.deleteProperty(globalThis, propertyName); }, ${timeoutLiteral}); }`;
 }
 function createChallengeDeletionFunction(propertyName: string): string {
-  return `() => { delete globalThis[${JSON.stringify(propertyName)}]; }`;
+  const propertyLiteral = serializeJavaScriptString(propertyName);
+  return `() => { delete globalThis[${propertyLiteral}]; }`;
 }
 export function createManagedCdpChallenge(): {
   propertyName: string;

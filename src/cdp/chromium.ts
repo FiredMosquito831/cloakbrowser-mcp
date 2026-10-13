@@ -1,4 +1,5 @@
 import { systemErrorCodes } from '#src/runtime/systemErrorCodes';
+import { serializeJavaScriptString } from '#src/cdp/script';
 import { request as createHttpRequest } from 'node:http';
 import { createServer, type Server } from 'node:net';
 import { WebSocket } from 'ws';
@@ -143,7 +144,8 @@ export async function readAndDeletePageChallenge(
       return finish(error2);
     };
     socket.once('open', () => {
-      const expression = `(() => { const propertyName = ${JSON.stringify(propertyName)}; const value = globalThis[propertyName]; delete globalThis[propertyName]; return value; })()`;
+      const propertyLiteral = serializeJavaScriptString(propertyName);
+      const expression = `(() => { const propertyName = ${propertyLiteral}; const value = globalThis[propertyName]; delete globalThis[propertyName]; return value; })()`;
       const stringifyOptions = {
         id: 1,
         method: 'Runtime.evaluate',
