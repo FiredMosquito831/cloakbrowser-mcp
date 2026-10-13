@@ -50,19 +50,28 @@ export async function prepareOfficialExtension(runtime: FreeBrowserRuntime): Pro
   const checkout = path.join(runtime.root, 'playwright');
   await mkdir(checkout);
   const init = ['init', '--quiet'];
-  await runTool(runtime, 'git', init, checkout);
+  await runTool(runtime, 'git', init, checkout, 'initialize official checkout');
   const fetch = ['fetch', '--quiet', '--depth=1', source, commit];
-  await runTool(runtime, 'git', fetch, checkout);
+  await runTool(runtime, 'git', fetch, checkout, 'fetch pinned official source');
   const detach = ['checkout', '--quiet', '--detach', 'FETCH_HEAD'];
-  await runTool(runtime, 'git', detach, checkout);
+  await runTool(runtime, 'git', detach, checkout, 'checkout pinned official source');
   const npm = process.env.npm_execpath;
   if (!npm) throw new Error('Run extension E2E through npm to provide npm_execpath');
-  const install = [npm, 'ci', '--ignore-scripts', '--no-audit', '--no-fund'];
-  await runTool(runtime, process.execPath, install, checkout);
+  const install = [
+    npm,
+    'ci',
+    '--ignore-scripts',
+    '--no-audit',
+    '--no-fund',
+    '--workspaces=false',
+    '--prefer-offline',
+    '--loglevel=verbose',
+  ];
+  await runTool(runtime, process.execPath, install, checkout, 'install official build dependencies');
   const packageDirectory = path.join(checkout, 'packages', 'extension');
   const vite = path.join(checkout, 'node_modules', 'vite', 'bin', 'vite.js');
   const build = [vite, 'build', '--clearScreen=false'];
-  await runTool(runtime, process.execPath, build, packageDirectory);
+  await runTool(runtime, process.execPath, build, packageDirectory, 'build official extension');
   const directory = path.join(packageDirectory, 'dist');
   const manifestPath = path.join(directory, 'manifest.json');
   const text = await readFile(manifestPath, 'utf8');
@@ -84,7 +93,9 @@ async function runTool(
   command: string,
   args: string[],
   cwd: string,
+  step: string,
 ): Promise<void> {
+  const started = Date.now();
   const options: SpawnOptions = { cwd, env: runtime.env, stdio: ['ignore', 'pipe', 'pipe'] };
   const child = spawn(command, args, options);
   runtime.ownChild(child);
@@ -106,7 +117,8 @@ async function runTool(
       if (code === 0) resolve();
       else {
         const safe = diagnostics.sanitizeDiagnostic(output);
-        const message = `Extension preparation failed (${command}, exit ${String(code)}, signal ${String(signal)}): ${safe}`;
+        const elapsed = Date.now() - started;
+        const message = `Extension preparation failed (${step}, ${command}, ${elapsed}ms, exit ${String(code)}, signal ${String(signal)}): ${safe}`;
         const error = new Error(message);
         reject(error);
       }
