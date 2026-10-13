@@ -129,7 +129,7 @@ async function withSession(
     const combined = stderr + bytes.toString();
     stderr = combined.slice(-32768);
   });
-  let browserPid: number | undefined;
+  let cleanupObservedBrowserPid: number | undefined;
   let connected = false;
   try {
     try {
@@ -143,6 +143,8 @@ async function withSession(
     }
     await action(client);
   } finally {
+    // This tool may lazily start a replacement browser. Its PID verifies cleanup,
+    // not the identity or survival of the browser that handled a failed action.
     const observation = {
       name: 'browser_run_code_unsafe',
       arguments: {
@@ -159,9 +161,9 @@ async function withSession(
     if (connected) {
       try {
         const result = await client.callTool(observation);
-        if (!result.isError) browserPid = valueOf(result) as number;
+        if (!result.isError) cleanupObservedBrowserPid = valueOf(result) as number;
       } catch {
-        /* A crashed browser may no longer expose public process information. */
+        /* The cleanup observation may fail if no browser can be started or reached. */
       }
     }
     const pid = transport.pid;
@@ -172,11 +174,16 @@ async function withSession(
       /* Failed startup may have no connected upstream. */
     }
     await client.close();
-    const evidence = { bridgePid: pid, browserPid: browserPid ?? null, versions: installedVersions, stderr };
+    const evidence = {
+      bridgePid: pid,
+      cleanupObservedBrowserPid: cleanupObservedBrowserPid ?? null,
+      versions: installedVersions,
+      stderr,
+    };
     const encoded = JSON.stringify(evidence);
     const safe = diagnostics.sanitizeDiagnostic(encoded, secrets);
     await context.annotate(safe, 'cloak:process-diagnostics');
-    const owned = browserPid ? [pid, browserPid] : [pid];
+    const owned = cleanupObservedBrowserPid ? [pid, cleanupObservedBrowserPid] : [pid];
     for (const ownedPid of owned) {
       if (!ownedPid) continue;
       const pollOptions = { timeout: 10000 };

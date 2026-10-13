@@ -25,7 +25,9 @@ import { LOCAL_TOOL_BINARY_INFO, LOCAL_TOOL_BRIDGE_INFO } from '@/bridge/tools.j
 import { profileSeedFileName } from '@/bridge/profile-seed.js';
 import { expectedDependencyVersions } from '@tests/helpers/dependency-versions.js';
 import { verifyHumanizedReads, verifyHumanizedSelections } from '@tests/e2e/humanize-release-scenarios.js';
+import { comparePersistentLifecycle } from '@tests/e2e/persistent-lifecycle-comparison.js';
 const runtimes: FreeBrowserRuntime[] = [];
+const linuxPersistentComparison = process.platform === 'linux';
 const diagnosticsUrl = new URL('../../scripts/lib/test-diagnostics.mjs', import.meta.url);
 const diagnostics = (await import(diagnosticsUrl.href)) as {
   TEXT_LIMIT: number;
@@ -487,6 +489,25 @@ describe('npm package distribution E2E', () => {
     const packAndInstallCurrentPackageResult = packAndInstallCurrentPackage();
     await expectDistributionStdioBridge(packAndInstallCurrentPackageResult);
   });
+  it.runIf(linuxPersistentComparison)(
+    'compares persistent cold launch and reopen through direct Playwright, upstream MCP, and the installed bridge',
+    async (context) => {
+      const command = await packFreePackage();
+      const fixture = await startNpmBrowserFixture();
+      const verifiedFree = await freeBinary;
+      if (!verifiedFree) throw new Error('Missing verified Free browser control');
+      const annotate = async (evidence: unknown) => {
+        const safe = diagnostics.sanitizeDiagnostic(evidence);
+        if (typeof safe !== 'string') throw new Error('Invalid lifecycle comparison diagnostics');
+        await context.annotate(safe, 'cloak:process-diagnostics');
+      };
+      try {
+        await comparePersistentLifecycle(command, fixture.url, context, annotate, verifiedFree);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
   it('keeps navigation alive and exercises every tool through the installed package', async (context) => {
     const command = await packFreePackage();
     const outputDir = command.env.PLAYWRIGHT_MCP_OUTPUT_DIR;
@@ -494,9 +515,11 @@ describe('npm package distribution E2E', () => {
     const filename = path.join(outputDir, 'find-results.md');
     const dirnameResult = path.dirname(outputDir);
     const upstreamCli = path.join(dirnameResult, 'node_modules', '@playwright', 'mcp', 'cli.js');
+    const profile = path.join(dirnameResult, 'browser-profile');
     const env: Record<string, string> = {
       ...command.env,
       PLAYWRIGHT_MCP_BROWSER_ENGINE: 'cloak',
+      PLAYWRIGHT_MCP_USER_DATA_DIR: profile,
       CLOAKBROWSER_AUTO_UPDATE: 'false',
       CLOAK_PLAYWRIGHT_MCP_CONSOLE_FALLBACK: 'true',
       DEBUG: 'pw:browser',
@@ -531,14 +554,16 @@ describe('npm package distribution E2E', () => {
     const visited = new Set<string>();
     let bridgePid: number | null = null;
     const browserPids: number[] = [];
-    const call = async (name: string, args: Record<string, unknown> = {}) => {
+    let callNumber = 0;
+    const call = async (name: string, args: Record<string, unknown> = {}, phase = 'tool-scenario') => {
+      callNumber += 1;
       visited.add(name);
       const callToolOptions = { name, arguments: args } as const;
       const result = await client.callTool(callToolOptions);
       if (result.isError) {
         const serialized = JSON.stringify(result);
         const exits = serialized.match(/exitCode=\d+/gu) ?? [];
-        const message = `${name}: ${exits.join(', ')}\n${serialized.replaceAll('\\n', '\n')}\n${stderr}`;
+        const message = `${name} (call ${callNumber}, phase ${phase}): ${exits.join(', ')}\n${serialized.replaceAll('\\n', '\n')}\n${stderr}`;
         throw new Error(message);
       }
       return JSON.stringify(result);
@@ -810,10 +835,10 @@ describe('npm package distribution E2E', () => {
       expect(bridgeResult.structuredContent).toMatchObject(expectedBridge);
       await call('browser_close');
       const listTabs = { action: 'list' } as const;
-      const closed = await call('browser_tabs', listTabs);
+      const closed = await call('browser_tabs', listTabs, 'reopen-after-browser-close');
       expect(closed).toContain('about:blank');
       expect(closed).not.toContain(fixture.url);
-      await call('browser_navigate', callOptions);
+      await call('browser_navigate', callOptions, 'navigate-after-browser-reopen');
       const recovered = await call('browser_snapshot');
       expect(recovered).toContain(fixture.url);
       expect(recovered).toContain('Release marker');
