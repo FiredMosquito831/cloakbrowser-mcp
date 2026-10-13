@@ -4,15 +4,111 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { expect, it, vi } from 'vitest';
 
-// Keep this count-boundary test independent of filesystem sync latency.
+// Exercise the full count-boundary flow without creating 30000 native files.
+// Real filesystem safety, atomic publication and cleanup have separate integration tests.
 vi.mock('node:fs/promises', async (importOriginal) => {
   const original = await importOriginal<typeof import('node:fs/promises')>();
+  const files = new Map<string, Buffer>();
+  const source = new URL(import.meta.url);
+  const metadata = await original.stat(source);
+  const fileStat = (filename: string) => {
+    const bytes = files.get(filename);
+    if (!bytes) throw new Error('Missing virtual evidence');
+    return { ...metadata, size: bytes.length, isFile: () => true, isSymbolicLink: () => false };
+  };
+  const removeFiles = (directory: string) => {
+    const prefix = directory + path.sep;
+    for (const filename of files.keys()) {
+      if (filename === directory || filename.startsWith(prefix)) files.delete(filename);
+    }
+  };
   return {
     ...original,
     open: async (...args: Parameters<typeof original.open>) => {
-      const handle = await original.open(...args);
-      handle.sync = async () => undefined;
-      return handle;
+      const filename = String(args[0]);
+      if (args[1] === 'wx') {
+        if (files.has(filename)) {
+          const error = new Error('Already exists');
+          const fields = { code: 'EEXIST' };
+          Object.assign(error, fields);
+          throw error;
+        }
+        const empty = Buffer.alloc(0);
+        files.set(filename, empty);
+      } else if (!files.has(filename)) return original.open(...args);
+      const handle = {
+        writeFile: async (data: string | Buffer) => {
+          const bytes = Buffer.from(data);
+          files.set(filename, bytes);
+        },
+        stat: async () => fileStat(filename),
+        read: async (buffer: Buffer, offset: number, length: number, position: number) => {
+          const bytes = files.get(filename);
+          if (!bytes) throw new Error('Missing virtual evidence');
+          const end = position + length;
+          const bytesRead = bytes.copy(buffer, offset, position, end);
+          return { bytesRead, buffer };
+        },
+        sync: async () => undefined,
+        close: async () => undefined,
+      };
+      return handle as unknown as Awaited<ReturnType<typeof original.open>>;
+    },
+    lstat: async (...args: Parameters<typeof original.lstat>) => {
+      const filename = String(args[0]);
+      if (!files.has(filename)) return original.lstat(...args);
+      return fileStat(filename);
+    },
+    realpath: async (...args: Parameters<typeof original.realpath>) => {
+      const filename = String(args[0]);
+      if (!files.has(filename)) return original.realpath(...args);
+      return filename;
+    },
+    readFile: async (...args: Parameters<typeof original.readFile>) => {
+      if (typeof args[0] !== 'string') return original.readFile(...args);
+      const filename = args[0];
+      const bytes = files.get(filename);
+      if (!bytes) return original.readFile(...args);
+      return args[1] === 'utf8' ? bytes.toString('utf8') : Buffer.from(bytes);
+    },
+    writeFile: async (...args: Parameters<typeof original.writeFile>) => {
+      if (typeof args[0] !== 'string' || typeof args[1] !== 'string') return original.writeFile(...args);
+      const filename = args[0];
+      if (!files.has(filename)) return original.writeFile(...args);
+      const bytes = Buffer.from(args[1]);
+      files.set(filename, bytes);
+    },
+    readdir: async (...args: Parameters<typeof original.readdir>) => {
+      const directory = String(args[0]);
+      const options = args[1];
+      if (typeof options === 'object' && options?.withFileTypes) return original.readdir(...args);
+      const entries = await original.readdir(directory);
+      for (const filename of files.keys()) {
+        const parent = path.dirname(filename);
+        if (parent === directory) {
+          const name = path.basename(filename);
+          entries.push(name);
+        }
+      }
+      return entries;
+    },
+    rename: async (...args: Parameters<typeof original.rename>) => {
+      await original.rename(...args);
+      const source = String(args[0]);
+      const destination = String(args[1]);
+      const prefix = source + path.sep;
+      for (const [filename, bytes] of [...files]) {
+        if (!filename.startsWith(prefix)) continue;
+        const suffix = filename.slice(source.length);
+        const target = destination + suffix;
+        files.set(target, bytes);
+        files.delete(filename);
+      }
+    },
+    rm: async (...args: Parameters<typeof original.rm>) => {
+      await original.rm(...args);
+      const directory = String(args[0]);
+      removeFiles(directory);
     },
   };
 });
