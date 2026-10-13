@@ -85,7 +85,7 @@ flags. This evidence helps distinguish browser behavior from bridge behavior.
 The current license-free macOS binary, Chromium 145.0.7632.109.2, has an
 [upstream locale defect](https://github.com/CloakHQ/CloakBrowser/discussions/376).
 The comparison also records the documented `--accept-lang` workaround. Full
-locale assertions remain required while this limitation is investigated.
+locale assertions remain required until an unlicensed macOS binary supports them.
 
 Partial reruns reuse unchanged jobs and select the latest evidence of each rerun
 job within the same CI run. Missing, failed or corrupt latest evidence never
