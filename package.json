@@ -71,7 +71,7 @@
     "docs:compatibility:check": "node scripts/generate-version-compatibility.mjs --check",
     "docs:serve": ".venv-docs/bin/mkdocs serve",
     "docs:metadata:check": ".venv-docs/bin/python -m unittest discover -s tests/docs",
-    "docs:build": "npm run docs:metadata:check && .venv-docs/bin/mkdocs build --strict",
+    "docs:build": "npm run docs:metadata:check && npm run docs:build:site",
     "docs:seo:validate": "node scripts/validate-docs-seo.mjs",
     "version:apply": "node scripts/apply-release-version.mjs",
     "server:validate": "node scripts/validate-server-json.mjs",
@@ -86,7 +86,7 @@
     "upstream:check": "npm run upstream:check:playwright && npm run upstream:check:cloakbrowser",
     "upstream:check:playwright": "node scripts/check-playwright-mcp-updates.mjs",
     "upstream:check:cloakbrowser": "node scripts/check-cloakbrowser-updates.mjs",
-    "check": "npm run typecheck && npm run lint && npm run format:check && npm run docs:compatibility:check && npm run docs:translations:check && npm run server:validate && npm run build && npm test && npm run test:e2e:run",
+    "check": "npm run check:static && npm run build && npm test && npm run test:e2e:run",
     "check:ci": "npm run check && npm run audit:prod && npm run test:coverage",
     "docs:translations": "node scripts/update-doc-translations.mjs",
     "docs:translations:check": "node scripts/update-doc-translations.mjs --check",
@@ -94,7 +94,10 @@
     "test:report:generate": "node scripts/test-report.mjs generate",
     "test:report:open": "node scripts/test-report.mjs open",
     "test:report:merge": "node scripts/test-report.mjs merge",
-    "test:report:probe": "node scripts/test-report.mjs probe"
+    "test:report:probe": "node scripts/test-report.mjs probe",
+    "check:static": "npm run typecheck && npm run lint && npm run format:check && npm run docs:compatibility:check && npm run docs:translations:check && npm run server:validate",
+    "package:pack": "npm run build && npm run server:validate && node scripts/verify-npm-package.mjs --pack-only",
+    "docs:build:site": ".venv-docs/bin/mkdocs build --strict"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",

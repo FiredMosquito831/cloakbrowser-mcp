@@ -24,7 +24,7 @@ npm run test:integration
 
 इंटीग्रेशन टेस्ट नकली upstream MCP child process का उपयोग करते हैं और सत्यापित करते हैं कि ब्रिज स्थानीय टूल को मिलाता है और upstream कॉल को बिना बदले आगे भेजता है।
 
-`npm run check` में यूनिट, इंटीग्रेशन और पैकेज्ड CLI जांचें हैं। CLI सूट बिल्ड किए गए `dist/cli.js` को नकली upstream MCP के साथ चलाता है; Chromium शुरू नहीं करता। CI Node.js 22 और 24-26 पर Linux x64, Linux arm64, macOS arm64, macOS x64 और Windows x64 में ये जांचें तथा पैकेज सत्यापन करता है।
+`npm run check` में स्थिर जाँच, unit/integration परीक्षण और नकली upstream MCP के साथ पैक किए गए CLI के परीक्षण शामिल हैं; Chromium नहीं चलता। PR CI हर प्लेटफ़ॉर्म/Node.js संयोजन पर unit/integration और CLI परीक्षण एक बार चलाता है: Linux x64/arm64, macOS x64/arm64 और Windows x64 पर Node.js 22 तथा 24-26। Linux x64 इसी परीक्षण रन में Codecov के लिए कवरेज एकत्र करता है। स्थिर जाँच और पैकेज सत्यापन Linux x64/Node.js 22 पर एक बार होते हैं।
 
 ## वास्तविक ब्राउज़र और वितरण परीक्षण
 
@@ -41,9 +41,9 @@ npm run test:e2e:cdp:docker
 
 `test:e2e:npm-package` पैकेज बनाकर अस्थायी प्रोजेक्ट में इंस्टॉल करता है। फॉरवर्डिंग अनुबंध जांच नकली upstream उपयोग करती है; ब्राउज़र परिदृश्य वास्तविक CloakBrowser और स्थानीय पेजों से मानक टूल, स्थायी स्थिति तथा दोनों humanization presets जांचते हैं। अलग परीक्षण खाली कैश में समानांतर डाउनलोड तथा stdout में अतिरिक्त पाठ न होने की जांच करता है। केवल पैकेज सत्यापन ब्राउज़र स्वीकृति नहीं है।
 
-अनिवार्य browser CI मैट्रिक्स ऊपर के पांच प्लेटफ़ॉर्म पर Node.js 26 में CLI और console जांचता है। प्रबंधित CDP उसी मैट्रिक्स के साथ Linux x64 पर Node.js 22 भी जांचता है। Docker वितरण तथा प्रबंधित CDP स्वीकृति `linux/amd64` और `linux/arm64` दोनों पर चलती है।
+PR ब्राउज़र मैट्रिक्स उन्हीं पाँच प्लेटफ़ॉर्म पर Node.js 26 के साथ Playwright कंसोल और प्रबंधित CDP जाँचता है; CDP को Linux x64/Node.js 22 पर भी जाँचा जाता है। समानांतर Node.js 24 मैट्रिक्स पाँचों प्लेटफ़ॉर्म पर npm पैकेज, proxy/GeoIP, एक्सटेंशन और जीवनचक्र परीक्षण चलाता है, जिसमें मानव-सदृश व्यवहार के दोनों प्रीसेट शामिल हैं। Docker वितरण और CDP स्वीकृति `linux/amd64` तथा `linux/arm64` पर दोनों इंजनों को जाँचते हैं।
 
-अलग Functional test reporting workflow npm-package, proxy/GeoIP, extensions और lifecycle सूट हर सप्ताह या मैनुअल अनुरोध पर चलाता है। यह उन्हीं पांच प्लेटफ़ॉर्म पर Node.js 24 उपयोग करता है। पूर्ण npm humanization सूट इस भारी workflow का भाग है।
+`required-ci` मर्ज से पहले सभी परीक्षण समूह और पूर्ण संयुक्त रिपोर्ट की सफलता आवश्यक बनाता है। यही `CI` वर्कफ़्लो साप्ताहिक और मैनुअल रूप से भी चलता है। `Release` परीक्षण की गई कोड रिविज़न से आर्टिफ़ैक्ट बनाकर प्रकाशित करता है।
 
 ## परीक्षण रिपोर्ट
 
@@ -69,6 +69,8 @@ npm run package:verify
 
 पैकेज सत्यापन प्रकाशित MCP server schema के विरुद्ध `server.json` को भी validate करता है।
 
+रिलीज़ तैयार करने में `npm run package:pack` आर्काइव बनाता है और उसके मेटाडेटा तथा फ़ाइल सूची का सत्यापन करता है। पैकेज इंस्टॉलेशन और CLI निष्पादन मर्ज से पहले `package:verify` द्वारा सत्यापित होते हैं।
+
 ## Docker smoke टेस्ट
 
 ```bash
@@ -87,7 +89,7 @@ npm run bridge:compare -- cloakbrowser-mcp:dev --report bridge-parity-report.jso
 
 Parity script आधिकारिक Playwright MCP Docker इमेज और CloakBrowser bridge इमेज शुरू करता है, upstream tool names की तुलना करता है, एक ही fixture page पर default browser tool surface चलाता है और स्थानीय Cloak introspection tools सत्यापित करता है।
 
-CI Docker builds और releases के लिए JSON parity रिपोर्ट आर्टिफैक्ट में अपलोड करता है। Browser parity `linux/amd64` पर चलती है; दोनों आर्किटेक्चर smoke, vulnerability, वितरण और प्रबंधित CDP जांचें भी चलाते हैं। Parity पिन की गई Docker MCP संस्करण जांचती है, अलग npm MCP संस्करण की स्वीकृति साबित नहीं करती।
+CI Docker jobs से समानता की JSON रिपोर्ट अपलोड करता है। ब्राउज़र समानता की जाँच `linux/amd64` पर चलती है; दोनों आर्किटेक्चर पर बुनियादी जाँच, सुरक्षा कमियों की स्कैनिंग, वितरण और CDP परीक्षण चलते हैं। समानता की जाँच पिन किए गए Docker MCP संस्करण को कवर करती है; npm परीक्षण समूह npm MCP को अलग से सत्यापित करता है।
 
 ## सुरक्षा जांच
 

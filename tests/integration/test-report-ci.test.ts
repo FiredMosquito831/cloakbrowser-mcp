@@ -83,12 +83,12 @@ async function producer(input: string, id: string, status: string, environment?:
   return path.join(artifact, 'run', id);
 }
 describe('CI reporting trust and matrix aggregation', () => {
-  it('keeps quality and coverage executions separate in actual Allure output', async () => {
+  it('keeps independent Node executions separate in actual Allure output', async () => {
     const f = await fixture();
     const expected: string[] = [];
-    for (const job of ['quality', 'coverage']) {
-      const id = `linux-x64-node24-none-pr-${job}-integration`;
-      const environment = { os: 'linux', arch: 'x64', node: '24', browser: 'none', lane: `pr-${job}` };
+    for (const node of ['22', '24']) {
+      const id = `linux-x64-node${node}-none-pr-quality-integration`;
+      const environment = { os: 'linux', arch: 'x64', node, browser: 'none', lane: 'pr-quality' };
       await producer(f.input, id, 'passed', environment);
       expected.push(id);
     }
@@ -196,44 +196,67 @@ describe('CI reporting trust and matrix aggregation', () => {
     expect(html).toContain('<html');
   });
 
-  it('preserves required gates, Codecov and thresholds and keeps periodic work off PRs', async () => {
+  it('requires every PR suite without duplicate coverage, CLI or release test jobs', async () => {
     const ci = await readFile('.github/workflows/ci.yml', 'utf8');
-    const periodic = await readFile('.github/workflows/test-reporting.yml', 'utf8');
+    const release = await readFile('.github/workflows/release.yml', 'utf8');
     const config = await readFile('vitest.config.ts', 'utf8');
-    const jobs = ['npm-audit', 'quality', 'e2e', 'coverage', 'docs', 'docker'];
-    const encoded = JSON.stringify(jobs);
-    const required = ci.slice(ci.indexOf('  required-ci:'));
-    for (const job of jobs) expect(required).toContain(`- ${job}`);
-    expect(required).toContain(
-      "const requiredJobs = ['npm-audit', 'quality', 'e2e', 'coverage', 'docs', 'docker']",
-    );
-    expect(encoded).not.toContain('test-report');
+    const jobs = ['npm-audit', 'quality', 'e2e', 'functional', 'docs', 'docker', 'test-report'];
+    const start = ci.indexOf('  required-ci:');
+    const stop = ci.indexOf('  test-report:', start);
+    const required = ci.slice(start, stop);
+    const dependencyMatch = /needs:\n((?: {6}- [^\n]+\n)+)/u.exec(required);
+    if (!dependencyMatch) throw new Error('Missing required CI dependencies');
+    const declared = dependencyMatch[1]
+      .trim()
+      .split('\n')
+      .map((line) => line.trim().slice(2));
+    expect(declared).toEqual(jobs);
+    const body = /node <<'EOF'\n([\s\S]*?) {10}EOF/u.exec(required)?.[1];
+    if (!body) throw new Error('Missing executable required CI gate');
+    const args = ['-e', body];
+    const entries = jobs.map((job) => [job, { result: 'success' }]);
+    const success = Object.fromEntries(entries);
+    const passing = { env: { ...process.env, NEEDS_JSON: JSON.stringify(success) } };
+    await execute(process.execPath, args, passing);
+    for (const job of jobs) {
+      for (const status of ['failure', 'cancelled', 'skipped', undefined]) {
+        const outcomes = { ...success, [job]: status ? { result: status } : undefined };
+        const options = { env: { ...process.env, NEEDS_JSON: JSON.stringify(outcomes) } };
+        const execution = execute(process.execPath, args, options);
+        const expected = { code: 1 };
+        await expect(execution).rejects.toMatchObject(expected);
+      }
+    }
     expect(ci).toContain('files: ./coverage/lcov.info');
     expect(ci).toContain('token: ${{ secrets.CODECOV_TOKEN }}');
-    for (const threshold of ['lines: 85', 'functions: 85', 'statements: 85', 'branches: 75'])
-      expect(config).toContain(threshold);
-    expect(periodic).toContain('workflow_dispatch:');
-    expect(periodic).toContain('schedule:');
-    expect(periodic).not.toContain('pull_request:');
-    expect(periodic).not.toContain('contents: write');
-    expect(periodic).toContain('retention-days: 14');
-    expect(periodic).toContain('actions: read');
-    for (const [workflow, lane, count] of [
-      [ci, 'pr', 90],
-      [periodic, 'periodic', 26],
-    ] as const) {
-      const platformValue = /^ {2}CLOAK_REPORT_PLATFORMS: '([^']+)'$/m.exec(workflow)?.[1];
-      expect(platformValue).toBeDefined();
-      const platforms = JSON.parse(platformValue ?? '[]') as string[];
-      const nodes = ['22', '24', '25', '26'];
-      const inventory = cli.ciPlan(lane, platforms, nodes);
-      expect(inventory).toHaveLength(count);
-    }
-    expect(ci).toContain('if: always()');
-    expect(ci).not.toContain('continue-on-error: true');
+    const thresholds = ['lines: 85', 'functions: 85', 'statements: 85', 'branches: 75'];
+    for (const threshold of thresholds) expect(config).toContain(threshold);
+    expect(ci).toContain('  functional:');
+    expect(ci).toContain('pull_request:');
+    expect(ci).toContain('schedule:');
+    expect(ci).not.toContain('  coverage:');
     expect(ci).not.toContain('  cdp-e2e:');
+    expect(ci).not.toContain('continue-on-error: true');
+    const cliRuns = ci.match(/run: npm run test:e2e:run\n/gu) ?? [];
+    const packageChecks = ci.match(/run: npm run package:verify\n/gu) ?? [];
+    expect(cliRuns).toHaveLength(1);
+    expect(packageChecks).toHaveLength(1);
+    expect(ci).toContain('if: always()');
     expect(ci).toContain('name: Run managed CDP with both browser engines');
     expect(ci).toContain('CLOAKBROWSER_MCP_CDP_EXPECTED_ARCHITECTURE: ${{ matrix.native-architecture }}');
+    expect(release).not.toMatch(/test:e2e|npm test|audit:prod|audit signatures|package:verify|cdp-runtime/u);
+    expect(release).toContain('npm run package:pack');
+    expect(release).toContain('npm run docs:build:site');
+    const platformValue = /^ {2}CLOAK_REPORT_PLATFORMS: '([^']+)'$/mu.exec(ci)?.[1];
+    if (!platformValue) throw new Error('Missing native CI platforms');
+    const platforms = JSON.parse(platformValue) as string[];
+    const nodes = ['22', '24', '25', '26'];
+    for (const lane of ['pr', 'periodic']) {
+      const inventory = cli.ciPlan(lane, platforms, nodes);
+      expect(inventory).toHaveLength(97);
+      const unique = new Set(inventory);
+      expect(unique.size).toBe(inventory.length);
+    }
   });
   it('merges distinct producers, keeps attachments and reports a failing environment', async () => {
     const f = await fixture();
@@ -353,7 +376,7 @@ describe('CI reporting trust and matrix aggregation', () => {
     const untrusted = { ...save, env };
     await expect(cli.saveCiHistory(untrusted)).rejects.toThrow('untrusted');
   });
-  it('includes every agreed native environment without an extra required browser matrix', () => {
+  it('includes every functional suite and CDP engine in the required native inventory', () => {
     const platforms = [
       'ubuntu-latest',
       'ubuntu-24.04-arm',
@@ -370,6 +393,13 @@ describe('CI reporting trust and matrix aggregation', () => {
       expect(pr.some((id) => id.startsWith(environment) && id.includes('quality-unit'))).toBe(true);
       expect(pr).toContain(`${environment}-node26-mixed-pr-cdp`);
     }
-    expect(pr.some((id) => /proxy-geoip|extensions|lifecycle/.test(id))).toBe(false);
+    for (const environment of ['linux-x64', 'linux-arm64', 'darwin-arm64', 'darwin-x64', 'win32-x64']) {
+      for (const suite of ['npm', 'proxy-geoip', 'extensions', 'lifecycle']) {
+        const expected = `${environment}-node24-cloak-pr-${suite}`;
+        expect(pr).toContain(expected);
+      }
+    }
+    expect(pr).not.toContain('linux-x64-node24-none-pr-coverage-unit');
+    expect(pr).not.toContain('linux-x64-node26-none-pr-cli');
   });
 });

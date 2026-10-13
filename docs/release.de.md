@@ -16,6 +16,8 @@ Der einheitliche `Release`-Workflow löst das Tag einmal auf und übergibt ansch
 Image-Labels, Server-Metadaten, README-Marker und Dokumentationsmarker
 weiter.
 
+Alle Anwendungssuiten, die Abdeckung, Paketinstallation und Prüfung der Abhängigkeitssignaturen laufen vor dem Merge und werden durch `required-ci` verlangt. Der `Release`-Workflow baut und veröffentlicht die getestete Revision mit `package:pack` und `docs:build:site` und validiert Release-Metadaten sowie das Artefaktinventar.
+
 ## Einstellungen für GitHub-Repositorys
 
 Nehmen Sie diese Einstellungen vor der ersten Freigabe vor.
@@ -218,8 +220,8 @@ Das Repository nutzt kostenlose Sicherheitstools:
 | `Dependency Review` | GitHub Dependency Review | pull request | Kein externes Konto und kein Token erforderlich. |
 | `OpenSSF Scorecard` | OpenSSF Scorecard | push, wöchentlich, manuell | Aktivieren Sie Code-Scanning, um SARIF-Ergebnisse anzuzeigen. |
 | `Zizmor` | zizmor | Änderungen an Arbeitsabläufen, manuell | Kein externes Konto und kein Token erforderlich. |
-| `CI` / `Release` | Trivy | Docker-Build und -Veröffentlichung. | Aktivieren Sie Code-Scanning, um SARIF-Ergebnisse anzuzeigen. |
-| `CI` / npm release | `npm audit --omit=dev --audit-level=high` | PR-CI und npm-Veröffentlichungsjob. | Kein externes Konto und kein Token erforderlich. |
+| `CI` | Trivy | Docker-Build im PR | Aktivieren Sie Code-Scanning, um SARIF-Ergebnisse anzuzeigen. |
+| `CI` | `npm audit --omit=dev --audit-level=high` | PR CI | Kein externes Konto und kein Token erforderlich. |
 
 Externe GitHub Actions sind auf vollständige Commit-SHAs mit lesbaren Versionskommentaren festgelegt. Behalten Sie diese Festlegungen beim Aktualisieren der Workflows bei.
 

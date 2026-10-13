@@ -3,6 +3,8 @@ name: CI
 on:
   pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * 1'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -12,7 +14,7 @@ permissions:
   contents: read
 
 env:
-  CLOAK_REPORT_LANE: pr
+  CLOAK_REPORT_LANE: ${{ github.event_name == 'schedule' && 'periodic' || 'pr' }}
   CLOAK_REPORT_PLATFORMS: '["ubuntu-latest","ubuntu-24.04-arm","macos-latest","macos-15-intel","windows-latest"]'
   CI_DOCKER_IMAGE: cloakbrowser-mcp:ci
   DOCKER_CACHE_SCOPE: cloakbrowser-mcp-docker
@@ -47,6 +49,8 @@ jobs:
         run: npm install --global npm@${{ env.NPM_VERSION }}
       - run: npm ci --ignore-scripts
       - run: npm run audit:prod
+      - name: Verify dependency signatures before merge
+        run: npm audit signatures
 
   quality:
     name: quality (${{ matrix.os }}, node ${{ matrix.node-version }})
@@ -73,8 +77,38 @@ jobs:
           CLOAK_REPORT_GROUP: quality
           CLOAK_REPORT_SUITE: unit
           CLOAK_REPORT_ENGINE: none
-      - run: npm run check
-      - run: npm run package:verify
+      - name: Static checks
+        if: matrix.os == 'ubuntu-latest' && matrix.node-version == '22'
+        run: npm run check:static
+      - name: Build runtime
+        id: build
+        run: npm run build
+      - name: Unit and integration tests
+        if: matrix.os != 'ubuntu-latest'
+        run: npm test
+      - name: Unit and integration tests with coverage
+        if: matrix.os == 'ubuntu-latest'
+        run: npm run test:coverage
+      - name: Packaged CLI tests
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: npm run test:e2e:run
+      - name: Verify package contents and installation
+        if: matrix.os == 'ubuntu-latest' && matrix.node-version == '22'
+        run: npm run package:verify
+      - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        if: always() && matrix.os == 'ubuntu-latest'
+        with:
+          files: ./coverage/lcov.info
+          flags: vitest,node${{ matrix.node-version }}
+          name: vitest-node${{ matrix.node-version }}
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && matrix.os == 'ubuntu-latest'
+        with:
+          name: coverage-node${{ matrix.node-version }}
+          path: coverage/
+          if-no-files-found: error
       - name: Upload sanitized test evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -140,15 +174,6 @@ jobs:
         id: browser-install
         run: node node_modules/playwright/cli.js install chromium
       - run: npm run build
-      - name: Configure cli reporting
-        if: matrix.node-version == 26
-        run: node scripts/test-report.mjs ci-config
-        env:
-          CLOAK_REPORT_GROUP: cli
-          CLOAK_REPORT_SUITE: cli
-          CLOAK_REPORT_ENGINE: none
-      - run: npm run test:e2e:run
-        if: matrix.node-version == 26
       - name: Configure console reporting
         if: matrix.node-version == 26
         run: node scripts/test-report.mjs ci-config
@@ -179,55 +204,84 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
-  coverage:
-    runs-on: ubuntu-latest
-    needs:
-      - node-versions
-      - quality
+  functional:
+    needs: node-versions
+    name: functional (${{ matrix.os }}, ${{ matrix.suite }}, node 24)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        node-version: ${{ fromJSON(needs.node-versions.outputs.node_versions) }}
+        os: ${{ fromJSON(needs.node-versions.outputs.platforms) }}
+        suite: [npm, proxy-geoip, extensions, lifecycle]
+    env:
+      CLOAKBROWSER_LICENSE_KEY: ''
+      CLOAKBROWSER_AUTO_UPDATE: 'false'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: 24
           cache: npm
-      - name: Use npm ${{ env.NPM_VERSION }}
+      - name: Use pinned npm
         run: npm install --global npm@${{ env.NPM_VERSION }}
       - run: npm ci --ignore-scripts
-      - name: Configure coverage reporting
+      - name: Configure isolated Free cache
+        shell: node {0}
+        run: |
+          const { appendFileSync } = require('node:fs');
+          const { join } = require('node:path');
+          const cache = join(process.env.RUNNER_TEMP, 'free-browser-cache');
+          const entry = `CLOAKBROWSER_CACHE_DIR=${cache}\n`;
+          appendFileSync(process.env.GITHUB_ENV, entry);
+      - name: Install native Chromium dependencies
+        if: runner.os == 'Linux'
+        run: node node_modules/playwright/cli.js install-deps chromium
+      - name: Install only Free Chromium into isolated cache
+        shell: node {0}
+        run: |
+          (async () => {
+            const { binaryInfo, ensureBinary } = await import('cloakbrowser');
+            const info = binaryInfo();
+            if (info.tier !== 'free') throw new Error('Expected license-free Chromium');
+            await ensureBinary(undefined, info.version);
+          })().catch((error) => { process.stderr.write(error.message + '\n'); process.exitCode = 1; });
+      - run: npm run build
+      - name: Configure functional reporting
         run: node scripts/test-report.mjs ci-config
         env:
-          CLOAK_REPORT_GROUP: coverage
-          CLOAK_REPORT_SUITE: unit
-          CLOAK_REPORT_ENGINE: none
-      - run: npm run test:coverage
-      - name: Upload sanitized test evidence
+          CLOAK_REPORT_GROUP: ${{ matrix.suite }}
+          CLOAK_REPORT_SUITE: ${{ matrix.suite }}
+          CLOAK_REPORT_ENGINE: cloak
+      - name: Run real browser suite with Linux display
+        if: runner.os == 'Linux'
+        env:
+          REPORT_FILE: ${{ matrix.suite == 'npm' && 'npm-package.manual.ts' || matrix.suite == 'lifecycle' && 'browser-lifecycle.manual.ts' || format('{0}.manual.ts', matrix.suite) }}
+        run: xvfb-run -a node node_modules/vitest/vitest.mjs run --config vitest.distribution-e2e.config.mjs "tests/e2e/$REPORT_FILE"
+      - name: Run real browser suite on native desktop
+        if: runner.os != 'Linux'
+        env:
+          REPORT_FILE: ${{ matrix.suite == 'npm' && 'npm-package.manual.ts' || matrix.suite == 'lifecycle' && 'browser-lifecycle.manual.ts' || format('{0}.manual.ts', matrix.suite) }}
+        shell: node {0}
+        run: |
+          const { spawnSync } = require('node:child_process');
+          const file = `tests/e2e/${process.env.REPORT_FILE}`;
+          const args = ['node_modules/vitest/vitest.mjs', 'run', '--config', 'vitest.distribution-e2e.config.mjs', file];
+          const result = spawnSync(process.execPath, args, { stdio: 'inherit' });
+          if (result.error) throw result.error;
+          process.exitCode = result.status ?? 1;
+      - name: Upload sanitized functional evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: test-results-coverage-node${{ matrix.node-version }}
+          name: test-results-functional-${{ matrix.os }}-${{ matrix.suite }}
           path: ${{ env.CLOAK_REPORT_ROOT }}
           retention-days: 14
-          if-no-files-found: error
-      - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
-        with:
-          files: ./coverage/lcov.info
-          flags: vitest,node${{ matrix.node-version }}
-          name: vitest-node${{ matrix.node-version }}
-          fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: coverage-node${{ matrix.node-version }}
-          path: coverage/
           if-no-files-found: error
 
   docs:
     runs-on: ubuntu-latest
-    needs: quality
+    needs: node-versions
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -256,7 +310,7 @@ jobs:
   docker:
     name: docker (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
-    needs: quality
+    needs: node-versions
     timeout-minutes: 60
     permissions:
       contents: read
@@ -402,9 +456,10 @@ jobs:
       - npm-audit
       - quality
       - e2e
-      - coverage
+      - functional
       - docs
       - docker
+      - test-report
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -413,7 +468,7 @@ jobs:
           NEEDS_JSON: ${{ toJSON(needs) }}
         run: |
           node <<'EOF'
-          const requiredJobs = ['npm-audit', 'quality', 'e2e', 'coverage', 'docs', 'docker'];
+          const requiredJobs = ['npm-audit', 'quality', 'e2e', 'functional', 'docs', 'docker', 'test-report'];
           const needs = JSON.parse(process.env.NEEDS_JSON);
           const failedJobs = requiredJobs
             .filter((jobName) => needs[jobName]?.result !== 'success')
@@ -428,10 +483,16 @@ jobs:
   test-report:
     name: Combined test report
     if: ${{ always() }}
-    needs: [node-versions, quality, e2e, coverage, docker]
+    needs: [node-versions, quality, e2e, functional, docker]
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
     env:
+      CLOAK_REPORT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      CLOAK_REPORT_HISTORY_INPUT: artifacts/ci-previous-history
+      CLOAK_REPORT_HISTORY_OUTPUT: artifacts/ci-next-history
       CLOAK_REPORT_INPUT: artifacts/ci-report-download
       CLOAK_REPORT_OUTPUT: artifacts/ci-combined-report
     steps:
@@ -449,6 +510,20 @@ jobs:
           pattern: test-results-*
           path: ${{ env.CLOAK_REPORT_INPUT }}
           merge-multiple: false
+      - name: Find matching trusted launch history
+        id: history
+        if: always()
+        run: node scripts/test-report.mjs ci-history
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Download matching trusted history
+        if: always() && steps.history.outputs.run-id != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ steps.history.outputs.name }}
+          run-id: ${{ steps.history.outputs.run-id }}
+          github-token: ${{ github.token }}
+          path: ${{ env.CLOAK_REPORT_HISTORY_INPUT }}
       - name: Validate, merge and generate report
         id: report
         if: always()
@@ -459,6 +534,18 @@ jobs:
         with:
           name: combined-test-report
           path: ${{ env.CLOAK_REPORT_OUTPUT }}
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Save successful default-branch history
+        if: always() && steps.report.outcome == 'success' && steps.history.outputs.name != ''
+        run: node scripts/test-report.mjs ci-history-save
+      - name: Upload trusted launch history
+        if: always() && steps.report.outcome == 'success' && steps.history.outputs.name != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.history.outputs.name }}
+          path: ${{ env.CLOAK_REPORT_HISTORY_OUTPUT }}
           retention-days: 14
           if-no-files-found: error
 

@@ -24,7 +24,7 @@ npm run test:integration
 
 集成测试使用假的 upstream MCP 子进程，并验证桥接层会合并本地工具，同时原样转发 upstream 调用。
 
-`npm run check` 包含单元、集成和打包 CLI 检查。CLI 测试使用构建后的 `dist/cli.js` 和模拟的上游 MCP，不启动 Chromium。CI 在 Node.js 22 和 24-26 上执行这些检查和包验证，覆盖 Linux x64、Linux arm64、macOS arm64、macOS x64 和 Windows x64。
+`npm run check` 包含静态检查、单元/集成测试及使用模拟 upstream MCP 的已打包 CLI 测试，不启动 Chromium。PR CI 对每个平台与 Node.js 组合执行一次单元/集成及 CLI 测试：Linux x64/arm64、macOS x64/arm64 和 Windows x64，配合 Node.js 22 与 24-26。Linux x64 在同一次测试运行中收集覆盖率并上传 Codecov。静态检查和包验证仅在 Linux x64/Node.js 22 上执行一次。
 
 ## 真实浏览器及发行包测试
 
@@ -41,9 +41,9 @@ npm run test:e2e:cdp:docker
 
 `test:e2e:npm-package` 打包并安装到临时项目。转发契约检查使用模拟上游；浏览器场景使用真实 CloakBrowser 和本地页面验证标准工具、持久状态及两种人性化预设。另有测试验证空缓存中的并发下载及 stdout 不含额外文本。仅通过包验证并不代表浏览器验收通过。
 
-必需的浏览器 CI 矩阵在上述五个平台的 Node.js 26 上执行 CLI 和控制台检查。托管 CDP 使用相同矩阵，并额外覆盖 Linux x64 的 Node.js 22。Docker 发行包和托管 CDP 验收覆盖 `linux/amd64` 与 `linux/arm64`。
+PR 浏览器矩阵在相同五个平台上使用 Node.js 26 验证 Playwright 控制台和托管 CDP，并额外在 Linux x64/Node.js 22 上验证 CDP。并行的 Node.js 24 矩阵在五个平台上执行 npm 包、proxy/GeoIP、扩展和生命周期测试，包括两种类人操作预设。Docker 分发和 CDP 验收在 `linux/amd64` 与 `linux/arm64` 上覆盖两种引擎。
 
-独立的 Functional test reporting 工作流每周或手动运行 npm-package、proxy/GeoIP、extensions 和 lifecycle 测试集，在相同五个平台上使用 Node.js 24。完整的 npm 人性化测试集属于这个较重的工作流。
+`required-ci` 要求所有测试套件和完整汇总报告成功后才能合并。同一个 `CI` 工作流也按周和手动运行。`Release` 从已测试的代码版本构建并发布产物。
 
 ## 测试报告
 
@@ -69,6 +69,8 @@ npm run package:verify
 
 包验证还会根据已发布的 MCP server schema 验证 `server.json`。
 
+发布构建使用 `npm run package:pack` 创建压缩包并验证元数据和文件清单。安装和 CLI 执行由合并前的 `package:verify` 验证。
+
 ## Docker smoke 测试
 
 ```bash
@@ -87,7 +89,7 @@ npm run bridge:compare -- cloakbrowser-mcp:dev --report bridge-parity-report.jso
 
 兼容性脚本会启动官方 Playwright MCP Docker 镜像和 CloakBrowser 桥接镜像，比较 upstream 工具名称，在同一个 fixture 页面上执行默认浏览器工具表面，并验证本地 Cloak introspection 工具。
 
-CI 将 JSON 一致性报告作为 Docker 构建和发布任务的产物上传。浏览器一致性检查运行于 `linux/amd64`；两种架构还执行 smoke、漏洞、发行包和托管 CDP 检查。一致性检查验证固定的 Docker MCP 版本，不能证明不同 npm MCP 版本的验收通过。
+CI 从 Docker 作业上传工具一致性 JSON 报告。浏览器一致性测试在 `linux/amd64` 上运行；两种架构都执行基本检查、漏洞扫描、分发和 CDP 测试。一致性检查覆盖固定的 Docker MCP 版本；npm 套件单独验证 npm MCP。
 
 ## 安全检查
 

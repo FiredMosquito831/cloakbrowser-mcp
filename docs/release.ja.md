@@ -16,6 +16,8 @@ tags:
 引数、イメージラベル、サーバーメタデータ、READMEマーカー、およびドキュメント
 マーカーを通じて渡します。
 
+すべてのアプリケーションスイート、カバレッジ、パッケージのインストール、依存関係の署名チェックはマージ前に実行され、`required-ci` で必須となります。`Release` ワークフローは `package:pack` と `docs:build:site` でテスト済みリビジョンをビルドして公開し、リリースのメタデータと成果物のファイル一覧を検証します。
+
 ## GitHub リポジトリの設定
 
 初回リリース前に、これらの設定を行ってください。
@@ -214,8 +216,8 @@ Glamaの必須チェックリスト項目に課金が必要とされる場合、
 | `Dependency Review` | GitHub Dependency Review | pull request | 外部アカウントやトークンは不要です。 |
 | `OpenSSF Scorecard` | OpenSSF Scorecard | push, 毎週, 手動 | コードスキャンを有効にして SARIF 結果を表示します。 |
 | `Zizmor` | zizmor | ワークフローの変更, 手動 | 外部アカウントやトークンは不要です。 |
-| `CI` / `Release` | Trivy | Docker のビルドと公開。 | コードスキャンを有効にして SARIF 結果を表示します。 |
-| `CI` / npm release | `npm audit --omit=dev --audit-level=high` | PR CI と npm 公開ジョブ。 | 外部アカウントやトークンは不要です。 |
+| `CI` | Trivy | PR の Docker ビルド | コードスキャンを有効にして SARIF 結果を表示します。 |
+| `CI` | `npm audit --omit=dev --audit-level=high` | PR CI | 外部アカウントやトークンは不要です。 |
 
 外部 GitHub Actions は、読みやすいバージョンコメントを付けて完全なコミット SHA に固定されています。ワークフローの更新時にも、この固定を維持してください。
 

@@ -155,3 +155,13 @@ CLI use fake upstream; this packet does not claim a new real Chromium run.
 Native macOS/Windows/arm64 and Docker runtime acceptance remains packet 11.
 The Docker base still contains MCP 0.0.82, not npm MCP 0.0.83. No commit, push,
 remote dispatch/polling or publication. Next packet: 13 on a separate invocation.
+
+## Superseding CI amendment (2026-10-13)
+
+The user requires every application suite before merge. The unified `ci.yml` now
+includes the functional matrix on PRs and reuses it for weekly/manual runs.
+The separate `test-reporting.yml`, duplicate coverage executions and duplicate CLI
+runs are removed. Both lanes expect 97 producers. `required-ci` also requires
+functional suites and report aggregation. Release jobs assemble/publish artifacts
+without repeating application test suites. This supersedes the historical
+90-producer inventory and periodic-only functional strategy above.

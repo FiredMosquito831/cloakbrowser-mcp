@@ -8,9 +8,14 @@ executables and local fixture pages:
 - `npm run test:e2e:playwright-console`: console methods across clean sessions.
 - `npm run test:e2e:npm-package`: standard tools, persistent state and humanization.
 
-The required E2E matrix runs CLI, console and managed CDP on Linux x64/arm64,
-macOS Intel/ARM and Windows x64 with Node 26. A Linux Node 22 matrix cell preserves
-managed CDP coverage on the minimum supported Node major. CDP still runs if another
+Required PR quality checks run unit, integration and packaged CLI tests on Linux
+x64/arm64, macOS Intel/ARM and Windows x64 with Node 22/24/25/26. Ubuntu x64
+collects coverage in the same run instead of repeating unit/integration tests.
+The real-browser matrix runs console and managed CDP on all five platforms with
+Node 26. A Linux Node 22 matrix cell preserves managed CDP coverage on the minimum
+supported Node major. A separate parallel functional matrix runs npm tool/state/
+humanization, proxy/GeoIP, extensions and lifecycle suites on all five platforms
+with Node 24. CDP still runs if another
 browser suite fails, provided Chromium installation succeeded. Required CI checks
 the complete matrix; no browser failure is allowed to pass silently.
 
@@ -22,7 +27,7 @@ Console tests pass the installed Playwright executable explicitly, avoiding a
 revision mismatch with upstream MCP's bundled Playwright.
 
 CI uploads sanitized results from each matrix cell. The aggregation job expects
-90 producers, including six managed CDP producers, and generates a combined HTML
+97 producers, including 20 functional and six native managed CDP producers, and generates a combined HTML
 report. Missing producers and failed tests make aggregation fail. Reports are
 available as Actions artifacts. Public PR links require enabled publication,
 a configured reports repository and GitHub App credentials, an eligible current
@@ -30,6 +35,13 @@ open PR, validated producer evidence, and successful Pages verification.
 Same-repository CI calls the reusable publisher; fork PR reports use
 default-branch publication code after CI completes. Publication failures fall
 back to the Actions run.
+
+The same CI workflow runs on PRs, manual dispatch and the weekly schedule.
+`required-ci` requires quality, browser E2E, functional, Docker, documentation,
+dependency audit/signatures and report aggregation to succeed. Release jobs assemble
+and publish artifacts; application test suites run before merge.
+`npm run package:verify` validates installation and CLI behavior before merge;
+`npm run package:pack` only builds and validates the release tarball inventory.
 
 Local reporting commands:
 

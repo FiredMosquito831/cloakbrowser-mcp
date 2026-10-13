@@ -24,7 +24,7 @@ npm run test:integration
 
 Integration tests use a fake upstream MCP child process and verify that the bridge merges local tools and forwards upstream calls unchanged.
 
-`npm run check` includes unit, integration, and packaged CLI checks. The CLI suite runs the built `dist/cli.js` against fake upstream MCP; it does not launch Chromium. CI runs these checks and package verification on Node.js 22 and 24-26 across Linux x64, Linux arm64, macOS arm64, macOS x64, and Windows x64.
+`npm run check` includes static checks, unit/integration tests and packaged CLI tests against fake upstream MCP, without Chromium. PR CI runs unit/integration and CLI tests once per platform/Node combination: Node.js 22 and 24-26 on Linux x64/arm64, macOS x64/arm64 and Windows x64. Linux x64 collects coverage in that same run for Codecov. Static checks and package verification run once on Linux x64/Node.js 22.
 
 ## Real Browser And Distribution Tests
 
@@ -41,9 +41,9 @@ npm run test:e2e:cdp:docker
 
 `test:e2e:npm-package` packs and installs the package into a temporary project. Its forwarding-contract check uses fake upstream; browser scenarios use real CloakBrowser and local pages to check standard tools, persistent state, and both humanization presets. A separate case checks concurrent cold-cache downloads and clean stdout. Package verification alone is not browser acceptance.
 
-The required browser CI matrix runs CLI and console checks on Node.js 26 across the five platforms listed above. Managed CDP uses the same matrix plus Linux x64 on Node.js 22. Docker distribution and managed CDP acceptance run on both `linux/amd64` and `linux/arm64`.
+The PR browser matrix runs Playwright console and managed CDP on Node.js 26 across the same five platforms, plus Linux x64/Node.js 22 for CDP. A parallel Node.js 24 matrix runs npm-package, proxy/GeoIP, extensions and lifecycle suites on all five platforms, including both humanization presets. Docker distribution and CDP acceptance cover both engines on `linux/amd64` and `linux/arm64`.
 
-The separate Functional test reporting workflow runs the npm-package, proxy/GeoIP, extensions, and lifecycle suites weekly and on manual dispatch. It uses Node.js 24 across the same five platforms. The full npm humanization suite is part of this heavier workflow.
+`required-ci` requires every suite and the complete aggregate report before merge. The same `CI` workflow also runs weekly and on manual dispatch. `Release` builds and publishes artifacts from the tested revision.
 
 ## Test Reports
 
@@ -69,6 +69,8 @@ This builds the package, runs `npm pack`, checks the tarball file list, installs
 
 Package verification also validates `server.json` against the published MCP server schema.
 
+Release assembly uses `npm run package:pack` to build the tarball and validate its metadata and file inventory. Installation and CLI execution are verified before merge by `package:verify`.
+
 ## Docker Smoke
 
 ```bash
@@ -87,7 +89,7 @@ npm run bridge:compare -- cloakbrowser-mcp:dev --report bridge-parity-report.jso
 
 The parity script starts the official Playwright MCP Docker image and the CloakBrowser bridge image, compares upstream tool names, exercises the default browser tool surface on one fixture page, and verifies local Cloak introspection tools.
 
-CI uploads the JSON parity report as an artifact for Docker build jobs and release jobs. Browser parity runs on `linux/amd64`; both architectures also run smoke, vulnerability, distribution, and managed CDP checks. Parity validates the pinned Docker MCP version and does not establish acceptance of a different npm MCP version.
+CI uploads the JSON parity report from Docker jobs. Browser parity runs on `linux/amd64`; both architectures run smoke, vulnerability, distribution and CDP checks. Parity covers the pinned Docker MCP version; the npm suite verifies npm MCP acceptance separately.
 
 ## Security Checks
 

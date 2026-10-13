@@ -16,6 +16,8 @@ El flujo de trabajo unificado `Release` resuelve la etiqueta una vez y, a contin
 , las etiquetas de imagen, los metadatos del servidor, los marcadores README y los marcadores de documentación
 .
 
+Todas las suites de la aplicación, la cobertura, la instalación del paquete y la verificación de firmas de dependencias se ejecutan antes de fusionar y son obligatorias mediante `required-ci`. El flujo `Release` construye y publica la revisión probada usando `package:pack` y `docs:build:site`, con validación de metadatos de la versión y archivos del artefacto.
+
 ## Configuración del repositorio de GitHub
 
 Configura estos ajustes antes de la primera publicación.
@@ -219,8 +221,8 @@ El repositorio utiliza herramientas de seguridad gratuitas:
 | `Dependency Review` | GitHub Dependency Review | pull request | No se necesita cuenta externa ni token. |
 | `OpenSSF Scorecard` | OpenSSF Scorecard | push, semanalmente, manualmente | Habilita el análisis de código para ver los resultados SARIF. |
 | `Zizmor` | zizmor | cambios en los flujos de trabajo, manualmente | No se necesita cuenta externa ni token. |
-| `CI` / `Release` | Trivy | Compilación y publicación de Docker. | Habilita el análisis de código para ver los resultados SARIF. |
-| `CI` / npm release | `npm audit --omit=dev --audit-level=high` | CI de PR y trabajo de publicación npm. | No se necesita cuenta externa ni token. |
+| `CI` | Trivy | Construcción de Docker en PR | Habilita el análisis de código para ver los resultados SARIF. |
+| `CI` | `npm audit --omit=dev --audit-level=high` | PR CI | No se necesita cuenta externa ni token. |
 
 Las GitHub Actions externas se fijan mediante SHA completos de commits con comentarios de versión legibles. Conserva esas referencias al actualizar los flujos de trabajo.
 

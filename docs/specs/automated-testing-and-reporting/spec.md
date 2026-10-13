@@ -95,14 +95,20 @@ explains retained overlap, and prioritizes missing scenarios by regression risk.
 Every key area has explicit scenario-to-test traceability under TEST-011. A missing
 key check remains incomplete work; it cannot be moved out of scope by assigning P2.
 
-### TEST-002: Preserve fast and heavy verification boundaries
+### TEST-002: Require all application tests before merge
 
-Fast PR checks retain typecheck, lint, formatting, unit/integration, packaged CLI,
-coverage and Codecov. Existing real-browser/Docker gates remain required as before.
-New heavy npm scenarios run explicitly and in a periodic/manual workflow, without
-adding heavy jobs to the required PR aggregate. All suites emit compatible reports.
-Acceptance: existing job dependencies and thresholds are unchanged; periodic/manual
-execution covers the new browser scenarios; failed tests retain nonzero status.
+User-approved amendment (2026-10-13): all application suites are required PR gates.
+Run unit/integration and packaged CLI across five native platforms and Node
+22/24/25/26. Collect Ubuntu x64 coverage in the main execution, preserving Codecov
+and thresholds. Run console/CDP and npm, proxy/GeoIP, extensions and lifecycle
+suites in parallel native matrices; retain Docker amd64/arm64 acceptance.
+The same workflow supports weekly and manual runs; remove duplicated suite jobs
+and post-release application tests. Release jobs build, validate artifact metadata
+and publish. All suites emit compatible reports.
+Acceptance: required-ci fails for failed, cancelled, skipped or missing mandatory
+jobs, including functional suites and report aggregation; producer inventory
+matches the matrices; failed tests retain nonzero status. Publication itself is
+not a merge requirement, and no branch-protection changes are authorized.
 
 ### TEST-003: Persist and isolate browser state
 
@@ -277,7 +283,7 @@ Deferring a key scenario requires an explicit user scope decision.
 | P0 | Real download bytes | TEST-004 passes against local server |
 | P0 | Complete key browser, tool, transport, CDP, configuration and lifecycle coverage | TEST-011 scenario matrix has observable assertions and reuses existing sufficient checks |
 | P1 | Real proxy routing, expected failure and recovery | TEST-005 passes without external services |
-| P1 | Periodic/manual heavy run and private CI aggregation | TEST-002/009 configured; host verification plus workflow lint |
+| P1 | Required PR browser matrices, weekly/manual reuse and CI aggregation | TEST-002/009 configured; host verification plus workflow lint |
 | P1 | Real extension attachment, failure and supported recovery | TEST-011 extension scenarios pass with a controlled real browser |
 | P1 | GeoIP controlled database/service checks | TEST-011 GeoIP outcomes and failure/fallback behavior are asserted deterministically |
 | P1 | Supported platform, Node and Docker verification | TEST-010/011 have actual environment evidence; unavailable checks remain blockers |

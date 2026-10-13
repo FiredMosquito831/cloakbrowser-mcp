@@ -16,6 +16,8 @@ Le workflow unifié `Release` résout la balise une seule fois, puis transmet le
 les étiquettes d'image, les métadonnées du serveur, les marqueurs README et les marqueurs de documentation.
 >
 
+Toutes les suites de l’application, la couverture, l’installation du paquet et la vérification des signatures des dépendances s’exécutent avant fusion et sont exigées par `required-ci`. Le workflow `Release` construit et publie la révision testée avec `package:pack` et `docs:build:site`, en validant les métadonnées de version et l’inventaire des artefacts.
+
 ## Paramètres du dépôt GitHub
 
 Configurez ces paramètres avant la première mise en production.
@@ -218,8 +220,8 @@ Le référentiel utilise des outils de sécurité libres :
 | `Dependency Review` | GitHub Dependency Review | pull request | Aucun compte externe ni jeton nécessaire. |
 | `OpenSSF Scorecard` | OpenSSF Scorecard | push, chaque semaine, manuellement | Activez l’analyse de code pour afficher les résultats SARIF. |
 | `Zizmor` | zizmor | modifications des flux de travail, manuellement | Aucun compte externe ni jeton nécessaire. |
-| `CI` / `Release` | Trivy | Build et publication Docker. | Activez l’analyse de code pour afficher les résultats SARIF. |
-| `CI` / npm release | `npm audit --omit=dev --audit-level=high` | CI de PR et job de publication npm. | Aucun compte externe ni jeton nécessaire. |
+| `CI` | Trivy | Construction Docker du PR | Activez l’analyse de code pour afficher les résultats SARIF. |
+| `CI` | `npm audit --omit=dev --audit-level=high` | PR CI | Aucun compte externe ni jeton nécessaire. |
 
 Les GitHub Actions externes sont fixées à des SHA de commits complets avec des commentaires de version lisibles. Conservez ces références lors de la mise à jour des workflows.
 

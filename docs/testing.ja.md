@@ -24,7 +24,7 @@ npm run test:integration
 
 統合テストは偽の upstream MCP 子プロセスを使用し、ブリッジがローカルツールを統合し、upstream 呼び出しを変更せずに転送することを検証します。
 
-`npm run check` は単体、統合、パッケージ済み CLI のチェックを含みます。CLI テストはビルド済み `dist/cli.js` を模擬 upstream MCP に対して実行し、Chromium は起動しません。CI は Node.js 22 および 24-26 の Linux x64、Linux arm64、macOS arm64、macOS x64、Windows x64 でこれらのチェックとパッケージ検証を実行します。
+`npm run check` は静的チェック、単体/統合テスト、模擬 upstream MCP を使うパッケージ済み CLI テストを実行し、Chromium は起動しません。PR CI はプラットフォームと Node.js の組み合わせごとに単体/統合と CLI のテストを一度実行します。対象は Linux x64/arm64、macOS x64/arm64、Windows x64 と Node.js 22、24-26 です。Linux x64 では同じテスト実行でカバレッジを収集し Codecov に送信します。静的チェックとパッケージ検証は Linux x64/Node.js 22 で一度実行します。
 
 ## 実ブラウザと配布物のテスト
 
@@ -41,9 +41,9 @@ npm run test:e2e:cdp:docker
 
 `test:e2e:npm-package` はパッケージを作成して一時プロジェクトへインストールします。転送契約のチェックは模擬 upstream を使用し、ブラウザシナリオは実際の CloakBrowser とローカルページで標準ツール、永続状態、両方の人間らしい操作のプリセットを検証します。別のテストでは空のキャッシュへの同時ダウンロードと、stdout に余計なテキストがないことを確認します。パッケージ検証だけではブラウザの受け入れ確認になりません。
 
-必須のブラウザ CI マトリクスは、上記 5 プラットフォームの Node.js 26 で CLI とコンソールをチェックします。管理対象 CDP は同じマトリクスに Linux x64 の Node.js 22 を追加します。Docker 配布物と管理対象 CDP の受け入れ確認は `linux/amd64` と `linux/arm64` で実行します。
+PR のブラウザ行列では、同じ五つのプラットフォームの Node.js 26 で Playwright コンソールと管理対象 CDP を検証し、CDP は Linux x64/Node.js 22 でも検証します。並列の Node.js 24 行列は五つのプラットフォームで npm パッケージ、proxy/GeoIP、拡張機能、ライフサイクルのスイートを実行し、人間らしい操作の両プリセットを含みます。Docker の配布と CDP の受け入れ検証は `linux/amd64` と `linux/arm64` の両エンジンを対象とします。
 
-別の Functional test reporting ワークフローは、npm-package、proxy/GeoIP、extensions、lifecycle のテストを毎週または手動で実行します。同じ 5 プラットフォームで Node.js 24 を使います。完全な npm 人間らしい操作のテストは、この重いワークフローに含まれます。
+`required-ci` はマージ前にすべてのスイートと完全な集約レポートの成功を要求します。同じ `CI` ワークフローは毎週および手動でも実行できます。`Release` はテスト済みリビジョンから成果物をビルドして公開します。
 
 ## テストレポート
 
@@ -69,6 +69,8 @@ npm run package:verify
 
 パッケージ検証では、公開済み MCP server schema に対して `server.json` も検証します。
 
+リリースの生成には `npm run package:pack` を使い、アーカイブを作成してメタデータとファイル一覧を検証します。インストールと CLI の実行はマージ前の `package:verify` で検証します。
+
 ## Docker smoke テスト
 
 ```bash
@@ -87,7 +89,7 @@ npm run bridge:compare -- cloakbrowser-mcp:dev --report bridge-parity-report.jso
 
 互換性スクリプトは、公式 Playwright MCP Docker イメージと CloakBrowser ブリッジイメージを起動し、upstream ツール名を比較し、同じ fixture ページで既定のブラウザーツール表面を実行し、ローカル Cloak introspection ツールを検証します。
 
-CI は JSON 互換性レポートを Docker ビルドとリリースジョブの成果物としてアップロードします。ブラウザ互換性は `linux/amd64` で実行し、両アーキテクチャで smoke、脆弱性、配布物、管理対象 CDP のチェックも行います。固定された Docker MCP のバージョンを検証するもので、異なる npm MCP の受け入れ確認にはなりません。
+CI は Docker ジョブからツールの同等性を示す JSON レポートをアップロードします。ブラウザの同等性検証は `linux/amd64` で実行し、両アーキテクチャで基本動作、脆弱性、配布、CDP を検証します。同等性検証の対象は固定された Docker MCP バージョンで、npm スイートは npm MCP を別途検証します。
 
 ## セキュリティチェック
 

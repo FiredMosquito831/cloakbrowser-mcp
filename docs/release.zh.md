@@ -16,6 +16,8 @@ tags:
 参数、镜像标签、服务器元数据、README 标记和文档
 标记中。
 
+所有应用测试套件、覆盖率、包安装和依赖签名检查都在合并前运行，并由 `required-ci` 强制要求。`Release` 工作流通过 `package:pack` 和 `docs:build:site` 构建并发布已测试的代码版本，同时验证发布元数据和产物文件清单。
+
 ## GitHub 仓库设置
 
 请在首次发布之前配置这些设置。
@@ -212,8 +214,8 @@ Glama 目录评分与 GitHub 发布以及官方 MCP
 | `Dependency Review` | GitHub Dependency Review | pull request | 无需外部账户或令牌。 |
 | `OpenSSF Scorecard` | OpenSSF Scorecard | push, 每周, 手动 | 启用代码扫描以查看 SARIF 结果。 |
 | `Zizmor` | zizmor | 工作流变更, 手动 | 无需外部账户或令牌。 |
-| `CI` / `Release` | Trivy | Docker 构建与发布。 | 启用代码扫描以查看 SARIF 结果。 |
-| `CI` / npm release | `npm audit --omit=dev --audit-level=high` | PR CI 与 npm 发布作业。 | 无需外部账户或令牌。 |
+| `CI` | Trivy | PR Docker 构建 | 启用代码扫描以查看 SARIF 结果。 |
+| `CI` | `npm audit --omit=dev --audit-level=high` | PR CI | 无需外部账户或令牌。 |
 
 外部 GitHub Actions 固定到完整的提交 SHA，并附有可读的版本注释。更新工作流时请保留这些固定引用。
 

@@ -55,25 +55,17 @@ export function ciPlan(lane, platforms, nodes) {
   const levels = ['unit', 'integration', 'e2e'];
   const suites = ['npm', 'proxy-geoip', 'extensions', 'lifecycle'];
   const ids = environments.flatMap((environment) => {
-    if (lane === 'periodic') return suites.map((suite) => `${environment}-node24-cloak-periodic-${suite}`);
     const quality = nodes.flatMap((node) =>
-      levels.map((level) => `${environment}-node${node}-none-pr-quality-${level}`),
+      levels.map((level) => `${environment}-node${node}-none-${lane}-quality-${level}`),
     );
     return [
       ...quality,
-      `${environment}-node26-none-pr-cli`,
-      `${environment}-node26-playwright-pr-console`,
-      `${environment}-node26-mixed-pr-cdp`,
+      ...suites.map((suite) => `${environment}-node24-cloak-${lane}-${suite}`),
+      `${environment}-node26-playwright-${lane}-console`,
+      `${environment}-node26-mixed-${lane}-cdp`,
     ];
   });
-  if (lane === 'pr') {
-    ids.push('linux-x64-node22-mixed-pr-cdp');
-    const coverageLevels = ['unit', 'integration'];
-    const coverage = nodes.flatMap((node) =>
-      coverageLevels.map((level) => `linux-x64-node${node}-none-pr-coverage-${level}`),
-    );
-    ids.push(...coverage);
-  }
+  ids.push(`linux-x64-node22-mixed-${lane}-cdp`);
   for (const arch of ['x64', 'arm64']) {
     ids.push(`linux-${arch}-node22-cloak-${lane}-docker`);
     for (const engine of ['cloak', 'playwright'])
@@ -740,7 +732,7 @@ async function githubJson(endpoint) {
 
 async function findCiHistory(scope) {
   const branch = encodeURIComponent(scope.branch);
-  const endpoint = `repos/${scope.repository}/actions/workflows/test-reporting.yml/runs?branch=${branch}&status=success&per_page=10`;
+  const endpoint = `repos/${scope.repository}/actions/workflows/ci.yml/runs?branch=${branch}&status=success&per_page=10`;
   const data = await githubJson(endpoint);
   if (!Array.isArray(data.workflow_runs)) throw new Error('CI reporting: invalid history API response');
   for (const run of data.workflow_runs) {

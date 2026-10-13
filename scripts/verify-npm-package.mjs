@@ -10,18 +10,20 @@ import { assertPackageFileList, formatBytes, parseNpmPackOutput } from '#scripts
 const root = process.cwd();
 const packageJsonPath = path.join(root, 'package.json');
 const packageJson = readJson(packageJsonPath);
+const packOnly = process.argv.includes('--pack-only');
 const packed = packProject();
 const packageFile = path.resolve(root, packed.filename);
 const mappedValues = packed.files.map((file) => file.path);
 assertPackageFileList(mappedValues);
-verifyInstall(packageFile);
+if (!packOnly) verifyInstall(packageFile);
 const appendGithubOutputOptions = {
   package_file: packed.filename,
   package_name: packed.name,
   package_version: packed.version,
 };
 await appendGithubOutput(appendGithubOutputOptions);
-const message = `verified ${packed.filename}: ${packed.entryCount} files, ${formatBytes(packed.size)} packed, ${formatBytes(packed.unpackedSize)} unpacked\n`;
+const action = packOnly ? 'packed' : 'verified';
+const message = `${action} ${packed.filename}: ${packed.entryCount} files, ${formatBytes(packed.size)} packed, ${formatBytes(packed.unpackedSize)} unpacked\n`;
 process.stderr.write(message);
 function packProject() {
   const values = ['pack', '--json'];

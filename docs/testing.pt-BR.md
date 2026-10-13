@@ -24,7 +24,7 @@ npm run test:integration
 
 Os testes de integração usam um processo filho MCP upstream falso e verificam que a ponte mescla ferramentas locais e encaminha chamadas upstream sem alterações.
 
-`npm run check` inclui testes unitários, de integração e da CLI empacotada. A suite CLI executa o `dist/cli.js` compilado contra fake upstream MCP; ela não inicia Chromium. O CI executa esses testes e a verificação do pacote no Node.js 22 e 24-26 para Linux x64, Linux arm64, macOS arm64, macOS x64 e Windows x64.
+`npm run check` inclui verificações estáticas, testes unitários/de integração e do CLI empacotado com upstream MCP simulado, sem Chromium. Nos PRs, os testes unitários/de integração e do CLI são executados uma vez por combinação de plataforma e Node.js: 22 e 24-26 em Linux x64/arm64, macOS x64/arm64 e Windows x64. Linux x64 coleta a cobertura para Codecov nessa mesma execução. As verificações estáticas e do pacote são executadas uma vez em Linux x64/Node.js 22.
 
 ## Testes com navegador real e distribuições
 
@@ -41,9 +41,9 @@ npm run test:e2e:cdp:docker
 
 `test:e2e:npm-package` empacota e instala o pacote em um projeto temporário. O teste do contrato de encaminhamento usa fake upstream; os cenários de navegador usam CloakBrowser real e páginas locais para verificar ferramentas padrão, estado persistente e ambos os presets de humanização. Outro teste verifica downloads concorrentes em um cache vazio e stdout sem texto adicional. A verificação do pacote, sozinha, não valida o navegador.
 
-A matriz obrigatória de navegadores no CI executa testes de CLI e console no Node.js 26 nas cinco plataformas acima. O CDP gerenciado usa a mesma matriz e Linux x64 com Node.js 22. A aceitação da distribuição Docker e do CDP gerenciado roda em `linux/amd64` e `linux/arm64`.
+A matriz de navegador do PR verifica o console do Playwright e o CDP gerenciado com Node.js 26 nas mesmas cinco plataformas, além de Linux x64/Node.js 22 para CDP. Uma matriz paralela de Node.js 24 executa as suítes do pacote npm, proxy/GeoIP, extensões e ciclo de vida nas cinco plataformas, incluindo ambos os presets de humanização. A aceitação de Docker e CDP cobre ambos os motores em `linux/amd64` e `linux/arm64`.
 
-O workflow separado Functional test reporting executa as suites npm-package, proxy/GeoIP, extensions e lifecycle semanalmente e por acionamento manual. Ele usa Node.js 24 nas mesmas cinco plataformas. A suite npm completa de humanização faz parte desse workflow mais pesado.
+`required-ci` exige o sucesso de todas as suítes e do relatório agregado completo antes do merge. O mesmo workflow `CI` também é executado semanalmente e manualmente. `Release` compila e publica artefatos da revisão testada.
 
 ## Relatórios de testes
 
@@ -69,6 +69,8 @@ Isso compila o pacote, executa `npm pack`, verifica a lista de arquivos do tarba
 
 A verificação do pacote também valida `server.json` contra o esquema publicado de servidor MCP.
 
+A montagem da versão usa `npm run package:pack` para criar o arquivo e validar seus metadados e arquivos incluídos. A instalação e a execução do CLI são verificadas antes do merge por `package:verify`.
+
 ## Smoke test de Docker
 
 ```bash
@@ -87,7 +89,7 @@ npm run bridge:compare -- cloakbrowser-mcp:dev --report bridge-parity-report.jso
 
 O script de paridade inicia a imagem Docker oficial do Playwright MCP e a imagem da ponte CloakBrowser, compara os nomes das ferramentas upstream, exercita a superfície padrão de ferramentas de navegador em uma mesma página fixture e verifica as ferramentas locais de introspecção do Cloak.
 
-O CI envia o relatório JSON de paridade como artefato para builds Docker e releases. A paridade do navegador roda em `linux/amd64`; ambas as arquiteturas também executam smoke tests, verificações de vulnerabilidades, distribuição e CDP gerenciado. A paridade valida a versão Docker MCP fixada e não comprova a aceitação de outra versão npm MCP.
+CI envia o relatório JSON de paridade a partir dos jobs de Docker. A paridade do navegador é verificada em `linux/amd64`; ambas as arquiteturas executam testes básicos, análise de vulnerabilidades, testes de distribuição e CDP. A paridade cobre a versão fixada do Docker MCP; a suíte npm verifica npm MCP separadamente.
 
 ## Verificações de segurança
 
