@@ -1189,6 +1189,7 @@ async function startPackagedBridge(engine: BrowserEngine): Promise<RunningBridge
       PLAYWRIGHT_MCP_HEADLESS: 'true',
       CLOAK_PLAYWRIGHT_MCP_CDP_ENABLED: 'true',
       CLOAK_PLAYWRIGHT_MCP_CDP_PORT_RANGE: String(port),
+      DEBUG: 'pw:browser',
     },
     stderr: 'pipe',
   } as const;
