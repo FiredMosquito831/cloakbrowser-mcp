@@ -2,7 +2,8 @@ import { afterAll, beforeAll, expect, it } from 'vitest';
 import { controlledPng } from '@tests/fixtures/reporting/controlled-png.js';
 
 const scenario = process.env.REPORT_PROBE_CASE || 'complete';
-const canary = process.env.REPORT_PROBE_SECRET || 'synthetic-canary';
+// Use a fixed synthetic value; never log caller-provided environment data.
+const canary = 'reporting-synthetic-canary';
 if (scenario === 'import') throw new Error(`Import failure password=${canary}`);
 if (scenario === 'hook')
   beforeAll(() => {

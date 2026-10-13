@@ -135,50 +135,99 @@ function validateProducerEnvironment(id, result) {
       throw new Error('CI reporting: producer environment does not match expected inventory');
 }
 
-async function stageCiArtifacts(source, run, runId, inventory, secretValues) {
-  const seen = new Set();
+function artifactAttempt(runId, sourceRunId) {
+  const pattern = /^run-([1-9]\d*)-attempt-([1-9]\d*)$/u;
+  const current = pattern.exec(runId);
+  if (!current && sourceRunId === runId) return 0;
+  const source = pattern.exec(sourceRunId);
+  const attempt = Number(source?.[2]);
+  const currentAttempt = Number(current?.[2]);
+  if (
+    !current ||
+    !source ||
+    current[1] !== source[1] ||
+    !Number.isSafeInteger(attempt) ||
+    !Number.isSafeInteger(currentAttempt) ||
+    attempt > currentAttempt
+  )
+    throw new Error('CI reporting: wrong artifact run');
+  return attempt;
+}
+
+async function latestCiArtifacts(source, runId) {
+  const latestArtifacts = new Map();
   const artifacts = await fs.readdir(source, { withFileTypes: true });
   for (const artifact of artifacts) {
     if (!artifact.name.startsWith('test-results-') || !artifact.isDirectory() || artifact.isSymbolicLink())
       throw new Error('CI reporting: unsafe artifact');
     const artifactRoot = path.join(source, artifact.name);
     const entries = await fs.readdir(artifactRoot);
-    if (entries.length !== 1 || entries[0] !== runId) throw new Error('CI reporting: wrong artifact run');
-    const producerRoot = path.join(artifactRoot, runId);
+    if (entries.length !== 1) throw new Error('CI reporting: wrong artifact run');
+    const sourceRunId = entries[0];
+    const attempt = artifactAttempt(runId, sourceRunId);
+    const group = artifact.name.replace(/-attempt-[1-9]\d*$/u, '');
+    const previous = latestArtifacts.get(group);
+    if (previous?.attempt === attempt) throw new Error('CI reporting: duplicate producer attempt');
+    if (!previous || previous.attempt < attempt)
+      latestArtifacts.set(group, { artifactRoot, sourceRunId, attempt });
+  }
+  return latestArtifacts;
+}
+
+async function selectCiArtifacts(source, runId, inventory) {
+  const selected = new Map();
+  const artifacts = await latestCiArtifacts(source, runId);
+  for (const { artifactRoot, sourceRunId, attempt } of artifacts.values()) {
+    const producerRoot = path.join(artifactRoot, sourceRunId);
     await canonicalDirectory(producerRoot);
     const producers = await fs.readdir(producerRoot, { withFileTypes: true });
     for (const producer of producers) {
       const id = checkedId(producer.name);
-      if (!inventory.includes(id) || seen.has(id)) throw new Error('CI reporting: unexpected producer');
+      if (!inventory.includes(id)) throw new Error('CI reporting: unexpected producer');
       if (!producer.isDirectory() || producer.isSymbolicLink())
         throw new Error('CI reporting: unsafe producer');
-      const to = path.join(run, id);
-      const validation = { root: artifactRoot, runId, producerIds: [id], outputDir: to, secretValues };
-      await mergeTestResults(validation);
-      const entries = await fs.readdir(to);
-      const results = entries.filter((entry) => entry.endsWith('-result.json'));
-      for (const filename of results) {
-        const target = path.join(to, filename);
-        const bytes = await fs.readFile(target, 'utf8');
-        const result = JSON.parse(bytes);
-        validateProducerEnvironment(id, result);
-      }
-      const manifest = {
-        version: 1,
-        runId,
-        producerId: id,
-        complete: true,
-        count: results.length,
-        results,
-      };
-      const target = path.join(to, 'producer.json');
-      const encoded = JSON.stringify(manifest);
-      const writeOptions = { flag: 'wx', mode: 0o600 };
-      await fs.writeFile(target, encoded, writeOptions);
-      seen.add(id);
+      const previous = selected.get(id);
+      if (previous?.attempt === attempt) throw new Error('CI reporting: duplicate producer attempt');
+      if (!previous || previous.attempt < attempt) selected.set(id, { artifactRoot, sourceRunId, attempt });
     }
   }
-  return seen;
+  return selected;
+}
+
+async function stageCiArtifacts(source, run, runId, inventory, secretValues) {
+  const selected = await selectCiArtifacts(source, runId, inventory);
+  for (const [id, { artifactRoot, sourceRunId }] of selected) {
+    const to = path.join(run, id);
+    const validation = {
+      root: artifactRoot,
+      runId: sourceRunId,
+      producerIds: [id],
+      outputDir: to,
+      secretValues,
+    };
+    await mergeTestResults(validation);
+    const entries = await fs.readdir(to);
+    const results = entries.filter((entry) => entry.endsWith('-result.json'));
+    for (const filename of results) {
+      const target = path.join(to, filename);
+      const bytes = await fs.readFile(target, 'utf8');
+      const result = JSON.parse(bytes);
+      validateProducerEnvironment(id, result);
+    }
+    const manifest = {
+      version: 1,
+      runId,
+      producerId: id,
+      complete: true,
+      count: results.length,
+      results,
+    };
+    const target = path.join(to, 'producer.json');
+    const encoded = JSON.stringify(manifest);
+    const writeOptions = { flag: 'wx', mode: 0o600 };
+    await fs.writeFile(target, encoded, writeOptions);
+  }
+  return new Set(selected.keys());
 }
 
 async function writeCiSummary(output, missing) {
@@ -524,28 +573,8 @@ export async function mergeReport({ input, output, expected, secretValues = [] }
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
-  const stage = await fs.mkdtemp(path.join(parent, '.aggregate-'));
-  try {
-    const producerId = 'merged';
-    const outputDir = path.join(stage, producerId);
-    const options = { ...source, outputDir, secretValues };
-    await mergeTestResults(options);
-    const entries = await fs.readdir(outputDir);
-    const results = entries.filter((entry) => entry.endsWith('-result.json'));
-    const manifest = { version: 1, runId, producerId, complete: true, count: results.length, results };
-    const manifestPath = path.join(outputDir, 'producer.json');
-    const handle = await fs.open(manifestPath, 'wx', 0o600);
-    try {
-      await handle.writeFile(JSON.stringify(manifest));
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    await fs.rename(stage, target);
-    return target;
-  } finally {
-    await fs.rm(stage, { recursive: true, force: true });
-  }
+  const options = { ...source, outputDir: target, outputRunId: runId, secretValues };
+  return mergeTestResults(options);
 }
 
 /** Validate raw producer manifests and re-redact before the generator reads data. */
@@ -651,10 +680,10 @@ async function probe() {
   await canonicalDirectory(path.dirname(prefix), true);
   const root = await fs.mkdtemp(prefix);
   try {
-    const secret = 'probe-synthetic-canary';
+    const secret = 'reporting-synthetic-canary';
     const config = 'tests/fixtures/reporting/vitest.config.ts';
     for (const scenario of ['pass', 'complete', 'import', 'hook', 'after-hook', 'unhandled']) {
-      const env = { REPORT_PROBE_CASE: scenario, REPORT_PROBE_SECRET: secret };
+      const env = { REPORT_PROBE_CASE: scenario };
       const options = {
         root,
         runId: scenario,

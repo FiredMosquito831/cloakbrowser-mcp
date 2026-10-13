@@ -37,7 +37,7 @@ async function fixture(scenario: string, suite = 'unit') {
   const root = await realpath(temporary);
   roots.push(root);
   const canary = 'reporting-synthetic-canary';
-  const env = { REPORT_PROBE_CASE: scenario, REPORT_PROBE_SECRET: canary };
+  const env = { REPORT_PROBE_CASE: scenario };
   const options = { root, runId: 'fixture', producerId: suite, suite, config, env, secretValues: [canary] };
   const result = await cli.collectReport(options);
   const files = await readdir(result.directory);
@@ -252,36 +252,49 @@ finally { if (process.connected) process.disconnect(); }`;
     expect(html).toContain('<html');
     await expect(cli.generateReport(generation)).rejects.toThrow('already exists');
   });
-  it('keeps operating system variants distinct in real Allure output', async () => {
-    const run = await fixture('pass');
-    const files = await readdir(run.directory);
-    const filename = files.find((name) => name.endsWith('-result.json')) || 'absent';
-    const source = path.join(run.directory, filename);
-    const result = JSON.parse(await readFile(source, 'utf8')) as ReportResult & { uuid: string };
-    result.uuid = randomUUID();
-    result.labels = result.labels.map((label) =>
-      label.name === 'os' ? { ...label, value: 'win32' } : label,
-    );
-    const duplicateName = `${result.uuid}-result.json`;
-    await writeFile(path.join(run.directory, duplicateName), JSON.stringify(result));
-    const manifestPath = path.join(run.directory, 'producer.json');
-    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as { count: number; results: string[] };
-    manifest.results.push(duplicateName);
-    manifest.count += 1;
-    await writeFile(manifestPath, JSON.stringify(manifest));
-    const input = path.dirname(run.directory);
-    const output = path.join(run.root, 'variants-report');
-    await cli.generateReport({ input, output });
-    const summary = JSON.parse(await readFile(path.join(output, 'summary.json'), 'utf8')) as {
-      stats: { total: number };
-    };
-    expect(summary.stats.total).toBe(2);
-    const tests = JSON.parse(await readFile(path.join(output, 'test-results.json'), 'utf8')) as {
-      byId: Record<string, { environment: string }>;
-    };
-    const environments = Object.values(tests.byId).map((test) => test.environment);
-    expect(new Set(environments).size).toBe(2);
-  });
+  it.each(['linux', 'darwin', 'win32'])(
+    'keeps operating system variants distinct in real Allure output from %s',
+    async (initialOs) => {
+      const run = await fixture('pass');
+      const files = await readdir(run.directory);
+      const filename = files.find((name) => name.endsWith('-result.json')) || 'absent';
+      const source = path.join(run.directory, filename);
+      const result = JSON.parse(await readFile(source, 'utf8')) as ReportResult & { uuid: string };
+      result.labels = result.labels.map((label) =>
+        label.name === 'os' ? { ...label, value: initialOs } : label,
+      );
+      const originalResult = JSON.stringify(result);
+      await writeFile(source, originalResult);
+      result.uuid = randomUUID();
+      const sourceOs = result.labels.find((label) => label.name === 'os')?.value;
+      const alternateOs = sourceOs === 'win32' ? 'linux' : 'win32';
+      result.labels = result.labels.map((label) =>
+        label.name === 'os' ? { ...label, value: alternateOs } : label,
+      );
+      const duplicateName = `${result.uuid}-result.json`;
+      await writeFile(path.join(run.directory, duplicateName), JSON.stringify(result));
+      const manifestPath = path.join(run.directory, 'producer.json');
+      const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as {
+        count: number;
+        results: string[];
+      };
+      manifest.results.push(duplicateName);
+      manifest.count += 1;
+      await writeFile(manifestPath, JSON.stringify(manifest));
+      const input = path.dirname(run.directory);
+      const output = path.join(run.root, 'variants-report');
+      await cli.generateReport({ input, output });
+      const summary = JSON.parse(await readFile(path.join(output, 'summary.json'), 'utf8')) as {
+        stats: { total: number };
+      };
+      expect(summary.stats.total).toBe(2);
+      const tests = JSON.parse(await readFile(path.join(output, 'test-results.json'), 'utf8')) as {
+        byId: Record<string, { environment: string }>;
+      };
+      const environments = Object.values(tests.byId).map((test) => test.environment);
+      expect(new Set(environments).size).toBe(2);
+    },
+  );
   it('redacts known secrets in history keys and credential values before real HTML generation', async () => {
     const run = await fixture('pass');
     const input = path.dirname(run.directory);

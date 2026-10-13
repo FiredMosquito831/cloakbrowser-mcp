@@ -79,7 +79,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: test-results-quality-${{ matrix.os }}-node${{ matrix.node-version }}
+          name: test-results-quality-${{ matrix.os }}-node${{ matrix.node-version }}-attempt-${{ github.run_attempt }}
           path: ${{ env.CLOAK_REPORT_ROOT }}
           retention-days: 14
           if-no-files-found: error
@@ -137,7 +137,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: test-results-e2e-${{ matrix.os }}
+          name: test-results-e2e-${{ matrix.os }}-attempt-${{ github.run_attempt }}
           path: ${{ env.CLOAK_REPORT_ROOT }}
           retention-days: 14
           if-no-files-found: error
@@ -171,7 +171,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: test-results-cdp-linux-amd64
+          name: test-results-cdp-linux-amd64-attempt-${{ github.run_attempt }}
           path: ${{ env.CLOAK_REPORT_ROOT }}
           retention-days: 14
           if-no-files-found: error
@@ -205,7 +205,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: test-results-coverage-node${{ matrix.node-version }}
+          name: test-results-coverage-node${{ matrix.node-version }}-attempt-${{ github.run_attempt }}
           path: ${{ env.CLOAK_REPORT_ROOT }}
           retention-days: 14
           if-no-files-found: error
@@ -218,7 +218,7 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: coverage-node${{ matrix.node-version }}
+          name: coverage-node${{ matrix.node-version }}-attempt-${{ github.run_attempt }}
           path: coverage/
           if-no-files-found: error
 
@@ -354,7 +354,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: test-results-docker-${{ matrix.platform_slug }}
+          name: test-results-docker-${{ matrix.platform_slug }}-attempt-${{ github.run_attempt }}
           path: ${{ env.CLOAK_REPORT_ROOT }}
           retention-days: 14
           if-no-files-found: error
@@ -364,7 +364,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always() && matrix.compare
         with:
-          name: bridge-parity-report-${{ matrix.platform_slug }}
+          name: bridge-parity-report-${{ matrix.platform_slug }}-attempt-${{ github.run_attempt }}
           path: bridge-parity-report.json
           if-no-files-found: warn
       - name: Scan Docker image
@@ -383,7 +383,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: trivy-results-${{ matrix.platform_slug }}
+          name: trivy-results-${{ matrix.platform_slug }}-attempt-${{ github.run_attempt }}
           path: trivy-results.sarif
           if-no-files-found: warn
       - name: Upload Trivy SARIF
@@ -455,7 +455,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: combined-test-report
+          name: combined-test-report-attempt-${{ github.run_attempt }}
           path: ${{ env.CLOAK_REPORT_OUTPUT }}
           retention-days: 14
           if-no-files-found: error

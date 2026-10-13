@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -56,8 +56,16 @@ async function fixture() {
   await mkdir(input);
   return { root, input, output };
 }
-async function producer(input: string, id: string, status: string, environment?: Record<string, string>) {
-  const artifact = path.join(input, `test-results-${id}`);
+async function producer(
+  input: string,
+  id: string,
+  status: string,
+  environment?: Record<string, string>,
+  source: { runId?: string; artifactName?: string } = {},
+) {
+  const runId = source.runId ?? 'run';
+  const artifactName = source.artifactName ?? `test-results-${id}-${runId}`;
+  const artifact = path.join(input, artifactName);
   const result = {
     uuid: randomUUID(),
     file: 'tests/integration/controlled.test.ts',
@@ -78,11 +86,84 @@ async function producer(input: string, id: string, status: string, environment?:
     },
     attachments: [{ name: 'Controlled log', type: 'text/plain', data: 'password=synthetic-ci-secret' }],
   };
-  const options = { root: artifact, runId: 'run', producerId: id, results: [result] };
+  const options = { root: artifact, runId, producerId: id, results: [result] };
   await writer.writeTestResult(options);
-  return path.join(artifact, 'run', id);
+  return path.join(artifact, runId, id);
 }
 describe('CI reporting trust and matrix aggregation', () => {
+  it('gives every CI artifact an attempt-specific name to avoid rerun upload conflicts', async () => {
+    const ci = await readFile('.github/workflows/ci.yml', 'utf8');
+    const uploads = ci.split('uses: actions/upload-artifact@').slice(1);
+    expect(uploads.length).toBeGreaterThan(0);
+    for (const upload of uploads) {
+      const name = upload.split('\n').find((line) => line.startsWith('          name: '));
+      expect(name).toContain('github.run_attempt');
+    }
+  });
+  it('reuses unchanged successful jobs and selects the latest result of rerun jobs', async () => {
+    const f = await fixture();
+    await producer(f.input, 'linux', 'passed', undefined, { runId: 'run-42-attempt-1' });
+    await producer(f.input, 'windows', 'failed', undefined, { runId: 'run-42-attempt-1' });
+    await producer(f.input, 'windows', 'passed', undefined, { runId: 'run-42-attempt-2' });
+    const options = { ...f, runId: 'run-42-attempt-2', expected: ['linux', 'windows'] };
+    const result = await cli.ciAggregate(options);
+    expect(result).toMatchObject({ status: 'passed', total: 2, failed: 0, missing: [] });
+  });
+  it('retains a latest failed result instead of falling back to an earlier successful attempt', async () => {
+    const f = await fixture();
+    await producer(f.input, 'linux', 'passed', undefined, { runId: 'run-42-attempt-1' });
+    await producer(f.input, 'linux', 'failed', undefined, { runId: 'run-42-attempt-2' });
+    const options = { ...f, runId: 'run-42-attempt-2', expected: ['linux'] };
+    const result = await cli.ciAggregate(options);
+    expect(result).toMatchObject({ status: 'failed', total: 1, failed: 1, missing: [] });
+  });
+  it('reports a missing producer in a rerun job instead of resurrecting its old evidence', async () => {
+    const f = await fixture();
+    const previous = { runId: 'run-42-attempt-1', artifactName: 'test-results-quality-attempt-1' };
+    const current = { runId: 'run-42-attempt-2', artifactName: 'test-results-quality-attempt-2' };
+    await producer(f.input, 'linux', 'passed', undefined, previous);
+    await producer(f.input, 'windows', 'passed', undefined, previous);
+    await producer(f.input, 'linux', 'passed', undefined, current);
+    const options = { ...f, runId: 'run-42-attempt-2', expected: ['linux', 'windows'] };
+    const result = await cli.ciAggregate(options);
+    expect(result).toMatchObject({ status: 'failed', total: 2, missing: ['windows'] });
+  });
+  it.each([
+    'run-41-attempt-1',
+    'run-42-attempt-3',
+    'run-42-attempt-0',
+    'run-42-attempt-01',
+    'run-42-attempt-9007199254740992',
+    'local',
+  ])('rejects mismatched or invalid artifact run %s', async (runId) => {
+    const f = await fixture();
+    await producer(f.input, 'linux', 'passed', undefined, { runId });
+    const options = { ...f, runId: 'run-42-attempt-2', expected: ['linux'] };
+    await expect(cli.ciAggregate(options)).rejects.toThrow('wrong artifact run');
+    const entries = await readdir(f.root);
+    expect(entries).toEqual(['download']);
+  });
+  it('rejects duplicate producers from one attempt rather than choosing one arbitrarily', async () => {
+    const f = await fixture();
+    await producer(f.input, 'linux', 'passed', undefined, { runId: 'run-42-attempt-2' });
+    const duplicate = path.join(f.input, 'test-results-duplicate');
+    const original = path.join(f.input, 'test-results-linux-run-42-attempt-2');
+    const copy = { recursive: true };
+    await cp(original, duplicate, copy);
+    const options = { ...f, runId: 'run-42-attempt-2', expected: ['linux'] };
+    await expect(cli.ciAggregate(options)).rejects.toThrow('duplicate producer attempt');
+  });
+  it('rejects corrupt latest evidence without using an older passing result', async () => {
+    const f = await fixture();
+    await producer(f.input, 'linux', 'passed', undefined, { runId: 'run-42-attempt-1' });
+    const latest = await producer(f.input, 'linux', 'passed', undefined, { runId: 'run-42-attempt-2' });
+    const manifest = path.join(latest, 'producer.json');
+    await writeFile(manifest, '{}');
+    const options = { ...f, runId: 'run-42-attempt-2', expected: ['linux'] };
+    await expect(cli.ciAggregate(options)).rejects.toThrow('Test evidence');
+    const entries = await readdir(f.root);
+    expect(entries).toEqual(['download']);
+  });
   it('keeps quality and coverage executions separate in actual Allure output', async () => {
     const f = await fixture();
     const expected: string[] = [];

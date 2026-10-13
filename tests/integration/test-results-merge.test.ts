@@ -164,13 +164,17 @@ describe('untrusted cross-job evidence merge', () => {
     expect(entriesAfter).toEqual(expected);
   });
 
-  it('rejects conflicting UUID content rather than overwriting', async () => {
-    const f = await fixture();
-    const uuid = randomUUID();
-    await f.producer('linux', 'linux', 'passed', uuid);
-    await f.producer('windows', 'windows', 'failed', uuid);
-    await expect(mergeTestResults(f.input)).rejects.toThrow('conflicting UUID');
-  });
+  it.each([undefined, 'preserved-run'])(
+    'rejects conflicting UUID content with outputRunId=%s',
+    async (outputRunId) => {
+      const f = await fixture();
+      const uuid = randomUUID();
+      await f.producer('linux', 'linux', 'passed', uuid);
+      await f.producer('windows', 'windows', 'failed', uuid);
+      const options = { ...f.input, outputRunId };
+      await expect(mergeTestResults(options)).rejects.toThrow('conflicting UUID');
+    },
+  );
 
   it('deduplicates byte-identical UUID evidence and never overwrites an aggregate', async () => {
     const f = await fixture();

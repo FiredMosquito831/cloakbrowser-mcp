@@ -17,11 +17,17 @@ Use `--suite integration` or `--suite cli` for those suites. Each invocation nee
 a fresh run ID. A failing suite returns a nonzero status while preserving its
 sanitized evidence. Generation and viewing are separate commands, so failed runs
 can still be inspected. Generated files stay under ignored `artifacts/` paths.
+`test:report:merge` preserves each producer's manifest, so the combined run may
+contain more than 10000 results while the limit per producer remains unchanged.
 
 ## GitHub Actions and PR links
 
 CI uploads `test-results-*` artifacts from existing test jobs and merges the
-matrix into `combined-test-report`. The Job Summary lists totals, failures and
+matrix into `combined-test-report-attempt-<number>`. Artifact names include the
+attempt number to avoid upload conflicts on reruns. Partial reruns reuse existing
+jobs' evidence and select the latest available attempt for each producer within
+the same CI run. A failed or corrupt latest result never falls back to an older
+passing result. The Job Summary lists totals, failures and
 missing producers. Required checks retain their existing failure behavior.
 
 The trusted default-branch publisher validates producer data and regenerates HTML
