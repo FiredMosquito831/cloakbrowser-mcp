@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { Reader } from 'mmdb-lib';
+import { chromium } from 'playwright-core';
 import { afterAll, beforeAll, describe, expect, it, type TestContext } from 'vitest';
 import {
   createFreeBrowserRuntime,
@@ -217,6 +218,68 @@ async function fingerprint(client: Client): Promise<unknown> {
   expect(result.isError).not.toBe(true);
   return valueOf(result);
 }
+async function assertFingerprint(
+  client: Client,
+  context: Pick<TestContext, 'annotate'>,
+  expected: { timezone: string; locale: string; language: string },
+): Promise<void> {
+  const observed = await fingerprint(client);
+  try {
+    expect(observed).toEqual(expected);
+  } catch (cause) {
+    // Distinguish the browser's native flags from bridge/upstream behavior on the same Free executable.
+    const args = [
+      '--fingerprint=12345',
+      `--fingerprint-timezone=${expected.timezone}`,
+      `--lang=${expected.language}`,
+      `--fingerprint-locale=${expected.locale}`,
+    ];
+    const native = await directFingerprint(args);
+    // Upstream discussion #376 documents this native workaround for macOS Free 145.
+    const acceptLanguageArg = `--accept-lang=${expected.language}`;
+    const compatibilityArgs = [...args, acceptLanguageArg];
+    const acceptLanguage = await directFingerprint(compatibilityArgs);
+    const evidence = {
+      expected,
+      bridge: observed,
+      directPlaywright: native,
+      withAcceptLanguage: acceptLanguage,
+      args,
+      versions: installedVersions,
+    };
+    const encoded = JSON.stringify(evidence);
+    const safe = diagnostics.sanitizeDiagnostic(encoded, secrets);
+    await context.annotate(safe, 'cloak:process-diagnostics');
+    throw cause;
+  }
+}
+async function directFingerprint(args: string[]): Promise<unknown> {
+  const options = {
+    executablePath: runtime.env.CLOAKBROWSER_BINARY_PATH,
+    env: runtime.env,
+    headless: true,
+    timeout: 15000,
+    ignoreDefaultArgs: ['--enable-automation'],
+    args,
+  };
+  try {
+    const browser = await chromium.launch(options);
+    runtime.ownCleanup(() => browser.close());
+    try {
+      const page = await browser.newPage();
+      const observed = await page.evaluate(() => ({
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        locale: Intl.DateTimeFormat().resolvedOptions().locale,
+        language: navigator.language,
+      }));
+      return { version: browser.version(), observed, args };
+    } finally {
+      await browser.close();
+    }
+  } catch (error) {
+    return { error: String(error), args };
+  }
+}
 async function withProxy(
   options: Parameters<typeof startBrowserProxy>[0],
   action: (proxy: Awaited<ReturnType<typeof startBrowserProxy>>) => Promise<void>,
@@ -231,6 +294,40 @@ async function withProxy(
 }
 
 describe('packaged Free proxy and GeoIP', () => {
+  it('retains a fingerprint mismatch while collecting native comparison evidence', async (context) => {
+    const options = {};
+    await withProxy(options, async (proxy) => {
+      const env = { PLAYWRIGHT_MCP_PROXY_SERVER: proxy.url, CLOAK_PLAYWRIGHT_MCP_GEOIP_PROXY_MATCH: 'false' };
+      await withSession(context, env, async (client) => {
+        await navigate(client, proxy.fixtureUrl);
+        const observed = await fingerprint(client);
+        if (!observed || typeof observed !== 'object' || !('language' in observed)) {
+          throw new Error('Missing observed fingerprint language');
+        }
+        const locale = observed.language === 'ja-JP' ? 'en-GB' : 'ja-JP';
+        const expected = { timezone: 'Asia/Tokyo', locale, language: locale };
+        const annotations: string[] = [];
+        const annotate: TestContext['annotate'] = async (message) => {
+          annotations.push(message);
+          return context.annotate(message);
+        };
+        const diagnosticContext = { annotate };
+        const assertion = assertFingerprint(client, diagnosticContext, expected);
+        await expect(assertion).rejects.toThrow();
+        expect(annotations).toHaveLength(1);
+        const evidence = JSON.parse(annotations[0]) as Record<string, unknown>;
+        const version = freeChromium.split('.').slice(0, 4).join('.');
+        const native = { version, observed: { timezone: 'Asia/Tokyo' } };
+        const expectedEvidence = {
+          expected,
+          bridge: observed,
+          directPlaywright: native,
+          withAcceptLanguage: native,
+        };
+        expect(evidence).toMatchObject(expectedEvidence);
+      });
+    });
+  });
   it('verifies the pinned database and real MMDB lookup', async () => {
     const bytes = await readFile(dbUrl);
     expect(bytes.length).toBe(22569);
@@ -314,9 +411,8 @@ describe('packaged Free proxy and GeoIP', () => {
       };
       await withSession(context, env, async (client) => {
         await navigate(client, proxy.fixtureUrl);
-        const value = await fingerprint(client);
         const expected = { timezone: 'Europe/London', locale: 'en-GB', language: 'en-GB' };
-        expect(value).toEqual(expected);
+        await assertFingerprint(client, context, expected);
       });
       const echoes = proxy.requests.filter((entry) => entry.mode === 'connect');
       expect(echoes.length).toBeGreaterThan(0);
@@ -337,9 +433,8 @@ describe('packaged Free proxy and GeoIP', () => {
       };
       await withSession(context, env, async (client) => {
         await navigate(client, proxy.fixtureUrl);
-        const value = await fingerprint(client);
         const expected = { timezone: 'Asia/Tokyo', locale: 'ja-JP', language: 'ja-JP' };
-        expect(value).toEqual(expected);
+        await assertFingerprint(client, context, expected);
       });
       const echoes = proxy.requests.filter((entry) => entry.mode === 'connect');
       expect(echoes).toEqual(emptyEntries);
@@ -410,9 +505,8 @@ describe('packaged Free proxy and GeoIP', () => {
       };
       await withSession(context, env, async (client) => {
         await navigate(client, proxy.fixtureUrl);
-        const value = await fingerprint(client);
         const expected = { timezone: 'Asia/Tokyo', locale: 'ja-JP', language: 'ja-JP' };
-        expect(value).toEqual(expected);
+        await assertFingerprint(client, context, expected);
       });
       const echoes = proxy.requests.filter((entry) => entry.mode === 'connect');
       expect(echoes.length).toBeGreaterThan(0);

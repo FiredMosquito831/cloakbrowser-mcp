@@ -73,6 +73,20 @@ npm exec -- vitest run --config vitest.distribution-e2e.config.mjs --maxWorkers=
 ```
 
 Artifact names include the CI attempt number to avoid upload conflicts on reruns.
+The extensions suite downloads the official Playwright source archive for a pinned
+commit, verifies its SHA-256 before extraction, and builds against its original
+lockfile. It needs network access to GitHub Codeload and npm, and `tar` on `PATH`
+(available on the supported CI runners). Git credentials are not used for this
+download.
+
+Fingerprint mismatches retain the failing assertion and attach a comparison with
+direct Playwright using the same Free executable and explicit locale/timezone
+flags. This evidence helps distinguish browser behavior from bridge behavior.
+The current license-free macOS binary, Chromium 145.0.7632.109.2, has an
+[upstream locale defect](https://github.com/CloakHQ/CloakBrowser/discussions/376).
+The comparison also records the documented `--accept-lang` workaround. Full
+locale assertions remain required while this limitation is investigated.
+
 Partial reruns reuse unchanged jobs and select the latest evidence of each rerun
 job within the same CI run. Missing, failed or corrupt latest evidence never
 falls back to an earlier passing result.
