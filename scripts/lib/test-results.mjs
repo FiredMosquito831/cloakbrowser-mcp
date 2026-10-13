@@ -142,7 +142,18 @@ async function publish(parent, name, files) {
   }
   const stage = await fs.mkdtemp(path.join(parent, '.pending-'));
   try {
-    for (const [filename, data] of files) await writeFlushed(path.join(stage, filename), data);
+    const directories = new Set();
+    for (const [filename, data] of files) {
+      const directory = path.dirname(filename);
+      if (directory !== '.' && !directories.has(directory)) {
+        const targetDirectory = path.join(stage, directory);
+        const options = { mode: 0o700 };
+        await fs.mkdir(targetDirectory, options);
+        directories.add(directory);
+      }
+      const targetFile = path.join(stage, filename);
+      await writeFlushed(targetFile, data);
+    }
     await fs.rename(stage, target);
     return target;
   } finally {
@@ -384,10 +395,43 @@ async function collectProducer(root, runId, producerId, files, fingerprints, sec
   const entries = await fs.readdir(owner);
   if (entries.length !== allowed.size || entries.some((entry) => !allowed.has(entry)))
     invalid('unsupported producer files');
+  allowed.delete('producer.json');
+  return { results: manifest.results, files: allowed };
+}
+
+function preservedProducerFiles(files, producers, runId) {
+  segment(runId);
+  const preserved = new Map();
+  for (const [producerId, producer] of producers) {
+    for (const filename of producer.files) {
+      const target = path.join(producerId, filename);
+      const data = files.get(filename);
+      addUnique(preserved, target, data);
+    }
+    const manifest = {
+      version: 1,
+      runId,
+      producerId,
+      complete: true,
+      count: producer.results.length,
+      results: producer.results,
+    };
+    const target = path.join(producerId, 'producer.json');
+    const encoded = JSON.stringify(manifest);
+    addUnique(preserved, target, encoded);
+  }
+  return preserved;
 }
 
 /** Revalidate and redact expected producer data before atomically publishing an aggregate. */
-export async function mergeTestResults({ root, runId, producerIds, outputDir, secretValues = [] }) {
+export async function mergeTestResults({
+  root,
+  runId,
+  producerIds,
+  outputDir,
+  outputRunId,
+  secretValues = [],
+}) {
   try {
     segment(runId);
     if (
@@ -400,13 +444,17 @@ export async function mergeTestResults({ root, runId, producerIds, outputDir, se
     const owner = await directory(root);
     const files = new Map();
     const fingerprints = new Map();
-    for (const producerId of producerIds)
-      await collectProducer(owner, runId, producerId, files, fingerprints, secretValues);
+    const producers = new Map();
+    for (const producerId of producerIds) {
+      const producer = await collectProducer(owner, runId, producerId, files, fingerprints, secretValues);
+      producers.set(producerId, producer);
+    }
     const total = [...files.values()].reduce((sum, bytes) => sum + Buffer.byteLength(bytes), 0);
     if (total > PRODUCER_LIMIT) invalid('oversized aggregate');
     const parent = await directory(path.dirname(outputDir));
     const name = segment(path.basename(outputDir));
-    return await publish(parent, name, files);
+    const output = outputRunId === undefined ? files : preservedProducerFiles(files, producers, outputRunId);
+    return await publish(parent, name, output);
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('Test evidence:')) throw error;
     invalid('merge validation/read/flush failed');

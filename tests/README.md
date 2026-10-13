@@ -65,6 +65,13 @@ npm run test:e2e:npm-package -- --maxWorkers=2
 Pass the flag to a direct Vitest npm script; `npm run check` is a chain of
 commands and does not forward it to every test stage.
 
+Artifact names include the CI attempt number to avoid upload conflicts on reruns.
+Partial reruns reuse unchanged jobs and select the latest evidence of each rerun
+job within the same CI run. Missing, failed or corrupt latest evidence never
+falls back to an earlier passing result.
+`test:report:merge` preserves each producer's manifest, so combined runs may contain
+more than 10000 results while the per-producer limit remains unchanged.
+
 ## Local reporting commands
 
 ```bash

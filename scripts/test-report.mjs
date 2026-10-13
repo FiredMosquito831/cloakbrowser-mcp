@@ -93,6 +93,19 @@ export function historyScope(env, producers) {
   return { repository, lane, key, producers: inventory, branch };
 }
 
+function historyArtifact(run, artifacts, scope) {
+  const expected = `test-history-${scope.key}`;
+  const attemptName =
+    Number.isSafeInteger(run.run_attempt) && run.run_attempt > 0
+      ? `${expected}-attempt-${run.run_attempt}`
+      : undefined;
+  const matches = (artifact, name) =>
+    artifact.name === name && artifact.expired === false && artifact.workflow_run?.id === run.id;
+  const attempted =
+    attemptName === undefined ? undefined : artifacts.find((artifact) => matches(artifact, attemptName));
+  return attempted ?? artifacts.find((artifact) => matches(artifact, expected));
+}
+
 export function selectHistoryRun(runs, artifacts, scope) {
   if (!scope) throw new Error('CI reporting: untrusted history selection');
   for (const run of runs) {
@@ -104,14 +117,7 @@ export function selectHistoryRun(runs, artifacts, scope) {
       run.head_branch !== scope.branch
     )
       continue;
-    const expected = `test-history-${scope.key}`;
-    if (
-      artifacts.some(
-        (artifact) =>
-          artifact.name === expected && artifact.expired === false && artifact.workflow_run?.id === run.id,
-      )
-    )
-      return run.id;
+    if (historyArtifact(run, artifacts, scope)) return run.id;
   }
   return undefined;
 }
@@ -132,50 +138,100 @@ function validateProducerEnvironment(id, result) {
       throw new Error('CI reporting: producer environment does not match expected inventory');
 }
 
-async function stageCiArtifacts(source, run, runId, inventory, secretValues) {
-  const seen = new Set();
+function artifactAttempt(runId, sourceRunId) {
+  const pattern = /^run-([1-9]\d*)-attempt-([1-9]\d*)$/u;
+  const current = pattern.exec(runId);
+  if (!current && sourceRunId === runId) return 0;
+  const source = pattern.exec(sourceRunId);
+  const attempt = Number(source?.[2]);
+  const currentAttempt = Number(current?.[2]);
+  if (
+    !current ||
+    !source ||
+    current[1] !== source[1] ||
+    !Number.isSafeInteger(attempt) ||
+    !Number.isSafeInteger(currentAttempt) ||
+    attempt > currentAttempt
+  )
+    throw new Error('CI reporting: wrong artifact run');
+  return attempt;
+}
+
+async function latestCiArtifacts(source, runId) {
+  const latestArtifacts = new Map();
   const artifacts = await fs.readdir(source, { withFileTypes: true });
   for (const artifact of artifacts) {
     if (!artifact.name.startsWith('test-results-') || !artifact.isDirectory() || artifact.isSymbolicLink())
       throw new Error('CI reporting: unsafe artifact');
     const artifactRoot = path.join(source, artifact.name);
     const entries = await fs.readdir(artifactRoot);
-    if (entries.length !== 1 || entries[0] !== runId) throw new Error('CI reporting: wrong artifact run');
-    const producerRoot = path.join(artifactRoot, runId);
+    if (entries.length !== 1) throw new Error('CI reporting: wrong artifact run');
+    const sourceRunId = entries[0];
+    const attempt = artifactAttempt(runId, sourceRunId);
+    const group = artifact.name.replace(/-attempt-[1-9]\d*$/u, '');
+    const previous = latestArtifacts.get(group);
+    if (previous?.attempt === attempt) throw new Error('CI reporting: duplicate producer attempt');
+    if (!previous || previous.attempt < attempt)
+      latestArtifacts.set(group, { artifactRoot, sourceRunId, attempt });
+  }
+  return latestArtifacts;
+}
+
+async function selectCiArtifacts(source, runId, inventory) {
+  const selected = new Map();
+  const artifacts = await latestCiArtifacts(source, runId);
+  for (const { artifactRoot, sourceRunId, attempt } of artifacts.values()) {
+    const producerRoot = path.join(artifactRoot, sourceRunId);
     await canonicalDirectory(producerRoot);
     const producers = await fs.readdir(producerRoot, { withFileTypes: true });
     for (const producer of producers) {
       const id = checkedId(producer.name);
-      if (!inventory.includes(id) || seen.has(id)) throw new Error('CI reporting: unexpected producer');
+      if (!inventory.includes(id)) throw new Error('CI reporting: unexpected producer');
       if (!producer.isDirectory() || producer.isSymbolicLink())
         throw new Error('CI reporting: unsafe producer');
-      const to = path.join(run, id);
-      const validation = { root: artifactRoot, runId, producerIds: [id], outputDir: to, secretValues };
-      await mergeTestResults(validation);
-      const entries = await fs.readdir(to);
-      const results = entries.filter((entry) => entry.endsWith('-result.json'));
-      for (const filename of results) {
-        const target = path.join(to, filename);
-        const bytes = await fs.readFile(target, 'utf8');
-        const result = JSON.parse(bytes);
-        validateProducerEnvironment(id, result);
-      }
-      const manifest = {
-        version: 1,
-        runId,
-        producerId: id,
-        complete: true,
-        count: results.length,
-        results,
-      };
-      const target = path.join(to, 'producer.json');
-      const encoded = JSON.stringify(manifest);
-      const writeOptions = { flag: 'wx', mode: 0o600 };
-      await fs.writeFile(target, encoded, writeOptions);
-      seen.add(id);
+      const previous = selected.get(id);
+      if (previous?.attempt === attempt) throw new Error('CI reporting: duplicate producer attempt');
+      if (!previous || previous.attempt < attempt) selected.set(id, { artifactRoot, sourceRunId, attempt });
     }
   }
-  return seen;
+  return selected;
+}
+
+async function stageCiArtifacts(source, run, runId, inventory, secretValues) {
+  const selected = await selectCiArtifacts(source, runId, inventory);
+  for (const [id, { artifactRoot, sourceRunId }] of selected) {
+    const to = path.join(run, id);
+    const validation = {
+      root: artifactRoot,
+      runId: sourceRunId,
+      producerIds: [id],
+      outputDir: to,
+      secretValues,
+    };
+    await mergeTestResults(validation);
+    const entries = await fs.readdir(to);
+    const results = entries.filter((entry) => entry.endsWith('-result.json'));
+    for (const filename of results) {
+      const target = path.join(to, filename);
+      const bytes = await fs.readFile(target, 'utf8');
+      const result = JSON.parse(bytes);
+      validateProducerEnvironment(id, result);
+    }
+    const manifest = {
+      version: 1,
+      runId,
+      producerId: id,
+      complete: true,
+      count: results.length,
+      results,
+    };
+    const target = path.join(to, 'producer.json');
+    const encoded = JSON.stringify(manifest);
+    const writeOptions = { flag: 'wx', mode: 0o600 };
+    await fs.writeFile(target, encoded, writeOptions);
+  }
+  const producerIds = selected.keys();
+  return new Set(producerIds);
 }
 
 async function writeCiSummary(output, missing) {
@@ -521,28 +577,8 @@ export async function mergeReport({ input, output, expected, secretValues = [] }
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
-  const stage = await fs.mkdtemp(path.join(parent, '.aggregate-'));
-  try {
-    const producerId = 'merged';
-    const outputDir = path.join(stage, producerId);
-    const options = { ...source, outputDir, secretValues };
-    await mergeTestResults(options);
-    const entries = await fs.readdir(outputDir);
-    const results = entries.filter((entry) => entry.endsWith('-result.json'));
-    const manifest = { version: 1, runId, producerId, complete: true, count: results.length, results };
-    const manifestPath = path.join(outputDir, 'producer.json');
-    const handle = await fs.open(manifestPath, 'wx', 0o600);
-    try {
-      await handle.writeFile(JSON.stringify(manifest));
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    await fs.rename(stage, target);
-    return target;
-  } finally {
-    await fs.rm(stage, { recursive: true, force: true });
-  }
+  const options = { ...source, outputDir: target, outputRunId: runId, secretValues };
+  return mergeTestResults(options);
 }
 
 /** Validate raw producer manifests and re-redact before the generator reads data. */
@@ -741,7 +777,10 @@ async function findCiHistory(scope) {
     const artifacts = await githubJson(artifactsEndpoint);
     if (!Array.isArray(artifacts.artifacts)) throw new Error('CI reporting: invalid artifact API response');
     const selected = selectHistoryRun([run], artifacts.artifacts, scope);
-    if (selected) return selected;
+    if (selected) {
+      const artifact = historyArtifact(run, artifacts.artifacts, scope);
+      return { id: selected, name: artifact.name };
+    }
   }
   return undefined;
 }
@@ -811,10 +850,12 @@ async function ciCommand(command) {
     const encoded = JSON.stringify(expected);
     process.stdout.write(`${encoded}\n`);
   } else if (command === 'ci-history') {
-    let run;
-    if (scope) run = await findCiHistory(scope);
-    const name = scope ? `test-history-${scope.key}` : '';
-    const output = `run-id=${run || ''}\nname=${name}\n`;
+    let history;
+    if (scope) history = await findCiHistory(scope);
+    const run = history?.id;
+    const saveName = scope ? `test-history-${scope.key}` : '';
+    const name = history?.name ?? saveName;
+    const output = `run-id=${run || ''}\nname=${name}\nsave-name=${saveName}\n`;
     await fs.appendFile(env.GITHUB_OUTPUT, output);
     const state = run ? 'matching trusted launch found' : 'first run: no eligible retained history';
     await fs.appendFile(env.GITHUB_STEP_SUMMARY, `History: ${state}.\n\n`);

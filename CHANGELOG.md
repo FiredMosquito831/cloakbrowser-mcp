@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Opt-in Allure Report 3 output for Vitest suites, validated CI matrix aggregation,
+  and sanitized report publication to a separate GitHub Pages repository with
+  guarded pull request links and 14-day retention.
 - Retain the fingerprint seed across launches of explicitly configured persistent CloakBrowser profiles, using the interoperable `.cloakbrowser-seed` file.
 
 ### Changed
@@ -20,6 +23,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Start native date/time entry from the first editor segment with CloakBrowser 0.6.2, preventing digits from being entered into the year field after an initial click.
 - Handle `ENOTSUP` when publishing persistent profile seeds on filesystems without hard-link support.
 - Apply a version- and source-verified compatibility fix for CloakBrowser 0.6.0 and 0.6.1 humanize: preserve ancestor iframe visibility and allow detached DOM elements to be collected without modifying installed dependency files.
+
+### Security
+
+- Update MCP SDK to a patched release (1.31.0 or later) and resolve the patched `proxy-addr`
+  dependency to address production audit findings without weakening the CI gate.
 
 ## [1.14.1] - 2026-09-27
 

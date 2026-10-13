@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -56,8 +56,16 @@ async function fixture() {
   await mkdir(input);
   return { root, input, output };
 }
-async function producer(input: string, id: string, status: string, environment?: Record<string, string>) {
-  const artifact = path.join(input, `test-results-${id}`);
+async function producer(
+  input: string,
+  id: string,
+  status: string,
+  environment?: Record<string, string>,
+  source: { runId?: string; artifactName?: string } = {},
+) {
+  const runId = source.runId ?? 'run';
+  const artifactName = source.artifactName ?? `test-results-${id}-${runId}`;
+  const artifact = path.join(input, artifactName);
   const result = {
     uuid: randomUUID(),
     file: 'tests/integration/controlled.test.ts',
@@ -78,11 +86,95 @@ async function producer(input: string, id: string, status: string, environment?:
     },
     attachments: [{ name: 'Controlled log', type: 'text/plain', data: 'password=synthetic-ci-secret' }],
   };
-  const options = { root: artifact, runId: 'run', producerId: id, results: [result] };
+  const options = { root: artifact, runId, producerId: id, results: [result] };
   await writer.writeTestResult(options);
-  return path.join(artifact, 'run', id);
+  return path.join(artifact, runId, id);
 }
 describe('CI reporting trust and matrix aggregation', () => {
+  const firstAttempt = { runId: 'run-42-attempt-1' };
+  const secondAttempt = { runId: 'run-42-attempt-2' };
+  const downloadEntries = ['download'];
+  it('gives every CI artifact an attempt-specific name to avoid rerun upload conflicts', async () => {
+    const ci = await readFile('.github/workflows/ci.yml', 'utf8');
+    const uploads = ci.split('uses: actions/upload-artifact@').slice(1);
+    expect(uploads.length).toBeGreaterThan(0);
+    for (const upload of uploads) {
+      const name = upload.split('\n').find((line) => line.startsWith('          name: '));
+      expect(name).toContain('github.run_attempt');
+    }
+  });
+  it('reuses unchanged successful jobs and selects the latest result of rerun jobs', async () => {
+    const f = await fixture();
+    await producer(f.input, 'linux', 'passed', undefined, firstAttempt);
+    await producer(f.input, 'windows', 'failed', undefined, firstAttempt);
+    await producer(f.input, 'windows', 'passed', undefined, secondAttempt);
+    const options = { ...f, runId: 'run-42-attempt-2', expected: ['linux', 'windows'] };
+    const result = await cli.ciAggregate(options);
+    const expected = { status: 'passed', total: 2, failed: 0, missing: [] };
+    expect(result).toMatchObject(expected);
+  });
+  it('retains a latest failed result instead of falling back to an earlier successful attempt', async () => {
+    const f = await fixture();
+    await producer(f.input, 'linux', 'passed', undefined, firstAttempt);
+    await producer(f.input, 'linux', 'failed', undefined, secondAttempt);
+    const options = { ...f, runId: 'run-42-attempt-2', expected: ['linux'] };
+    const result = await cli.ciAggregate(options);
+    const expected = { status: 'failed', total: 1, failed: 1, missing: [] };
+    expect(result).toMatchObject(expected);
+  });
+  it('reports a missing producer in a rerun job instead of resurrecting its old evidence', async () => {
+    const f = await fixture();
+    const previous = { runId: 'run-42-attempt-1', artifactName: 'test-results-quality-attempt-1' };
+    const current = { runId: 'run-42-attempt-2', artifactName: 'test-results-quality-attempt-2' };
+    await producer(f.input, 'linux', 'passed', undefined, previous);
+    await producer(f.input, 'windows', 'passed', undefined, previous);
+    await producer(f.input, 'linux', 'passed', undefined, current);
+    const options = { ...f, runId: 'run-42-attempt-2', expected: ['linux', 'windows'] };
+    const result = await cli.ciAggregate(options);
+    const expected = { status: 'failed', total: 2, missing: ['windows'] };
+    expect(result).toMatchObject(expected);
+  });
+  const invalidRuns = [
+    'run-41-attempt-1',
+    'run-42-attempt-3',
+    'run-42-attempt-0',
+    'run-42-attempt-01',
+    'run-42-attempt-9007199254740992',
+    'local',
+  ];
+  it.each(invalidRuns)('rejects mismatched or invalid artifact run %s', async (runId) => {
+    const f = await fixture();
+    const source = { runId };
+    await producer(f.input, 'linux', 'passed', undefined, source);
+    const options = { ...f, runId: 'run-42-attempt-2', expected: ['linux'] };
+    const aggregate = cli.ciAggregate(options);
+    await expect(aggregate).rejects.toThrow('wrong artifact run');
+    const entries = await readdir(f.root);
+    expect(entries).toEqual(downloadEntries);
+  });
+  it('rejects duplicate producers from one attempt rather than choosing one arbitrarily', async () => {
+    const f = await fixture();
+    await producer(f.input, 'linux', 'passed', undefined, secondAttempt);
+    const duplicate = path.join(f.input, 'test-results-duplicate');
+    const original = path.join(f.input, 'test-results-linux-run-42-attempt-2');
+    const copy = { recursive: true };
+    await cp(original, duplicate, copy);
+    const options = { ...f, runId: 'run-42-attempt-2', expected: ['linux'] };
+    const aggregate = cli.ciAggregate(options);
+    await expect(aggregate).rejects.toThrow('duplicate producer attempt');
+  });
+  it('rejects corrupt latest evidence without using an older passing result', async () => {
+    const f = await fixture();
+    await producer(f.input, 'linux', 'passed', undefined, firstAttempt);
+    const latest = await producer(f.input, 'linux', 'passed', undefined, secondAttempt);
+    const manifest = path.join(latest, 'producer.json');
+    await writeFile(manifest, '{}');
+    const options = { ...f, runId: 'run-42-attempt-2', expected: ['linux'] };
+    const aggregate = cli.ciAggregate(options);
+    await expect(aggregate).rejects.toThrow('Test evidence');
+    const entries = await readdir(f.root);
+    expect(entries).toEqual(downloadEntries);
+  });
   it('keeps independent Node executions separate in actual Allure output', async () => {
     const f = await fixture();
     const expected: string[] = [];
@@ -337,6 +429,74 @@ describe('CI reporting trust and matrix aggregation', () => {
     const environments = ['windows'];
     expect(cli.historyScope(trusted, environments)?.key).not.toBe(scope?.key);
   });
+  const historyFormats = ['legacy', 'attempt'] as const;
+  it.each(historyFormats)(
+    'uses the exact %s history artifact name and a fresh upload name',
+    async (format) => {
+      const f = await fixture();
+      const output = path.join(f.root, 'history-output');
+      const summary = path.join(f.root, 'history-summary');
+      await writeFile(output, '');
+      await writeFile(summary, '');
+      const platforms: string[] = [];
+      const nodes: string[] = [];
+      const expected = cli.ciPlan('periodic', platforms, nodes);
+      const scope = cli.historyScope(trusted, expected);
+      if (!scope) throw new Error('Missing test history scope');
+      const name = `test-history-${scope.key}`;
+      const artifactName = format === 'legacy' ? name : `${name}-attempt-3`;
+      const run = {
+        id: 42,
+        run_attempt: 3,
+        status: 'completed',
+        conclusion: 'success',
+        event: 'schedule',
+        head_branch: 'main',
+        head_repository: { full_name: trusted.GITHUB_REPOSITORY },
+      };
+      const artifact = { name: artifactName, expired: false, workflow_run: { id: 42 } };
+      const records = { run, artifact };
+      const encoded = JSON.stringify(records);
+      const moduleUrl = JSON.stringify(url.href);
+      const code = `
+import { fileURLToPath } from 'node:url';
+const records = ${encoded};
+globalThis.fetch = async (url) => {
+  const parsed = new URL(url);
+  const endpoint = parsed.pathname;
+  let data;
+  if (endpoint.endsWith('/actions/workflows/ci.yml/runs')) data = { workflow_runs: [records.run] };
+  else if (endpoint.endsWith('/actions/runs/42/artifacts')) data = { artifacts: [records.artifact] };
+  else throw new Error('Unexpected history API request');
+  const encoded = JSON.stringify(data);
+  const response = new Response(encoded);
+  return response;
+};
+const moduleUrl = ${moduleUrl};
+const parsed = new URL(moduleUrl);
+const entry = fileURLToPath(parsed);
+process.argv = [process.execPath, entry, 'ci-history'];
+await import(moduleUrl);
+`;
+      const args = ['--input-type=module', '-e', code];
+      const env = {
+        ...process.env,
+        ...trusted,
+        GITHUB_RUN_ID: '100',
+        GITHUB_RUN_ATTEMPT: '2',
+        GITHUB_TOKEN: 'controlled-history-token',
+        CLOAK_REPORT_PLATFORMS: '[]',
+        NODE_CHECK_VERSIONS: '[]',
+        GITHUB_OUTPUT: output,
+        GITHUB_STEP_SUMMARY: summary,
+      };
+      const options = { env };
+      await execute(process.execPath, args, options);
+      const actual = await readFile(output, 'utf8');
+      const expectedOutput = `run-id=42\nname=${artifactName}\nsave-name=${name}\n`;
+      expect(actual).toBe(expectedOutput);
+    },
+  );
   it('selects only a completed successful trusted history run with an unexpired matching artifact', () => {
     const producers = ['linux'];
     const scope = cli.historyScope(trusted, producers);
@@ -362,6 +522,14 @@ describe('CI reporting trust and matrix aggregation', () => {
     }
     const expired = { ...artifact, expired: true };
     expect(cli.selectHistoryRun([run], [expired], scope)).toBeUndefined();
+    const rerun = { ...run, run_attempt: 3 };
+    const latest = { ...artifact, name: `${artifact.name}-attempt-3` };
+    const previous = { ...artifact, name: `${artifact.name}-attempt-2` };
+    const runs = [rerun];
+    const currentArtifacts = [latest];
+    expect(cli.selectHistoryRun(runs, currentArtifacts, scope)).toBe(42);
+    const staleArtifacts = [previous];
+    expect(cli.selectHistoryRun(runs, staleArtifacts, scope)).toBeUndefined();
   });
   it('refuses to save history without trust or from a failed report', async () => {
     const f = await fixture();
