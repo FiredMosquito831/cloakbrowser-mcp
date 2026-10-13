@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
-import { reportConfiguration } from './scripts/testing/report-configuration.js';
+import { reportConfiguration } from '#scripts/testing/report-configuration';
+import { workerConfiguration } from '#scripts/testing/worker-configuration';
 
 export default defineConfig({
   resolve: {
@@ -10,6 +11,7 @@ export default defineConfig({
     },
   },
   test: {
+    ...workerConfiguration(),
     ...reportConfiguration(),
     include: ['tests/e2e/**/*.test.ts'],
     environment: 'node',
