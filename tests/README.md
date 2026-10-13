@@ -43,7 +43,29 @@ and publish artifacts; application test suites run before merge.
 `npm run package:verify` validates installation and CLI behavior before merge;
 `npm run package:pack` only builds and validates the release tarball inventory.
 
-Local reporting commands:
+## Worker processes
+
+All three Vitest configurations run test files in separate Node.js processes
+(`pool: 'forks'`, `fileParallelism: true`). With `CI=true` or `CI=1`, the worker
+limit is `os.availableParallelism()`, computed independently on each runner.
+Locally, the limit is the smaller of four and the available CPU parallelism.
+This is a maximum: a run with fewer files uses fewer workers. Tests inside each
+file remain sequential unless explicitly marked concurrent.
+
+Override the limit with Vitest's standard CLI option:
+
+```bash
+npm run test:unit -- --maxWorkers=8
+npm run test:integration -- --maxWorkers=2
+npm run test:coverage -- --maxWorkers=4
+npm run test:e2e:run -- --maxWorkers=1
+npm run test:e2e:npm-package -- --maxWorkers=2
+```
+
+Pass the flag to a direct Vitest npm script; `npm run check` is a chain of
+commands and does not forward it to every test stage.
+
+## Local reporting commands
 
 ```bash
 npm run test:report -- --suite unit --run-id local
