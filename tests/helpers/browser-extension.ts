@@ -47,7 +47,7 @@ export async function prepareControlledExtension(runtime: FreeBrowserRuntime): P
   return pathToFileURL(directory);
 }
 
-/** Build the exact official source and lockfile in an owned disposable checkout. */
+/** Build the exact official extension source against its original lockfile in an owned checkout. */
 export async function prepareOfficialExtension(runtime: FreeBrowserRuntime): Promise<OfficialExtension> {
   const downloadStarted = Date.now();
   process.stderr.write('Extension preparation: downloading pinned source\n');
@@ -104,6 +104,24 @@ export async function prepareOfficialExtension(runtime: FreeBrowserRuntime): Pro
   } finally {
     await rm(archive);
   }
+  // These packages are imported by the pinned Vite config and extension UI. Other root
+  // dependencies build unrelated Playwright components; keep the official lockfile intact.
+  const packagePath = path.join(checkout, 'package.json');
+  const packageText = await readFile(packagePath, 'utf8');
+  const packageManifest = JSON.parse(packageText) as { devDependencies: Record<string, string> };
+  const buildPackages = ['vite', '@vitejs/plugin-react', 'vite-plugin-static-copy', 'react', 'react-dom'];
+  const buildDependencies: Record<string, string> = {};
+  for (const name of buildPackages) {
+    const version = packageManifest.devDependencies[name];
+    if (typeof version !== 'string') {
+      const message = `Official extension build dependency is missing: ${name}`;
+      throw new Error(message);
+    }
+    buildDependencies[name] = version;
+  }
+  packageManifest.devDependencies = buildDependencies;
+  const buildManifest = JSON.stringify(packageManifest);
+  await writeFile(packagePath, buildManifest);
   const npm = process.env.npm_execpath;
   if (!npm) throw new Error('Run extension E2E through npm to provide npm_execpath');
   const install = [

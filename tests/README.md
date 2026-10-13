@@ -75,7 +75,10 @@ npm exec -- vitest run --config vitest.distribution-e2e.config.mjs --maxWorkers=
 Artifact names include the CI attempt number to avoid upload conflicts on reruns.
 The extensions suite downloads the official Playwright source archive for a pinned
 commit, verifies its SHA-256 before extraction, and builds against its original
-lockfile. It needs network access to GitHub Codeload and npm, and `tar` on `PATH`
+lockfile, installing only the dependencies imported by its Vite configuration
+and UI from the official manifest. Unrelated Playwright build dependencies are
+excluded from the temporary build manifest; the official lockfile is unchanged.
+It needs network access to GitHub Codeload and npm, and `tar` on `PATH`
 (available on the supported CI runners). Git credentials are not used for this
 download.
 
