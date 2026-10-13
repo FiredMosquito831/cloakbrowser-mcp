@@ -517,7 +517,22 @@ class ManagedCdpSessionRuntime implements ManagedCdpSession {
 }
 function assertBootstrapToolSucceeded(result: unknown, name: string): void {
   if (typeof result === 'object' && result !== null && 'isError' in result && result.isError === true) {
-    const message = `Managed CDP bootstrap tool ${name} failed`;
+    // Expose only native termination codes, never upstream launch arguments, paths or credentials.
+    const content: unknown[] = 'content' in result && Array.isArray(result.content) ? result.content : [];
+    const codes: string[] = [];
+    for (const item of content) {
+      if (typeof item !== 'object' || item === null || !('text' in item) || typeof item.text !== 'string')
+        continue;
+      const matches = item.text.match(
+        /\b(?:exitCode=-?\d{1,10}|signal=SIG(?:ABRT|BUS|FPE|ILL|INT|KILL|PIPE|SEGV|TERM|TRAP|XCPU|XFSZ)|EADDRINUSE|ECONNREFUSED)\b/gu,
+      );
+      if (matches) codes.push(...matches);
+    }
+    const codeSet = new Set(codes);
+    const codeList = [...codeSet];
+    const uniqueCodes = codeList.join(', ');
+    const detail = uniqueCodes ? ` (${uniqueCodes})` : '';
+    const message = `Managed CDP bootstrap tool ${name} failed${detail}`;
     throw new Error(message);
   }
 }

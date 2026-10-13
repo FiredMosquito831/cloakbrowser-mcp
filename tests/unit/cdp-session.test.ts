@@ -138,6 +138,28 @@ describe('managed CDP generation coordinator', () => {
     expect(harness.events).toContain('upstream-dispose');
     expect(harness.events).toContain('runtime-dispose');
   });
+  it('reports native bootstrap termination codes without upstream secrets or launch arguments', async () => {
+    const options = {
+      tabsResult: {
+        isError: true,
+        content: [
+          {
+            type: 'text',
+            text: 'launch --proxy-server=http://fixture-secret@proxy.invalid signal=SIGFIXTURESECRET exitCode=12345678901234567890 <process did exit: exitCode=133, signal=SIGTRAP> exitCode=133',
+          },
+          { type: 'image', data: 'untrusted' },
+          null,
+        ],
+      },
+    };
+    const harness = createHarness(options);
+    const starting = startManagedCdpSession(harness.dependencies);
+    const expected = 'Managed CDP bootstrap tool browser_tabs failed (exitCode=133, signal=SIGTRAP)';
+    const expectedError = { message: expected };
+    await expect(starting).rejects.toMatchObject(expectedError);
+    expect(harness.events).toContain('upstream-dispose');
+    expect(harness.events).toContain('runtime-dispose');
+  });
   it('uses one absolute deadline and rolls back a hung bootstrap', async () => {
     const createHarnessOptions2 = { hangTabs: true, initialTimeoutMs: 20 } as const;
     const harness = createHarness(createHarnessOptions2);
