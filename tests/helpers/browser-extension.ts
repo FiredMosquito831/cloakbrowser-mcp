@@ -21,7 +21,9 @@ const diagnostics = (await import(diagnosticsUrl.href)) as {
   sanitizeDiagnostic: (value: unknown, secrets?: string[]) => string;
 };
 const commit = 'e8149b8257d32dcf8f72573ecc43e72439da7080';
-const source = 'https://github.com/microsoft/playwright.git';
+const source = `https://codeload.github.com/microsoft/playwright/tar.gz/${commit}`;
+const sourceSha256 = '096dcce4c691e12afa4946819187a5aaa7f5d93da7387222b5220c7a9cb089d4';
+const sourceLimit = 64 * 1024 * 1024;
 const removal = { recursive: true, force: true };
 const directoryOptions = { recursive: true };
 export interface OfficialExtension {
@@ -49,12 +51,48 @@ export async function prepareControlledExtension(runtime: FreeBrowserRuntime): P
 export async function prepareOfficialExtension(runtime: FreeBrowserRuntime): Promise<OfficialExtension> {
   const checkout = path.join(runtime.root, 'playwright');
   await mkdir(checkout);
-  const init = ['init', '--quiet'];
-  await runTool(runtime, 'git', init, checkout, 'initialize official checkout');
-  const fetch = ['fetch', '--quiet', '--depth=1', source, commit];
-  await runTool(runtime, 'git', fetch, checkout, 'fetch pinned official source');
-  const detach = ['checkout', '--quiet', '--detach', 'FETCH_HEAD'];
-  await runTool(runtime, 'git', detach, checkout, 'checkout pinned official source');
+  const signal = AbortSignal.timeout(120000);
+  const fetchOptions = { signal, redirect: 'error' } as const;
+  const response = await fetch(source, fetchOptions);
+  if (!response.ok || !response.body) {
+    await response.body?.cancel();
+    const message = `Official extension source download failed: HTTP ${response.status}`;
+    throw new Error(message);
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const read = await reader.read();
+      const { done } = read;
+      if (done) break;
+      const value: unknown = read.value;
+      if (!(value instanceof Uint8Array)) throw new Error('Official extension source contains non-byte data');
+      size += value.length;
+      if (size > sourceLimit) throw new Error('Official extension source archive exceeds size limit');
+      chunks.push(value);
+    }
+  } finally {
+    try {
+      await reader.cancel();
+    } finally {
+      reader.releaseLock();
+    }
+  }
+  const bytes = Buffer.concat(chunks, size);
+  const checksum = createHash('sha256');
+  checksum.update(bytes);
+  const actual = checksum.digest('hex');
+  if (actual !== sourceSha256) throw new Error('Official extension source archive checksum mismatch');
+  const archive = path.join(runtime.root, 'playwright-source.tar.gz');
+  await writeFile(archive, bytes);
+  const extract = ['-xzf', archive, '-C', checkout, '--strip-components=1'];
+  try {
+    await runTool(runtime, 'tar', extract, runtime.root, 'extract verified official source');
+  } finally {
+    await rm(archive);
+  }
   const npm = process.env.npm_execpath;
   if (!npm) throw new Error('Run extension E2E through npm to provide npm_execpath');
   const install = [
