@@ -69,11 +69,23 @@ async function main(): Promise<void> {
               options.cdp,
             );
           })();
-    for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-      process.once(signal, () => {
-        dockerHealthResponder.dispose();
-        void running.close().finally(() => process.exit(0));
-      });
+    let closing = false;
+    const shutdown = (): void => {
+      if (closing) return;
+      closing = true;
+      dockerHealthResponder.dispose();
+      void running.close().then(
+        () => process.exit(0),
+        () => {
+          process.stderr.write('fatal: bridge cleanup failed\n');
+          process.exit(1);
+        },
+      );
+    };
+    for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, shutdown);
+    if (options.transport !== BRIDGE_TRANSPORT_STREAMABLE_HTTP) {
+      process.stdin.once('end', shutdown);
+      if (process.stdin.readableEnded) shutdown();
     }
   });
   await command.parseAsync(process.argv);

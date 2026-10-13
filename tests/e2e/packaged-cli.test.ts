@@ -1,12 +1,14 @@
 import { expectedDependencyVersions } from '@tests/helpers/dependency-versions.js';
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/sdk/types.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { LOCAL_TOOL_BINARY_INFO, LOCAL_TOOL_BRIDGE_INFO } from '@/bridge/tools.js';
 import { BRIDGE_TRANSPORT_STREAMABLE_HTTP } from '@/http/options.js';
@@ -32,6 +34,48 @@ afterEach(async () => {
   }
 });
 describe('packaged CLI end-to-end', () => {
+  it('releases a persistent profile and exits gracefully when its client closes stdin', async () => {
+    const base = createCliEnv();
+    const profile = path.join(base.PLAYWRIGHT_MCP_OUTPUT_DIR ?? '', 'profile');
+    const env = { ...base, PLAYWRIGHT_MCP_USER_DATA_DIR: profile };
+    const lock = path.join(profile, '.cloakbrowser-mcp-profile.lock');
+    const options = { cwd: repoRoot, env };
+    const args = [distCliPath];
+    const request = {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: LATEST_PROTOCOL_VERSION,
+        capabilities: {},
+        clientInfo: { name: 'stdin cleanup', version: '1' },
+      },
+    };
+    const encoded = JSON.stringify(request);
+    const input = encoded + '\n';
+    const responsePattern = /"id":1/u;
+    for (let launch = 0; launch < 2; launch++) {
+      const child = spawn(process.execPath, args, options);
+      children.push(child);
+      const closed = once(child, 'close');
+      child.stdout.setEncoding('utf8');
+      child.stderr.setEncoding('utf8');
+      const stdout = collectStream(child.stdout);
+      const stderr = collectStream(child.stderr);
+      child.stdin.write(input);
+      const response = await waitForLine(child, stdout, responsePattern);
+      expect(response).toContain('"result"');
+      const active = existsSync(lock);
+      expect(active).toBe(true);
+      child.stdin.end();
+      const [code, signal] = await closed;
+      expect(code).toBe(0);
+      expect(signal).toBeNull();
+      expect(stderr.text).not.toContain('fatal:');
+      const remaining = existsSync(lock);
+      expect(remaining).toBe(false);
+    }
+  });
   it('serves stdio MCP without routine stdout logs', async () => {
     const stdioClientTransportOptions: import('@modelcontextprotocol/sdk/client/stdio.js').StdioServerParameters =
       {
