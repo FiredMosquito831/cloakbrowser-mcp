@@ -85,9 +85,11 @@ export async function prepareOfficialExtension(runtime: FreeBrowserRuntime): Pro
   checksum.update(bytes);
   const actual = checksum.digest('hex');
   if (actual !== sourceSha256) throw new Error('Official extension source archive checksum mismatch');
-  const archive = path.join(runtime.root, 'playwright-source.tar.gz');
+  const archiveName = 'playwright-source.tar.gz';
+  const archive = path.join(runtime.root, archiveName);
   await writeFile(archive, bytes);
-  const extract = ['-xzf', archive, '-C', checkout, '--strip-components=1'];
+  // GNU tar treats a drive-letter archive path as a remote host; relative names work on BSD tar too.
+  const extract = ['-xzf', archiveName, '-C', 'playwright', '--strip-components=1'];
   try {
     await runTool(runtime, 'tar', extract, runtime.root, 'extract verified official source');
   } finally {
