@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.15.0] - 2026-10-16
+
 ### Added
 
 - Optional Allure Report 3 reporting for unit, integration, and distribution E2E
@@ -30,7 +32,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   selection, concurrent-download fixes, and Playwright 1.64 action visibility compatibility.
 - Updated the upstream Playwright MCP npm dependency to 0.0.83, including the
   optional `browser_find.filename` argument for saving results to a file. Docker
-  continues to use the separately pinned official MCP 0.0.82 image.
+  now uses the matching official MCP 0.0.83 multi-architecture image pinned by digest.
 - Moved application tests, dependency audits, signature verification, and package
   installation checks into the required PR pipeline, with parallel native-platform
   and Docker matrices. Release jobs build and publish artifacts without repeating
@@ -531,7 +533,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Generated configuration documentation based on the removed native config schema.
 - Public SEO setup guide and stale roadmap page from the published documentation.
 
-[Unreleased]: https://github.com/swimmwatch/cloakbrowser-mcp/compare/v1.14.1...HEAD
+[Unreleased]: https://github.com/swimmwatch/cloakbrowser-mcp/compare/v1.15.0...HEAD
+[1.15.0]: https://github.com/swimmwatch/cloakbrowser-mcp/compare/v1.14.1...v1.15.0
 [1.14.1]: https://github.com/swimmwatch/cloakbrowser-mcp/compare/v1.14.0...v1.14.1
 [1.14.0]: https://github.com/swimmwatch/cloakbrowser-mcp/compare/v1.13.0...v1.14.0
 [1.13.0]: https://github.com/swimmwatch/cloakbrowser-mcp/compare/v1.12.0...v1.13.0

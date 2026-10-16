@@ -9,7 +9,8 @@ executables and local fixture pages:
 - `npm run test:e2e:npm-package`: standard tools, persistent state and humanization.
 
 Required PR quality checks run unit, integration and packaged CLI tests on Linux
-x64/arm64, macOS Intel/ARM and Windows x64 with Node 22/24/25/26. Ubuntu x64
+x64/arm64, macOS Intel/ARM and Windows x64 with the Node.js majors declared in
+`.github/workflows/ci.yml`. Ubuntu x64
 collects coverage in the same run instead of repeating unit/integration tests.
 The real-browser matrix runs console and managed CDP on all five platforms with
 Node 26. A Linux Node 22 matrix cell preserves managed CDP coverage on the minimum
@@ -26,8 +27,8 @@ downloads, profiles and processes. An explicit unverified override fails clearly
 Console tests pass the installed Playwright executable explicitly, avoiding a
 revision mismatch with upstream MCP's bundled Playwright.
 
-CI uploads sanitized results from each matrix cell. The aggregation job expects
-97 producers, including 20 functional and six native managed CDP producers, and generates a combined HTML
+CI uploads sanitized results from each matrix cell. The aggregation job validates the producer inventory generated from the workflow matrix
+and generates a combined HTML
 report. Missing producers and failed tests make aggregation fail. Reports are
 available as Actions artifacts. Public PR links require enabled publication,
 a configured reports repository and GitHub App credentials, an eligible current
@@ -111,7 +112,8 @@ Use the actual output directory reported by the collector as generation input.
 Never add real secrets or external page screenshots to diagnostic fixtures.
 
 Docker parity tests compare the tools and complete schemas of the pinned image.
-They test `browser_find.filename` only when that upstream schema provides it and
-record its availability in the parity report. Passing Docker MCP 0.0.82 parity
-provides no evidence for npm MCP 0.0.83; the npm suite checks filename persistence
-separately. Release completion remains blocked on the agreed official Docker base.
+They test `browser_find.filename` when the pinned upstream schema provides it and
+record its availability in the parity report. Docker and npm both use MCP 0.0.83;
+the npm suite also checks filename persistence independently. The Dockerfile pins
+the official multi-architecture base by digest. Native Docker distribution and CDP
+checks run on both architectures; complete tool parity runs on `linux/amd64`.

@@ -795,77 +795,77 @@
       }
     },
     "index.md": {
-      "sourceHash": "4de04364a5745c6ba846fd1ce2d0e6ec92730c887a785bdb4fa58baaa9c9d8b1",
+      "sourceHash": "79f37137e6ab770a46532808a82565fb5259b8bb7ec3d9aaec9c4cf4bf508f38",
       "translations": {
         "ru": {
           "path": "index.ru.md",
-          "sourceHash": "4de04364a5745c6ba846fd1ce2d0e6ec92730c887a785bdb4fa58baaa9c9d8b1",
-          "translationHash": "b5b97ddb2f5b1190eb67c1d418a7ae19c16b87b3623120707c5c2830c1245a9c",
-          "translator": "manual translation audit",
-          "updatedAt": "2026-10-12T21:36:53.660Z"
+          "sourceHash": "79f37137e6ab770a46532808a82565fb5259b8bb7ec3d9aaec9c4cf4bf508f38",
+          "translationHash": "259fd6ba4f8eafa957bebad4759e5981119587b560484db6399199b17b07b2e4",
+          "translator": "targeted compatibility metadata and manual Node.js list update",
+          "updatedAt": "2026-10-16T13:43:40.509Z"
         },
         "be": {
           "path": "index.be.md",
-          "sourceHash": "4de04364a5745c6ba846fd1ce2d0e6ec92730c887a785bdb4fa58baaa9c9d8b1",
-          "translationHash": "8982fa92fb98b13d95298a94312c3a79e011053caefd5e615f051e8f328d73e9",
-          "translator": "manual translation audit",
-          "updatedAt": "2026-10-12T21:36:53.660Z"
+          "sourceHash": "79f37137e6ab770a46532808a82565fb5259b8bb7ec3d9aaec9c4cf4bf508f38",
+          "translationHash": "65283829bfc7d77b5750788ab6935fdf1b788c334afb62a3f0f51d0344711514",
+          "translator": "targeted compatibility metadata and manual Node.js list update",
+          "updatedAt": "2026-10-16T13:43:40.509Z"
         },
         "uk": {
           "path": "index.uk.md",
-          "sourceHash": "4de04364a5745c6ba846fd1ce2d0e6ec92730c887a785bdb4fa58baaa9c9d8b1",
-          "translationHash": "b02800b3738d10e369ce8e6f33cde86c2d670c8040176a6dba2d683646c0ee1a",
-          "translator": "manual translation audit",
-          "updatedAt": "2026-10-12T21:36:53.660Z"
+          "sourceHash": "79f37137e6ab770a46532808a82565fb5259b8bb7ec3d9aaec9c4cf4bf508f38",
+          "translationHash": "3b4cfe11c28156608ecd2575876e5d356aac11d2b2e0fdee3818d6d3ece802d0",
+          "translator": "targeted compatibility metadata and manual Node.js list update",
+          "updatedAt": "2026-10-16T13:43:40.509Z"
         },
         "es": {
           "path": "index.es.md",
-          "sourceHash": "4de04364a5745c6ba846fd1ce2d0e6ec92730c887a785bdb4fa58baaa9c9d8b1",
-          "translationHash": "5460b7f21d79d65dda7b1f2c62164d6ef8e1c493e674c06ee543fbdfc299cfe0",
-          "translator": "manual translation audit",
-          "updatedAt": "2026-10-12T21:36:53.660Z"
+          "sourceHash": "79f37137e6ab770a46532808a82565fb5259b8bb7ec3d9aaec9c4cf4bf508f38",
+          "translationHash": "9a8c02bb8df18e22108f3c21aa49b667a67cb5fb3bcb651cd9d849616854a11c",
+          "translator": "targeted compatibility metadata and manual Node.js list update",
+          "updatedAt": "2026-10-16T13:43:40.509Z"
         },
         "pt-BR": {
           "path": "index.pt-BR.md",
-          "sourceHash": "4de04364a5745c6ba846fd1ce2d0e6ec92730c887a785bdb4fa58baaa9c9d8b1",
-          "translationHash": "9961785c355adbdda210b20a08c17cc9e77d53cfcb36052ba6b25562b676650f",
-          "translator": "manual translation audit",
-          "updatedAt": "2026-10-12T21:36:53.660Z"
+          "sourceHash": "79f37137e6ab770a46532808a82565fb5259b8bb7ec3d9aaec9c4cf4bf508f38",
+          "translationHash": "fca8e74195cff52a920df139fd4afb6e16dc2b9201409ffaff4c92dd333c5cd1",
+          "translator": "targeted compatibility metadata and manual Node.js list update",
+          "updatedAt": "2026-10-16T13:43:40.509Z"
         },
         "zh": {
           "path": "index.zh.md",
-          "sourceHash": "4de04364a5745c6ba846fd1ce2d0e6ec92730c887a785bdb4fa58baaa9c9d8b1",
-          "translationHash": "fd2cd7de0db0d36513f31dc7b84b989c3a476975fa227ec5f52a8beac70248fe",
-          "translator": "manual translation audit",
-          "updatedAt": "2026-10-12T21:36:53.660Z"
+          "sourceHash": "79f37137e6ab770a46532808a82565fb5259b8bb7ec3d9aaec9c4cf4bf508f38",
+          "translationHash": "3eceedcf7892480bf4eaa6ca1d6aa79bb126a4c426bb4880228e1bcd652487fb",
+          "translator": "targeted compatibility metadata and manual Node.js list update",
+          "updatedAt": "2026-10-16T13:43:40.509Z"
         },
         "ja": {
           "path": "index.ja.md",
-          "sourceHash": "4de04364a5745c6ba846fd1ce2d0e6ec92730c887a785bdb4fa58baaa9c9d8b1",
-          "translationHash": "e91214752ed953fca02b5d7c8799bb4ccbe1bc0111a580d0a73af1ea43e46b4b",
-          "translator": "manual translation audit",
-          "updatedAt": "2026-10-12T21:36:53.660Z"
+          "sourceHash": "79f37137e6ab770a46532808a82565fb5259b8bb7ec3d9aaec9c4cf4bf508f38",
+          "translationHash": "fd9512e0e9a6d84211fabc0f10bba1fd4add6c1f8ee1f47ff139c42b20ef8277",
+          "translator": "targeted compatibility metadata and manual Node.js list update",
+          "updatedAt": "2026-10-16T13:43:40.509Z"
         },
         "de": {
           "path": "index.de.md",
-          "sourceHash": "4de04364a5745c6ba846fd1ce2d0e6ec92730c887a785bdb4fa58baaa9c9d8b1",
-          "translationHash": "5e77e8ff5c42d4daa009245ee8276d94e7dc930cea6f8cc1fd1041244d48455c",
-          "translator": "manual translation audit",
-          "updatedAt": "2026-10-12T21:36:53.660Z"
+          "sourceHash": "79f37137e6ab770a46532808a82565fb5259b8bb7ec3d9aaec9c4cf4bf508f38",
+          "translationHash": "d0188ca6446d988a8e61aae664c27095534b2a85173b6d865c5fc449598d39bb",
+          "translator": "targeted compatibility metadata and manual Node.js list update",
+          "updatedAt": "2026-10-16T13:43:40.509Z"
         },
         "fr": {
           "path": "index.fr.md",
-          "sourceHash": "4de04364a5745c6ba846fd1ce2d0e6ec92730c887a785bdb4fa58baaa9c9d8b1",
-          "translationHash": "e9eb285e43af6559908a4ed286696b08bd9ab7ddbb7d1012be931f16f8f091e8",
-          "translator": "manual translation audit",
-          "updatedAt": "2026-10-12T21:36:53.660Z"
+          "sourceHash": "79f37137e6ab770a46532808a82565fb5259b8bb7ec3d9aaec9c4cf4bf508f38",
+          "translationHash": "dd8f328bbfa8146565905d2758ed7229997457093915512646e55b0fc2832329",
+          "translator": "targeted compatibility metadata and manual Node.js list update",
+          "updatedAt": "2026-10-16T13:43:40.509Z"
         },
         "hi": {
           "path": "index.hi.md",
-          "sourceHash": "4de04364a5745c6ba846fd1ce2d0e6ec92730c887a785bdb4fa58baaa9c9d8b1",
-          "translationHash": "cb585dd6e1db27c52700d2dd6760507a9b3c1adfec042eeed738c5a45e5d75b2",
-          "translator": "manual translation audit",
-          "updatedAt": "2026-10-12T21:36:53.660Z"
+          "sourceHash": "79f37137e6ab770a46532808a82565fb5259b8bb7ec3d9aaec9c4cf4bf508f38",
+          "translationHash": "086d7fcecb2510d182d1b0fc7192d8278bfcbd327d448e8a2e02713126967e24",
+          "translator": "targeted compatibility metadata and manual Node.js list update",
+          "updatedAt": "2026-10-16T13:43:40.509Z"
         }
       }
     },
@@ -1245,77 +1245,77 @@
       }
     },
     "version-compatibility.md": {
-      "sourceHash": "6b0736c7c74309250a0c3a6ae9d373edb5f0c0dd55eb89d3404ab0b6cd6a2323",
+      "sourceHash": "72206e050beddcd555986af48654b1b60a9699dc424e8ae0f1308189b1997263",
       "translations": {
         "ru": {
           "path": "version-compatibility.ru.md",
-          "sourceHash": "6b0736c7c74309250a0c3a6ae9d373edb5f0c0dd55eb89d3404ab0b6cd6a2323",
-          "translationHash": "f16757372294e7d816d1388d5b53c305df8701779b41999dde5934c2b7be4cf7",
-          "translator": "manual translation audit",
-          "updatedAt": "2026-10-12T21:36:53.660Z"
+          "sourceHash": "72206e050beddcd555986af48654b1b60a9699dc424e8ae0f1308189b1997263",
+          "translationHash": "df049c9812094ce4fabeb8370b810b36568bb806a7d43a7fddf85d6017c24682",
+          "translator": "targeted compatibility metadata and manual Node.js list update",
+          "updatedAt": "2026-10-16T13:43:40.509Z"
         },
         "be": {
           "path": "version-compatibility.be.md",
-          "sourceHash": "6b0736c7c74309250a0c3a6ae9d373edb5f0c0dd55eb89d3404ab0b6cd6a2323",
-          "translationHash": "2960b263995a8a1d36d982cfcdea2d5becdad259dbeb4d6ef41cedd2bfd77ff7",
-          "translator": "manual translation audit",
-          "updatedAt": "2026-10-12T21:36:53.660Z"
+          "sourceHash": "72206e050beddcd555986af48654b1b60a9699dc424e8ae0f1308189b1997263",
+          "translationHash": "bdfc46aece1d837699a9a453902ffaed2c95d03358951a4284e49987818394e0",
+          "translator": "targeted compatibility metadata and manual Node.js list update",
+          "updatedAt": "2026-10-16T13:43:40.509Z"
         },
         "uk": {
           "path": "version-compatibility.uk.md",
-          "sourceHash": "6b0736c7c74309250a0c3a6ae9d373edb5f0c0dd55eb89d3404ab0b6cd6a2323",
-          "translationHash": "871a935a60bc37ca18dc9cb28fb2d9061a52ad193087ba51674d4917611102f2",
-          "translator": "manual translation audit",
-          "updatedAt": "2026-10-12T21:36:53.660Z"
+          "sourceHash": "72206e050beddcd555986af48654b1b60a9699dc424e8ae0f1308189b1997263",
+          "translationHash": "a16a8b72e342866629dafef7d437af77ba798d46c7e91a72a4652f13a04f9102",
+          "translator": "targeted compatibility metadata and manual Node.js list update",
+          "updatedAt": "2026-10-16T13:43:40.509Z"
         },
         "es": {
           "path": "version-compatibility.es.md",
-          "sourceHash": "6b0736c7c74309250a0c3a6ae9d373edb5f0c0dd55eb89d3404ab0b6cd6a2323",
-          "translationHash": "f8d78172a826177eea586c8b389e37141489c9dc3e15e62c51b4340a3531e3d1",
-          "translator": "manual translation audit",
-          "updatedAt": "2026-10-12T21:36:53.660Z"
+          "sourceHash": "72206e050beddcd555986af48654b1b60a9699dc424e8ae0f1308189b1997263",
+          "translationHash": "68b61459838ec3fc87eacf6342fbf65c45c206a4ce58ce6829385b15652046f7",
+          "translator": "targeted compatibility metadata and manual Node.js list update",
+          "updatedAt": "2026-10-16T13:43:40.509Z"
         },
         "pt-BR": {
           "path": "version-compatibility.pt-BR.md",
-          "sourceHash": "6b0736c7c74309250a0c3a6ae9d373edb5f0c0dd55eb89d3404ab0b6cd6a2323",
-          "translationHash": "583495818347ff6a3b53f0253bf98625167a45ccaf7ef1dfc2377dd4fae83a14",
-          "translator": "manual translation audit",
-          "updatedAt": "2026-10-12T21:36:53.660Z"
+          "sourceHash": "72206e050beddcd555986af48654b1b60a9699dc424e8ae0f1308189b1997263",
+          "translationHash": "e4f2811e208412c66db50eb55b308d35b91a56ce95c7e42a0a77869d7d113781",
+          "translator": "targeted compatibility metadata and manual Node.js list update",
+          "updatedAt": "2026-10-16T13:43:40.509Z"
         },
         "zh": {
           "path": "version-compatibility.zh.md",
-          "sourceHash": "6b0736c7c74309250a0c3a6ae9d373edb5f0c0dd55eb89d3404ab0b6cd6a2323",
-          "translationHash": "fd362f75e5c68817df723554644e66f6816df2a8838396480f003d325c6df048",
-          "translator": "manual translation audit",
-          "updatedAt": "2026-10-12T21:36:53.660Z"
+          "sourceHash": "72206e050beddcd555986af48654b1b60a9699dc424e8ae0f1308189b1997263",
+          "translationHash": "a3a070ba776b679834264eb548476988d56e93141063b4d852df3716d5817034",
+          "translator": "targeted compatibility metadata and manual Node.js list update",
+          "updatedAt": "2026-10-16T13:43:40.509Z"
         },
         "ja": {
           "path": "version-compatibility.ja.md",
-          "sourceHash": "6b0736c7c74309250a0c3a6ae9d373edb5f0c0dd55eb89d3404ab0b6cd6a2323",
-          "translationHash": "6082ba52ece29f9e9b273fdd500d7bef8a0e76455443d3ea930ec5b1b9fc749f",
-          "translator": "manual translation audit",
-          "updatedAt": "2026-10-12T21:36:53.660Z"
+          "sourceHash": "72206e050beddcd555986af48654b1b60a9699dc424e8ae0f1308189b1997263",
+          "translationHash": "368c1fd1b929d01990da45e16240cd1c7d7250acf3edc269e72e94effbf7aa0e",
+          "translator": "targeted compatibility metadata and manual Node.js list update",
+          "updatedAt": "2026-10-16T13:43:40.509Z"
         },
         "de": {
           "path": "version-compatibility.de.md",
-          "sourceHash": "6b0736c7c74309250a0c3a6ae9d373edb5f0c0dd55eb89d3404ab0b6cd6a2323",
-          "translationHash": "d36bb8fd0852efe5caab7e1520ee9eec2339d06cd8e1b2ae48f9e57c47223d4f",
-          "translator": "manual translation audit",
-          "updatedAt": "2026-10-12T21:36:53.660Z"
+          "sourceHash": "72206e050beddcd555986af48654b1b60a9699dc424e8ae0f1308189b1997263",
+          "translationHash": "1ca42e4c46c07649489f3c8d7fda2ed9ce1b5abda029336bdeb890f807824680",
+          "translator": "targeted compatibility metadata and manual Node.js list update",
+          "updatedAt": "2026-10-16T13:43:40.509Z"
         },
         "fr": {
           "path": "version-compatibility.fr.md",
-          "sourceHash": "6b0736c7c74309250a0c3a6ae9d373edb5f0c0dd55eb89d3404ab0b6cd6a2323",
-          "translationHash": "4d6606c066fb7fcbb98f50da5c8e28eeb99bfd420d5dcc18cd06b417579d9ec9",
-          "translator": "manual translation audit",
-          "updatedAt": "2026-10-12T21:36:53.660Z"
+          "sourceHash": "72206e050beddcd555986af48654b1b60a9699dc424e8ae0f1308189b1997263",
+          "translationHash": "9edcd3e11770387baa303574e3f0cb164866c57ff9168eec563dc5428296caca",
+          "translator": "targeted compatibility metadata and manual Node.js list update",
+          "updatedAt": "2026-10-16T13:43:40.509Z"
         },
         "hi": {
           "path": "version-compatibility.hi.md",
-          "sourceHash": "6b0736c7c74309250a0c3a6ae9d373edb5f0c0dd55eb89d3404ab0b6cd6a2323",
-          "translationHash": "a94745388a8206871718d8efa1b7bd7843e4c98f70f79c49338f5720af3c7cc3",
-          "translator": "manual translation audit",
-          "updatedAt": "2026-10-12T21:36:53.660Z"
+          "sourceHash": "72206e050beddcd555986af48654b1b60a9699dc424e8ae0f1308189b1997263",
+          "translationHash": "8073264a85dda6256051edc38e263f579be1fa44f838c5c496ad777b8935d408",
+          "translator": "targeted compatibility metadata and manual Node.js list update",
+          "updatedAt": "2026-10-16T13:43:40.509Z"
         }
       }
     },

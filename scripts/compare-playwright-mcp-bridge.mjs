@@ -18,7 +18,7 @@ const sliceResult = process.argv.slice(2);
 const { image, reportPath } = parseArgs(sliceResult);
 const baselineImage =
   process.env.PLAYWRIGHT_MCP_BASELINE_IMAGE ??
-  'mcr.microsoft.com/playwright/mcp:v0.0.82@sha256:77dccc5ce9e94cb8ae7ebea87ddbb6cd54b05760c4d63c54e16accf2726b8734';
+  'mcr.microsoft.com/playwright/mcp:v0.0.83@sha256:690763cbb437ee7233f538a953bb5390bf03791eb5c965b471e59d17a6132fcb';
 const fixtureServer = await startFixtureServer();
 const baseline = await startMcpContainer('playwright', baselineImage, false);
 const cloak = await startMcpContainer('cloak', image, true);
