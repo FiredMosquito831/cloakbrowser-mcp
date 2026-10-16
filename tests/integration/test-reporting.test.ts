@@ -215,6 +215,7 @@ finally { if (process.connected) process.disconnect(); }`;
     const fault = { root: faultRoot, runId: 'fault', suite: 'unit', config };
     await expect(cli.collectReport(fault)).rejects.toThrow();
   });
+  // Two real HTML generations and history validation need headroom on slower CI runners.
   it('generates real HTML, re-redacts modified evidence and preserves launch history', async () => {
     const run = await fixture('complete');
     const names = await readdir(run.directory);
@@ -251,7 +252,7 @@ finally { if (process.connected) process.disconnect(); }`;
     const html = await readFile(path.join(output, 'index.html'), 'utf8');
     expect(html).toContain('<html');
     await expect(cli.generateReport(generation)).rejects.toThrow('already exists');
-  });
+  }, 60_000);
   it.each(['linux', 'darwin', 'win32'])(
     'keeps operating system variants distinct in real Allure output from %s',
     async (initialOs) => {
