@@ -254,19 +254,59 @@ export async function preparePublicReport({ input, output, identity, expected, s
   }
 }
 
+function commentText(value) {
+  const safe = sanitizeDiagnostic(String(value));
+  return safe.replace(/[|`[\]\\*_]/gu, (character) => `&#${character.codePointAt(0)};`).replace(/\s+/gu, ' ');
+}
+
+function environmentRow(entry) {
+  const [os, arch, node, browser, lane] = entry.id.split('/');
+  const operatingSystem = { linux: 'Linux', darwin: 'macOS', win32: 'Windows', windows: 'Windows' }[os] ?? os;
+  const parts = [
+    operatingSystem,
+    arch,
+    node ? `Node.js ${node}` : undefined,
+    browser && browser !== 'none' ? browser : undefined,
+    lane?.replace(/^pr-/u, ''),
+  ];
+  const label = parts.filter(Boolean).join(' · ');
+  const name = commentText(label);
+  return `| ${name} | ${entry.failed} |`;
+}
+
+function environmentTable(environments) {
+  const rows = environments.map(environmentRow).join('\n');
+  return `| Environment | Failed / broken |\n| --- | ---: |\n${rows}`;
+}
+
 function commentBody(identity, summary, href) {
   const ownership = `<!-- cloakbrowser-report:${identity.run}:${identity.attempt}:${identity.sha} -->`;
-  const introduction = `${marker}\n${ownership}\n## Test report\n\nTested SHA: \`${identity.sha}\`\n\n`;
-  if (!summary || !href)
-    return `${introduction}Public report unavailable or expired.\n\n[Actions run and retained artifacts](${identity.fallback})`;
-  const status = summary.missing.length ? 'incomplete' : summary.status;
-  const stats = `Status: **${status}**. Total: ${summary.total}; passed: ${summary.passed}; failed: ${summary.failed}; broken: ${summary.broken}; skipped: ${summary.skipped}.`;
-  const environments = summary.environments
-    .map((entry) => `${entry.id}: ${entry.failed} failed/broken`)
-    .join('\n');
-  const text = `${introduction}${stats}\n\n[View merged Allure report](${href})\n\nEnvironments:\n\n${environments}\n\nMissing producers: ${summary.missing.length}.\n\n[Actions run and retained artifacts](${identity.fallback})`;
-  const safe = sanitizeDiagnostic(text.slice(introduction.length));
-  return `${introduction}${safe}`;
+  const introduction = `${marker}\n${ownership}\n## Test report\n\n`;
+  const shortSha = identity.sha.slice(0, 7);
+  const commit = `https://github.com/${sourceRepository}/commit/${identity.sha}`;
+  const links = `Commit [\`${shortSha}\`](${commit}) · [CI run & artifacts](${identity.fallback})`;
+  if (!summary || !href) return `${introduction}⚠️ **Public report unavailable or expired.**\n\n${links}`;
+  const status = summary.missing.length
+    ? '⚠️ **Incomplete**'
+    : summary.status === 'passed'
+      ? '✅ **Passed**'
+      : '❌ **Failed**';
+  const stats = `| Total | Passed | Failed | Broken | Skipped |\n| ---: | ---: | ---: | ---: | ---: |\n| ${summary.total} | ${summary.passed} | ${summary.failed} | ${summary.broken} | ${summary.skipped} |`;
+  const environments = [...summary.environments].sort((left, right) => left.id.localeCompare(right.id, 'en'));
+  const failing = environments.filter((entry) => entry.failed > 0);
+  const attention = failing.length ? `\n\n### Needs attention\n\n${environmentTable(failing)}` : '';
+  const missing = summary.missing.length
+    ? `\n\n⚠️ **Missing producers: ${summary.missing.length}**\n\n${summary.missing.map((id) => `- ${commentText(id)}`).join('\n')}`
+    : '';
+  const environmentDetails = environmentTable(environments);
+  const safeDetails = sanitizeDiagnostic(environmentDetails);
+  const details = environments.length
+    ? `\n\n<details>\n<summary>All environments (${environments.length})</summary>\n\n${safeDetails}\n\n</details>`
+    : '';
+  const text = `${status} · ${links}\n\n**[Open Allure report →](${href})**\n\n${stats}${attention}${missing}`;
+  const safe = sanitizeDiagnostic(text);
+  // Only the fixed disclosure markup bypasses HTML escaping; all report data is sanitized.
+  return `${introduction}${safe}${details}`;
 }
 
 async function list(api, endpoint, key) {

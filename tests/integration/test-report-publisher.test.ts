@@ -140,9 +140,70 @@ describe('trusted report publisher', () => {
     expect(f.writes[0]?.endpoint).toBe(`${base}/issues/7/comments`);
     const body = JSON.stringify(f.writes[0]?.body);
     expect(body).toContain(sha);
-    expect(body).toContain('windows');
-    expect(body).toContain('failed');
+    expect(body).toContain('Windows');
+    expect(body).toContain('❌ **Failed**');
     expect(body).toContain(reportUrl);
+  });
+  it('keeps successful environments collapsed and highlights failures with readable names', async () => {
+    const f = fakeApi();
+    const summary = {
+      ...report,
+      environments: [
+        { id: 'linux/arm64/24/none/pr-quality', failed: 0 },
+        { id: 'darwin/x64/22/none/pr-quality', failed: 1 },
+      ],
+    };
+    await publisher.updateReportComment(f.api, identity, summary, reportUrl);
+    const body = (f.writes[0]?.body as { body: string }).body;
+    const [overview, details] = body.split('<details>');
+    expect(overview).toContain('| 2 | 1 | 1 | 0 | 0 |');
+    expect(overview).toContain('macOS · x64 · Node.js 22 · quality');
+    expect(overview).not.toContain('Linux');
+    expect(overview).not.toContain('none');
+    expect(details).toContain('All environments (2)');
+    expect(details).toContain('Linux · arm64 · Node.js 24 · quality');
+    expect(body).toContain(`Commit [\`${sha.slice(0, 7)}\`]`);
+    expect(body).toContain('**[Open Allure report →]');
+  });
+  it('omits attention warnings for a successful run and sorts environments deterministically', async () => {
+    const summary = {
+      ...report,
+      status: 'passed',
+      passed: 2,
+      failed: 0,
+      environments: report.environments.map((entry) => ({ ...entry, failed: 0 })),
+    };
+    const initial = fakeApi();
+    await publisher.updateReportComment(initial.api, identity, summary, reportUrl);
+    const body = (initial.writes[0]?.body as { body: string }).body;
+    expect(body).toContain('✅ **Passed**');
+    expect(body).not.toContain('Needs attention');
+    expect(body).not.toContain('Missing producers');
+    const reordered = { ...summary, environments: [...summary.environments].reverse() };
+    const duplicate = fakeApi([{ id: 2, user: bot, body }]);
+    const status = await publisher.updateReportComment(duplicate.api, identity, reordered, reportUrl);
+    expect(status).toBe('unchanged');
+    expect(duplicate.writes).toEqual([]);
+  });
+  it('marks incomplete evidence and escapes Markdown and HTML in environment labels', async () => {
+    const f = fakeApi();
+    const summary = {
+      ...report,
+      status: 'passed',
+      failed: 0,
+      missing: ['quality|missing', 'api_key=comment-secret-canary'],
+      environments: [{ id: '<img src=x>|[link]', failed: 0 }],
+    };
+    await publisher.updateReportComment(f.api, identity, summary, reportUrl);
+    const body = (f.writes[0]?.body as { body: string }).body;
+    expect(body).toContain('⚠️ **Incomplete**');
+    expect(body).not.toContain('✅ **Passed**');
+    expect(body).toContain('Missing producers: 2');
+    expect(body).not.toContain('comment-secret-canary');
+    expect(body).toContain('quality&#124;missing');
+    expect(body).not.toContain('<img');
+    expect(body).not.toContain('[link]');
+    expect(body).toContain('&lt;img src=x&gt;&#124;&#91;link&#93;');
   });
   it('updates only one bot-owned marker and makes identical events idempotent', async () => {
     const initial = fakeApi();
