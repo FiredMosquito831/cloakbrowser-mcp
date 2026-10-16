@@ -391,7 +391,7 @@ describe('CDP HTTP proxy integration', () => {
     const closeResult = proxy.close();
     await expect(closeResult).resolves.toBeUndefined();
   });
-  it('normalizes and redacts upstream failures, size excess, timeout, and unexpected errors', async () => {
+  it('normalizes and redacts upstream failures, size excess, and unexpected errors', async () => {
     let mode = 'client-error';
     const fake = await fakeChromium((_request, response) => {
       if (mode === 'client-error') {
@@ -422,8 +422,7 @@ describe('CDP HTTP proxy integration', () => {
         response.end(concatResult);
       }
     });
-    const readyProxyOptions2 = { upstreamTimeoutMs: 1000 } as const;
-    const proxy = await readyProxy(fake, readyProxyOptions2);
+    const proxy = await readyProxy(fake);
     const headers = { Host: `127.0.0.1:${proxy.port}` };
     const path = `/cdp/${capability}/json/version`;
     const clientError = await requestProxy(proxy, path, headers);
@@ -449,10 +448,6 @@ describe('CDP HTTP proxy integration', () => {
     const requestProxyResult7 = await requestProxy(proxy, path, headers);
     const errorCodeResult15 = errorCode(requestProxyResult7);
     expect(errorCodeResult15).toBe('bad_gateway');
-    mode = 'timeout';
-    const requestProxyResult8 = await requestProxy(proxy, path, headers);
-    const errorCodeResult16 = errorCode(requestProxyResult8);
-    expect(errorCodeResult16).toBe('gateway_timeout');
     const standaloneProxyOptions: Partial<import('@/cdp/httpProxy.js').StartCdpHttpProxyOptions> | undefined =
       {
         requestUpstream: async () => ({ body: Buffer.from('{}'), statusCode: Number.NaN }),
@@ -485,6 +480,19 @@ describe('CDP HTTP proxy integration', () => {
     expect(errorCodeResult18).toBe('internal_error');
     const toStringResult3 = unexpected.body.toString();
     expect(toStringResult3).not.toContain('protected');
+  });
+  it('returns a gateway timeout when the upstream accepts a request without responding', async () => {
+    const handler = vi.fn();
+    const fake = await fakeChromium(handler);
+    const options = { upstreamTimeoutMs: 1000 } as const;
+    const proxy = await readyProxy(fake, options);
+    const path = `/cdp/${capability}/json/version`;
+    const headers = { Host: `127.0.0.1:${proxy.port}` };
+    const response = await requestProxy(proxy, path, headers);
+    expect(response.status).toBe(504);
+    const code = errorCode(response);
+    expect(code).toBe('gateway_timeout');
+    expect(fake.requests).toHaveLength(1);
   });
   it('preserves allowed methods and new-target query while keeping upstream plaintext', async () => {
     const fake = await fakeChromium((request, response) => {
