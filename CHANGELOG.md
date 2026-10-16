@@ -8,26 +8,82 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- Opt-in Allure Report 3 output for Vitest suites, validated CI matrix aggregation,
-  and sanitized report publication to a separate GitHub Pages repository with
-  guarded pull request links and 14-day retention.
-- Retain the fingerprint seed across launches of explicitly configured persistent CloakBrowser profiles, using the interoperable `.cloakbrowser-seed` file.
+- Optional Allure Report 3 reporting for unit, integration, and distribution E2E
+  tests, with local HTML generation and viewing, retry history, and sanitized
+  screenshots and diagnostic attachments.
+- Combined CI reports and artifacts across the platform matrix, with guarded PR
+  report links published to a separate GitHub Pages repository and retained for
+  14 days. PR comments group results into Linux, macOS, and Windows tables with
+  separate architecture, Node.js, browser, suite, failure-count, and job-link columns.
+- Real-browser tests using local pages for navigation, clicks, forms, uploads,
+  downloads, persistent cookies and localStorage, session isolation, both humanization
+  presets, proxies and GeoIP, extensions, CDP, and process cleanup. Fake upstream
+  MCP tests remain separate from Chromium acceptance tests.
+- Persistent fingerprint identities for explicitly configured CloakBrowser profiles,
+  using the interoperable `.cloakbrowser-seed` file across launches.
 
 ### Changed
 
-- Update the CloakBrowser npm dependency to 0.6.3, including GeoIP locale fallback and Seychelles mapping, improved mouse, keyboard, and scroll behavior, the revised humanized action engine, isolated-world reads and event dispatch, faster dropdown selection, concurrent-download fixes, and Playwright 1.64 action visibility compatibility.
-- Update the upstream Playwright MCP npm dependency to 0.0.83, which adds the optional `browser_find.filename` argument for saving results to a file.
+- Updated CloakBrowser to 0.6.3, including GeoIP locale fallback
+  and Seychelles mapping, improved mouse, keyboard, and scroll behavior, the revised
+  humanized action engine, isolated-world reads and event dispatch, faster dropdown
+  selection, concurrent-download fixes, and Playwright 1.64 action visibility compatibility.
+- Updated the upstream Playwright MCP npm dependency to 0.0.83, including the
+  optional `browser_find.filename` argument for saving results to a file. Docker
+  continues to use the separately pinned official MCP 0.0.82 image.
+- Moved application tests, dependency audits, signature verification, and package
+  installation checks into the required PR pipeline, with parallel native-platform
+  and Docker matrices. Release jobs build and publish artifacts without repeating
+  those tests; weekly and manual CI runs remain available.
+- Centralized the tested Node.js majors, 22, 24, and 26, in the CI workflow for
+  reuse by jobs, report aggregation, and documentation. Removed EOL Node.js 25 from
+  the test matrix without changing the package's runtime engine range.
+- Run Vitest files in separate worker processes, using the runner's available CPU
+  parallelism in CI and at most four workers locally. Vitest's `--maxWorkers` option
+  overrides the default.
+- Parameterized documentation versions and runtime requirements, refreshed the
+  English guides and all ten translations, and documented test execution and reports.
+- Temporarily skipped three full-locale tests only for keyless Free Chromium on
+  macOS because of [CloakBrowser #82](https://github.com/CloakHQ/CloakBrowser/issues/82).
+  Other macOS proxy and GeoIP tests remain enabled.
+
+### Removed
+
+- Repository copies of generic specification-interview and task-packet instructions;
+  engineering workflows use the globally installed skills.
 
 ### Fixed
 
-- Start native date/time entry from the first editor segment with CloakBrowser 0.6.2/0.6.3, preventing digits from being entered into the year field after an initial click.
-- Handle `ENOTSUP` when publishing persistent profile seeds on filesystems without hard-link support.
-- Apply a version- and source-verified compatibility fix for CloakBrowser 0.6.0–0.6.3 humanize: preserve ancestor iframe visibility and allow detached DOM elements to be collected without modifying installed dependency files.
+- Start native date/time entry at the first editor segment with CloakBrowser
+  0.6.2/0.6.3, preventing digits from being entered into the year field after the initial click.
+- Publish persistent profile seeds exclusively on filesystems without hard-link
+  support, including permission, unsupported-operation, and cross-device fallbacks.
+- Apply a version- and source-verified compatibility fix for CloakBrowser 0.6.0–0.6.3
+  humanize: preserve ancestor iframe visibility and allow detached DOM elements to
+  be collected without modifying installed dependency files.
+- Resolve Docker humanization against the Playwright core shipped in the pinned
+  official MCP image instead of a mismatched npm copy.
+- Stop canceled Streamable HTTP initialization before starting the upstream process,
+  and release stdio bridge resources when stdin closes.
+- Retry temporarily unavailable Chromium discovery endpoints and handle already
+  aborted CDP bootstrap challenges without unhandled socket errors.
+- Preserve safe native termination codes in CDP startup diagnostics while retaining
+  generic HTTP errors and redacting launch arguments, paths, and credentials.
+- Aggregate large test matrices and partial CI reruns without discarding producer
+  manifests or reusing stale passing evidence. Publish HTML with separate assets
+  to avoid GitHub's per-file size limit, and use workflow Node.js defaults when the
+  publication environment does not provide an override.
+- Separate CDP response-size and timeout tests so a short timeout cannot mask the
+  response-size assertion on slower CI runners.
 
 ### Security
 
-- Update MCP SDK to a patched release (1.31.0 or later) and resolve the patched `proxy-addr`
-  dependency to address production audit findings without weakening the CI gate.
+- Updated the MCP SDK to 1.32.1 and `proxy-addr` to 2.0.8 to address production
+  dependency audit findings without weakening the CI gate.
+- Validate the discovered proxy exit IP before applying GeoIP or explicit WebRTC
+  fingerprint overrides, preventing caller-supplied values from bypassing discovery.
+- Escape CDP challenge strings for JavaScript and embedded script contexts, and
+  verify certificate trust and TLS peer hostnames in CDP TLS tests.
 
 ## [1.14.1] - 2026-09-27
 
