@@ -217,13 +217,6 @@ Streamable en exécution, les cas d'utilisation, les règles de priorité et les
 
 Pour une procédure concise, voir [QA régionale via un proxy](recipes/regional-qa-through-proxy.md).
 
-La correspondance fonctionne en fail-closed : si CloakBrowser ne peut pas
-résoudre l'IP de sortie du proxy, la base GeoIP, le fuseau horaire ou les
-paramètres régionaux, le navigateur ne démarre pas avec une empreinte
-partiellement correspondante. La résolution GeoIP est limitée à 20 secondes ;
-le premier téléchargement de la base GeoIP hors ligne est distinct et peut
-prendre plus de temps.
-
 ## Comportement d'entrée humanisé
 
 Définissez `CLOAK_PLAYWRIGHT_MCP_HUMANIZE=true` pour activer la couche de CloakBrowser imitant les

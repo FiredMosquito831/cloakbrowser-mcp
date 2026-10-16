@@ -13,7 +13,8 @@ class ProjectMetadataTests(unittest.TestCase):
         self.root = Path(self.directory.name)
         self.package = {
             "version": "1.2.3",
-            "dependencies": {"@playwright/mcp": "^0.0.83", "cloakbrowser": "^0.6.2"},
+            "engines": {"node": "^22.13.0 || >=24.0.0"},
+            "dependencies": {"@playwright/mcp": "^0.0.83", "cloakbrowser": "^0.6.3"},
         }
         self.compatibility = [{
             "version": "1.2.3",
@@ -36,13 +37,20 @@ class ProjectMetadataTests(unittest.TestCase):
         content = json.dumps(data)
         path.write_text(content, encoding="utf-8")
 
+    def test_node_requirement_tracks_package_engines(self):
+        expected = "^24.0.0 || >=26.0.0"
+        self.package["engines"]["node"] = expected
+        self.write_json(self.package_path, self.package)
+        metadata = read_project_metadata(self.root)
+        self.assertEqual(metadata["node_engine_range"], expected)
+
     def test_current_dependencies_are_independent_of_release_history(self):
         metadata = read_project_metadata(self.root)
         expected = {
             "playwright_mcp_dependency": "^0.0.83",
-            "cloakbrowser_dependency": "^0.6.2",
+            "cloakbrowser_dependency": "^0.6.3",
             "playwright_mcp_package_tag": "@playwright/mcp@0.0.83",
-            "cloakbrowser_release_tag": "v0.6.2",
+            "cloakbrowser_release_tag": "v0.6.3",
             "playwright_mcp_docker_base": self.base,
             "npm_pin": "cloakbrowser-mcp@1.2.3",
         }

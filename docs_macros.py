@@ -19,6 +19,7 @@ def read_project_metadata(root: Path | None = None) -> dict[str, str]:
     return {
         "version": version,
         "version_tag": f"v{version}",
+        "node_engine_range": package["engines"]["node"],
         "docker_version": docker_version,
         "npm_pin": f"cloakbrowser-mcp@{version}",
         "docker_image": f"swimmwatch/cloakbrowser-mcp:{docker_version}",

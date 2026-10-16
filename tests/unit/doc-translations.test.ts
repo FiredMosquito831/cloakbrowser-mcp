@@ -177,9 +177,11 @@ describe('documentation translation helpers', () => {
       '---',
       '',
       'Use `CODE` and https://example.com/path.',
+      'Runtime: {{ project.node_engine_range }}.',
     ].join('\n');
     const protectedMarkdown = translations.protectMarkdown(markdown);
     expect(protectedMarkdown.text).toContain('<clb-keep');
+    expect(protectedMarkdown.text).not.toContain('{{ project.node_engine_range }}');
     const restoreMarkdownResult = translations.restoreMarkdown(
       protectedMarkdown.text,
       protectedMarkdown.placeholders,

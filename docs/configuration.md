@@ -234,12 +234,6 @@ See [GeoIP Proxy Matching](geoip-proxy-matching.md) for setup examples, runtime
 Streamable HTTP proxy metadata, use cases, precedence rules, and limitations.
 For a concise task path, see [Regional QA Through Proxy](recipes/regional-qa-through-proxy.md).
 
-Matching is fail-closed: if CloakBrowser cannot resolve the proxy exit IP, GeoIP
-database, timezone, or locale, the browser does not start with a partially
-matched fingerprint. GeoIP lookup uses a maximum 20-second resolution timeout;
-the first download of the offline GeoIP database is separate and can take
-longer.
-
 ## Humanized Input Behavior
 
 Set `CLOAK_PLAYWRIGHT_MCP_HUMANIZE=true` to enable CloakBrowser's human-like

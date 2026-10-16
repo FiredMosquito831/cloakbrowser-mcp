@@ -206,10 +206,6 @@ URL 内联身份验证；对于较旧的二进制文件，则保留 Playwright �
 
 简明操作步骤请参阅[通过代理进行区域 QA](recipes/regional-qa-through-proxy.md)。
 
-匹配采用 fail-closed 行为：如果 CloakBrowser 无法解析代理出口 IP、GeoIP
-数据库、时区或区域设置，浏览器不会以部分匹配的指纹启动。GeoIP 解析最长为
-20 秒；首次下载离线 GeoIP 数据库独立进行，可能需要更长时间。
-
 ## 拟人化的输入行为
 
 将 `CLOAK_PLAYWRIGHT_MCP_HUMANIZE=true` 设置为启用 CloakBrowser 的类人

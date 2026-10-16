@@ -192,12 +192,7 @@ Utiliza esta función para realizar pruebas legítimas de control de calidad, lo
 No debe considerarse una forma de eludir los controles de acceso ni las
 comprobaciones de políticas regionales.
 
-La coincidencia GeoIP funciona en modo fail-closed. Si CloakBrowser no puede
-resolver la IP de salida del proxy, descargar o leer la base de datos GeoIP, o
-derivar una zona horaria o configuración regional, el inicio del navegador
-falla en vez de continuar con una huella parcialmente coincidente. La
-resolución GeoIP está limitada a 20 segundos; la primera descarga de la base
-GeoIP sin conexión es independiente y puede tardar más.
+La coincidencia GeoIP impide el inicio si CloakBrowser no puede resolver la IP de salida del proxy, descargar o leer la base de datos GeoIP u obtener una zona horaria. Desde CloakBrowser 0.6.3, si el país no figura en la tabla de configuraciones regionales, se emite una advertencia y se utiliza `en-US`; para Seychelles se utiliza `en-SC`. La resolución GeoIP tiene un límite de 20 segundos; la descarga inicial de la base de datos sin conexión queda fuera de ese límite y puede tardar más.
 
 ## Configuración relacionada
 

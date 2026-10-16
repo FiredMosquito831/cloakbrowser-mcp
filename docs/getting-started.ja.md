@@ -32,7 +32,7 @@ npx -y cloakbrowser-mcp@latest --transport streamable-http --http-protocol https
 npx -y {{ project.npm_pin }}
 ```
 
-この npm パッケージには、22.x 系では Node.js 22.13 以降、または Node.js 24 以降が必要です。CloakBrowser は、Chromium バイナリがすでにキャッシュされていない限り、初回使用時にそれをダウンロードします。
+npm パッケージには Node.js `{{ project.node_engine_range }}` が必要です。CloakBrowser は、Chromium バイナリがすでにキャッシュされていない限り、初回使用時にそれをダウンロードします。
 
 クライアントを接続する前に、`doctor` を使用して、ローカルの Node.js ランタイム、パッケージメタデータ、実際に使用される upstream Playwright MCP CLI、解決された `@playwright/mcp`、`playwright`、`playwright-core` のバージョンとパッケージパス、実際の core bundle パス、および CloakBrowser バイナリのメタデータを確認します。このコマンドでは、ブリッジの起動やブラウザのダウンロードは行われません。
 

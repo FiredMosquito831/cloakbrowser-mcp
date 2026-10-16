@@ -32,7 +32,7 @@ npx -y cloakbrowser-mcp@latest --transport streamable-http --http-protocol https
 npx -y {{ project.npm_pin }}
 ```
 
-Для роботи цього пакета npm потрібна Node.js 22.13 або новіша версія в гілці 22.x чи Node.js 24 або новіша версія. CloakBrowser завантажує свій бінарний файл Chromium під час першого запуску, якщо він ще не збережений у кеші.
+Пакет npm потребує Node.js `{{ project.node_engine_range }}`. CloakBrowser завантажує свій бінарний файл Chromium під час першого запуску, якщо він ще не збережений у кеші.
 
 Перед підключенням клієнта використовуйте `doctor` для перевірки локального середовища виконання Node.js, метаданих пакета, фактично використовуваного upstream CLI Playwright MCP, визначених версій і шляхів пакетів `@playwright/mcp`, `playwright` і `playwright-core`, фактичного шляху до core bundle та метаданих бінарного файла CloakBrowser. Ця команда не запускає міст і не завантажує браузер.
 

@@ -213,12 +213,6 @@ CloakBrowser のタイムゾーン、言語、ロケールのフィンガープ�
 
 簡潔な手順は[プロキシ経由の地域別 QA](recipes/regional-qa-through-proxy.md)を参照してください。
 
-マッチングは fail-closed です。CloakBrowser がプロキシ出口 IP、GeoIP
-データベース、タイムゾーン、またはロケールを解決できない場合、部分的にしか
-一致しないフィンガープリントでブラウザーは起動しません。GeoIP の解決時間は
-最大 20 秒です。オフライン GeoIP データベースの初回ダウンロードは別処理のため、
-さらに時間がかかることがあります。
-
 ## 人間らしい入力行動
 
 `CLOAK_PLAYWRIGHT_MCP_HUMANIZE=true` を設定すると、CloakBrowser の

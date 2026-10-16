@@ -19,7 +19,7 @@ CloakBrowser MCP は、stdio または Streamable HTTP 経由でのブラウザ�
 
 ## npmからインストールすべきか、それともDockerからインストールすべきか？
 
-お使いのマシンですでにMCPクライアントが動作しており、22.x 系の Node.js 22.13 以降、または Node.js 24 以降が利用可能な場合は、npmを使用してください。コンテナ内にCloakBrowserのキャッシュが事前に準備された、再現性のあるPlaywright MCPベースのイメージが必要な場合は、Dockerを使用してください。
+MCP クライアントがすでにローカルで動作しており、Node.js `{{ project.node_engine_range }}` が利用可能な場合は npm を使用してください。Playwright MCP をベースにした再現可能なイメージと、コンテナー内に準備済みの CloakBrowser キャッシュが必要な場合は Docker を使用してください。
 
 ## どのMCPクライアントがこれを利用できますか？
 

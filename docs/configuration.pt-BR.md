@@ -213,12 +213,6 @@ binários antigos.
 Consulte [Correspondência de proxy GeoIP](geoip-proxy-matching.md) para exemplos de configuração, metadados de proxy HTTP
 transmissíveis em tempo de execução, casos de uso, regras de precedência e limitações.
 
-A correspondência funciona em fail-closed: se o CloakBrowser não puder resolver
-o IP de saída do proxy, o banco de dados GeoIP, o fuso horário ou a localidade,
-o navegador não inicia com uma impressão digital parcialmente correspondente. A
-resolução de GeoIP tem no máximo 20 segundos; o primeiro download do banco de
-dados GeoIP offline é separado e pode levar mais tempo.
-
 Para um procedimento breve, consulte [QA regional por proxy](recipes/regional-qa-through-proxy.md).
 
 ## Comportamento humanizado de entrada

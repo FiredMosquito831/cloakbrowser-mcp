@@ -214,13 +214,6 @@ como alternativa para los binarios antiguos.
 Consulta [Coincidencia de proxies GeoIP](geoip-proxy-matching.md) para ver ejemplos de configuración, metadatos de proxy HTTP
 transmisibles en tiempo de ejecución, casos de uso, reglas de prioridad y limitaciones.
 
-La coincidencia funciona en modo fail-closed: si CloakBrowser no puede resolver
-la IP de salida del proxy, la base de datos GeoIP, la zona horaria o la
-configuración regional, el navegador no se inicia con una huella parcialmente
-coincidente. La resolución de GeoIP tiene un máximo de 20 segundos; la primera
-descarga de la base de datos GeoIP sin conexión es independiente y puede tardar
-más.
-
 Para un procedimiento breve, consulte [QA regional mediante proxy](recipes/regional-qa-through-proxy.md).
 
 ## Comportamiento de entrada humanizado

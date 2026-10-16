@@ -191,12 +191,7 @@ npx -y cloakbrowser-mcp@latest
 Utilize esse recurso para testes legítimos de controle de qualidade, localização e consistência de ambiente.
 Ele não deve ser tratado como uma forma de contornar controles de acesso ou verificações de políticas regionais.
 
-A correspondência GeoIP funciona em fail-closed. Se o CloakBrowser não puder
-resolver o IP de saída do proxy, baixar ou ler o banco de dados GeoIP, ou obter
-um fuso horário ou localidade, a inicialização do navegador falha em vez de
-continuar com uma impressão digital parcialmente correspondente. A resolução
-GeoIP é limitada a 20 segundos; o primeiro download do banco GeoIP offline é
-separado e pode levar mais tempo.
+A correspondência GeoIP impede a inicialização se o CloakBrowser não conseguir resolver o IP de saída do proxy, baixar ou ler o banco de dados GeoIP ou obter um fuso horário. A partir do CloakBrowser 0.6.3, um país ausente na tabela de localidades gera um aviso e usa `en-US`; Seychelles usa `en-SC`. A resolução GeoIP tem um limite de 20 segundos; o download inicial do banco de dados offline fica fora desse limite e pode demorar mais.
 
 ## Configuração relacionada
 

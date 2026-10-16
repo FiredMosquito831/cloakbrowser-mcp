@@ -15,14 +15,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
-- Update the CloakBrowser npm dependency to 0.6.2, including the revised humanized action engine, isolated-world reads and event dispatch, faster dropdown selection, concurrent-download fixes, and Playwright 1.64 action visibility compatibility.
+- Update the CloakBrowser npm dependency to 0.6.3, including GeoIP locale fallback and Seychelles mapping, improved mouse, keyboard, and scroll behavior, the revised humanized action engine, isolated-world reads and event dispatch, faster dropdown selection, concurrent-download fixes, and Playwright 1.64 action visibility compatibility.
 - Update the upstream Playwright MCP npm dependency to 0.0.83, which adds the optional `browser_find.filename` argument for saving results to a file.
 
 ### Fixed
 
-- Start native date/time entry from the first editor segment with CloakBrowser 0.6.2, preventing digits from being entered into the year field after an initial click.
+- Start native date/time entry from the first editor segment with CloakBrowser 0.6.2/0.6.3, preventing digits from being entered into the year field after an initial click.
 - Handle `ENOTSUP` when publishing persistent profile seeds on filesystems without hard-link support.
-- Apply a version- and source-verified compatibility fix for CloakBrowser 0.6.0 and 0.6.1 humanize: preserve ancestor iframe visibility and allow detached DOM elements to be collected without modifying installed dependency files.
+- Apply a version- and source-verified compatibility fix for CloakBrowser 0.6.0–0.6.3 humanize: preserve ancestor iframe visibility and allow detached DOM elements to be collected without modifying installed dependency files.
 
 ### Security
 

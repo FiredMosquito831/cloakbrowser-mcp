@@ -217,12 +217,6 @@ von „Streamable HTTP Proxy“-Metadaten, Anwendungsfälle, Prioritätsregeln u
 
 Eine kurze Anleitung finden Sie unter [Regionale QA über einen Proxy](recipes/regional-qa-through-proxy.md).
 
-Die Zuordnung arbeitet fail-closed: Kann CloakBrowser die Proxy-Ausgangs-IP,
-die GeoIP-Datenbank, die Zeitzone oder das Gebietsschema nicht auflösen, startet
-der Browser nicht mit einem nur teilweise passenden Fingerabdruck. Die
-GeoIP-Auflösung ist auf höchstens 20 Sekunden begrenzt; der erste Download der
-Offline-GeoIP-Datenbank erfolgt getrennt und kann länger dauern.
-
 ## Menschliches Eingabeverhalten
 
 Setzen Sie `CLOAK_PLAYWRIGHT_MCP_HUMANIZE=true`, um die menschenähnliche
