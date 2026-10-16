@@ -24,7 +24,9 @@ npm run test:integration
 
 Integration tests use a fake upstream MCP child process and verify that the bridge merges local tools and forwards upstream calls unchanged.
 
-`npm run check` includes static checks, unit/integration tests and packaged CLI tests against fake upstream MCP, without Chromium. PR CI runs unit/integration and CLI tests once per platform/Node combination: Node.js 22 and 24-26 on Linux x64/arm64, macOS x64/arm64 and Windows x64. Linux x64 collects coverage in that same run for Codecov. Static checks and package verification run once on Linux x64/Node.js 22.
+`npm run check` includes static checks, unit/integration tests and packaged CLI tests against fake upstream MCP, without Chromium. PR CI runs unit/integration and CLI tests once per platform/Node combination: Node.js {{ project.node_check_versions }} on Linux x64/arm64, macOS x64/arm64 and Windows x64. Linux x64 collects coverage in that same run for Codecov. Static checks and package verification run once on Linux x64/Node.js {{ project.node_minimum_version }}.
+
+The CI matrix, report inventory and documentation read Node.js versions from `.github/workflows/ci.yml`. Update that file when the tested release lines change.
 
 ## Real Browser And Distribution Tests
 
@@ -41,7 +43,7 @@ npm run test:e2e:cdp:docker
 
 `test:e2e:npm-package` packs and installs the package into a temporary project. Its forwarding-contract check uses fake upstream; browser scenarios use real CloakBrowser and local pages to check standard tools, persistent state, and both humanization presets. A separate case checks concurrent cold-cache downloads and clean stdout. Package verification alone is not browser acceptance.
 
-The PR browser matrix runs Playwright console and managed CDP on Node.js 26 across the same five platforms, plus Linux x64/Node.js 22 for CDP. A parallel Node.js 24 matrix runs npm-package, proxy/GeoIP, extensions and lifecycle suites on all five platforms, including both humanization presets. Docker distribution and CDP acceptance cover both engines on `linux/amd64` and `linux/arm64`.
+The PR browser matrix runs Playwright console and managed CDP on Node.js {{ project.node_current_version }} across the same five platforms, plus Linux x64/Node.js {{ project.node_minimum_version }} for CDP. A parallel Node.js {{ project.node_primary_version }} matrix runs npm-package, proxy/GeoIP, extensions and lifecycle suites on all five platforms, including both humanization presets. Docker distribution and CDP acceptance cover both engines on `linux/amd64` and `linux/arm64`.
 
 `required-ci` requires every suite and the complete aggregate report before merge. The same `CI` workflow also runs weekly and on manual dispatch. `Release` builds and publishes artifacts from the tested revision.
 

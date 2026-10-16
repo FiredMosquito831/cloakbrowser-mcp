@@ -44,16 +44,24 @@ jobs:
       REPORT_PUBLIC_TREE: artifacts/publication-tree
       REPORTS_CHECKOUT: artifacts/reports-checkout
       CLOAK_REPORT_PLATFORMS: '["ubuntu-latest","ubuntu-24.04-arm","macos-latest","macos-15-intel","windows-latest"]'
-      NODE_CHECK_VERSIONS: '["22","24","25","26"]'
     steps:
       - name: Check out publication code from the trusted caller or default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ (github.event_name == 'workflow_run' || github.event_name == 'schedule') && github.event.repository.default_branch || github.sha }}
           persist-credentials: false
+      - name: Read reporting Node version
+        id: node-version
+        shell: node {0}
+        run: |
+          const fs = require('node:fs');
+          const source = fs.readFileSync('.github/workflows/ci.yml', 'utf8');
+          const match = /^ {2}NODE_PRIMARY_VERSION: '([0-9]+)'$/m.exec(source);
+          if (!match) throw new Error('Missing reporting Node version in CI workflow');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${match[1]}\n`);
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version: ${{ steps.node-version.outputs.version }}
           package-manager-cache: false
       - run: npm ci --ignore-scripts
       - name: Validate separate destination

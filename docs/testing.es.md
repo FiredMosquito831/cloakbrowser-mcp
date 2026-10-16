@@ -24,7 +24,9 @@ npm run test:integration
 
 Las pruebas de integración usan un proceso hijo MCP upstream falso y verifican que el puente combine las herramientas locales y reenvíe las llamadas upstream sin cambios.
 
-`npm run check` incluye comprobaciones estáticas, pruebas unitarias/de integración y del CLI empaquetado con upstream MCP simulado, sin Chromium. En los PR, las pruebas unitarias/de integración y del CLI se ejecutan una vez por combinación de plataforma y Node.js: 22 y 24-26 en Linux x64/arm64, macOS x64/arm64 y Windows x64. Linux x64 recoge la cobertura para Codecov en esa misma ejecución. Las comprobaciones estáticas y la verificación del paquete se ejecutan una vez en Linux x64/Node.js 22.
+`npm run check` incluye comprobaciones estáticas, pruebas unitarias/de integración y del CLI empaquetado con upstream MCP simulado, sin Chromium. En los PR, las pruebas unitarias/de integración y del CLI se ejecutan una vez por combinación de plataforma y Node.js: {{ project.node_check_versions }} en Linux x64/arm64, macOS x64/arm64 y Windows x64. Linux x64 recoge la cobertura para Codecov en esa misma ejecución. Las comprobaciones estáticas y la verificación del paquete se ejecutan una vez en Linux x64/Node.js {{ project.node_minimum_version }}.
+
+La matriz de CI, el inventario de resultados esperados y la documentación leen las versiones de Node.js de `.github/workflows/ci.yml`. Actualiza ese archivo cuando cambien las ramas de versiones probadas.
 
 ## Pruebas con navegador real y distribuciones
 
@@ -41,7 +43,7 @@ npm run test:e2e:cdp:docker
 
 `test:e2e:npm-package` empaqueta e instala el paquete en un proyecto temporal. La prueba del contrato de reenvío usa fake upstream; los escenarios de navegador usan CloakBrowser real y páginas locales para verificar herramientas estándar, estado persistente y ambos presets de humanización. Otra prueba verifica descargas concurrentes en una caché vacía y stdout sin texto adicional. Verificar el paquete por sí solo no valida el navegador.
 
-La matriz de navegador del PR comprueba la consola de Playwright y CDP gestionado con Node.js 26 en las mismas cinco plataformas, más Linux x64/Node.js 22 para CDP. Una matriz paralela de Node.js 24 ejecuta las suites del paquete npm, proxy/GeoIP, extensiones y ciclo de vida en las cinco plataformas, incluidos ambos preajustes de humanización. La aceptación de Docker y CDP cubre ambos motores en `linux/amd64` y `linux/arm64`.
+La matriz de navegador del PR comprueba la consola de Playwright y CDP gestionado con Node.js {{ project.node_current_version }} en las mismas cinco plataformas, más Linux x64/Node.js {{ project.node_minimum_version }} para CDP. Una matriz paralela de Node.js {{ project.node_primary_version }} ejecuta las suites del paquete npm, proxy/GeoIP, extensiones y ciclo de vida en las cinco plataformas, incluidos ambos preajustes de humanización. La aceptación de Docker y CDP cubre ambos motores en `linux/amd64` y `linux/arm64`.
 
 `required-ci` exige que todas las suites y el informe agregado completo pasen antes de fusionar. El mismo flujo `CI` también se ejecuta semanalmente y de forma manual. `Release` construye y publica artefactos de la revisión probada.
 

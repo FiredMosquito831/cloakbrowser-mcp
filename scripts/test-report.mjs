@@ -7,6 +7,19 @@ import { sanitizeDiagnostic, sanitizeHistory } from '#scripts/lib/test-diagnosti
 import { mergeTestResults, writeTestResult } from '#scripts/lib/test-results';
 
 const cwd = fileURLToPath(new URL('..', import.meta.url));
+const workflowUrl = new URL('../.github/workflows/ci.yml', import.meta.url);
+const workflowSource = await fs.readFile(workflowUrl, 'utf8');
+function workflowNodeVersion(name) {
+  const pattern = new RegExp(`^ {2}${name}: '([^'\\n]+)'$`, 'mu');
+  const match = pattern.exec(workflowSource);
+  if (!match) throw new Error(`CI reporting: missing workflow constant ${name}`);
+  return match[1];
+}
+const supportedNodeVersions = JSON.parse(workflowNodeVersion('NODE_CHECK_VERSIONS'));
+const minimumNode = workflowNodeVersion('NODE_MINIMUM_VERSION');
+const currentNode = workflowNodeVersion('NODE_CURRENT_VERSION');
+const primaryNode = workflowNodeVersion('NODE_PRIMARY_VERSION');
+
 const suites = {
   unit: ['vitest.config.ts', 'tests/unit'],
   integration: ['vitest.config.ts', 'tests/integration'],
@@ -60,16 +73,16 @@ export function ciPlan(lane, platforms, nodes) {
     );
     return [
       ...quality,
-      ...suites.map((suite) => `${environment}-node24-cloak-${lane}-${suite}`),
-      `${environment}-node26-playwright-${lane}-console`,
-      `${environment}-node26-mixed-${lane}-cdp`,
+      ...suites.map((suite) => `${environment}-node${primaryNode}-cloak-${lane}-${suite}`),
+      `${environment}-node${currentNode}-playwright-${lane}-console`,
+      `${environment}-node${currentNode}-mixed-${lane}-cdp`,
     ];
   });
-  ids.push(`linux-x64-node22-mixed-${lane}-cdp`);
+  ids.push(`linux-x64-node${minimumNode}-mixed-${lane}-cdp`);
   for (const arch of ['x64', 'arm64']) {
-    ids.push(`linux-${arch}-node22-cloak-${lane}-docker`);
+    ids.push(`linux-${arch}-node${minimumNode}-cloak-${lane}-docker`);
     for (const engine of ['cloak', 'playwright'])
-      ids.push(`linux-${arch}-node22-${engine}-${lane}-docker-cdp`);
+      ids.push(`linux-${arch}-node${minimumNode}-${engine}-${lane}-docker-cdp`);
   }
   if (new Set(ids).size !== ids.length || ids.length > 256) throw new Error('CI reporting: duplicate matrix');
   return ids.map(checkedId);
@@ -733,7 +746,7 @@ async function probe() {
 function ciInputs(env = process.env) {
   const lane = env.CLOAK_REPORT_LANE;
   const platforms = JSON.parse(env.CLOAK_REPORT_PLATFORMS || '[]');
-  const nodes = JSON.parse(env.NODE_CHECK_VERSIONS || '["22","24","25","26"]');
+  const nodes = env.NODE_CHECK_VERSIONS ? JSON.parse(env.NODE_CHECK_VERSIONS) : supportedNodeVersions;
   const expected = ciPlan(lane, platforms, nodes);
   const runId = checkedId(`run-${env.GITHUB_RUN_ID}-attempt-${env.GITHUB_RUN_ATTEMPT}`);
   return { lane, expected, runId };

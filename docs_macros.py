@@ -15,17 +15,38 @@ def read_project_metadata(root: Path | None = None) -> dict[str, str]:
     docker_version = version.replace("+", "-")
     _validate_compatibility_entry(project_root, version)
     dependencies = package["dependencies"]
+    node_versions = _read_ci_node_versions(project_root)
 
     return {
         "version": version,
         "version_tag": f"v{version}",
         "node_engine_range": package["engines"]["node"],
+        "node_check_versions": ", ".join(node_versions["supported"]),
+        "node_minimum_version": node_versions["minimum"],
+        "node_current_version": node_versions["current"],
+        "node_primary_version": node_versions["primary"],
         "docker_version": docker_version,
         "npm_pin": f"cloakbrowser-mcp@{version}",
         "docker_image": f"swimmwatch/cloakbrowser-mcp:{docker_version}",
         "ghcr_image": f"ghcr.io/swimmwatch/cloakbrowser-mcp:{docker_version}",
         **_read_dependency_metadata(project_root, dependencies),
     }
+
+
+def _read_ci_node_versions(root: Path) -> dict[str, Any]:
+    workflow_path = root / ".github" / "workflows" / "ci.yml"
+    workflow = workflow_path.read_text(encoding="utf-8")
+    versions = {}
+    fields = {"supported": "CHECK", "minimum": "MINIMUM", "primary": "PRIMARY", "current": "CURRENT"}
+    for key, role in fields.items():
+        pattern = rf"^ {{2}}NODE_{role}_VERSION{'S' if key == 'supported' else ''}: '([^'\n]+)'$"
+        match = re.search(pattern, workflow, re.MULTILINE)
+        if match is None:
+            message = f"Missing Node.js workflow constant: {role}"
+            raise ValueError(message)
+        value = match.group(1)
+        versions[key] = json.loads(value) if key == "supported" else value
+    return versions
 
 
 def _validate_compatibility_entry(root: Path, project_version: str) -> None:

@@ -24,7 +24,9 @@ npm run test:integration
 
 統合テストは偽の upstream MCP 子プロセスを使用し、ブリッジがローカルツールを統合し、upstream 呼び出しを変更せずに転送することを検証します。
 
-`npm run check` は静的チェック、単体/統合テスト、模擬 upstream MCP を使うパッケージ済み CLI テストを実行し、Chromium は起動しません。PR CI はプラットフォームと Node.js の組み合わせごとに単体/統合と CLI のテストを一度実行します。対象は Linux x64/arm64、macOS x64/arm64、Windows x64 と Node.js 22、24-26 です。Linux x64 では同じテスト実行でカバレッジを収集し Codecov に送信します。静的チェックとパッケージ検証は Linux x64/Node.js 22 で一度実行します。
+`npm run check` は静的チェック、単体/統合テスト、模擬 upstream MCP を使うパッケージ済み CLI テストを実行し、Chromium は起動しません。PR CI はプラットフォームと Node.js の組み合わせごとに単体/統合と CLI のテストを一度実行します。対象は Linux x64/arm64、macOS x64/arm64、Windows x64 と Node.js {{ project.node_check_versions }} です。Linux x64 では同じテスト実行でカバレッジを収集し Codecov に送信します。静的チェックとパッケージ検証は Linux x64/Node.js {{ project.node_minimum_version }} で一度実行します。
+
+CI 行列、期待される結果の一覧、ドキュメントは `.github/workflows/ci.yml` から Node.js のバージョンを読み取ります。テスト対象のリリース系列が変わったら、このファイルを更新してください。
 
 ## 実ブラウザと配布物のテスト
 
@@ -41,7 +43,7 @@ npm run test:e2e:cdp:docker
 
 `test:e2e:npm-package` はパッケージを作成して一時プロジェクトへインストールします。転送契約のチェックは模擬 upstream を使用し、ブラウザシナリオは実際の CloakBrowser とローカルページで標準ツール、永続状態、両方の人間らしい操作のプリセットを検証します。別のテストでは空のキャッシュへの同時ダウンロードと、stdout に余計なテキストがないことを確認します。パッケージ検証だけではブラウザの受け入れ確認になりません。
 
-PR のブラウザ行列では、同じ五つのプラットフォームの Node.js 26 で Playwright コンソールと管理対象 CDP を検証し、CDP は Linux x64/Node.js 22 でも検証します。並列の Node.js 24 行列は五つのプラットフォームで npm パッケージ、proxy/GeoIP、拡張機能、ライフサイクルのスイートを実行し、人間らしい操作の両プリセットを含みます。Docker の配布と CDP の受け入れ検証は `linux/amd64` と `linux/arm64` の両エンジンを対象とします。
+PR のブラウザ行列では、同じ五つのプラットフォームの Node.js {{ project.node_current_version }} で Playwright コンソールと管理対象 CDP を検証し、CDP は Linux x64/Node.js {{ project.node_minimum_version }} でも検証します。並列の Node.js {{ project.node_primary_version }} 行列は五つのプラットフォームで npm パッケージ、proxy/GeoIP、拡張機能、ライフサイクルのスイートを実行し、人間らしい操作の両プリセットを含みます。Docker の配布と CDP の受け入れ検証は `linux/amd64` と `linux/arm64` の両エンジンを対象とします。
 
 `required-ci` はマージ前にすべてのスイートと完全な集約レポートの成功を要求します。同じ `CI` ワークフローは毎週および手動でも実行できます。`Release` はテスト済みリビジョンから成果物をビルドして公開します。
 

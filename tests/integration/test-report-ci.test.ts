@@ -32,6 +32,14 @@ const writerUrl = new URL('../../scripts/lib/test-results.mjs', import.meta.url)
 const writer = (await import(writerUrl.href)) as {
   writeTestResult: (options: Record<string, unknown>) => Promise<string>;
 };
+const workflowSource = await readFile('.github/workflows/ci.yml', 'utf8');
+const supportedMatch = /^ {2}NODE_CHECK_VERSIONS: '([^'\n]+)'$/mu.exec(workflowSource);
+const primaryMatch = /^ {2}NODE_PRIMARY_VERSION: '([^'\n]+)'$/mu.exec(workflowSource);
+if (!supportedMatch || !primaryMatch) throw new Error('Missing Node workflow constants');
+const nodeVersions = {
+  supported: JSON.parse(supportedMatch[1]) as string[],
+  primary: primaryMatch[1],
+};
 const roots: string[] = [];
 const execute = promisify(execFile);
 afterEach(async () => {
@@ -433,10 +441,10 @@ export async function ensureBinary(license, version) {
     const platformValue = /^ {2}CLOAK_REPORT_PLATFORMS: '([^']+)'$/mu.exec(ci)?.[1];
     if (!platformValue) throw new Error('Missing native CI platforms');
     const platforms = JSON.parse(platformValue) as string[];
-    const nodes = ['22', '24', '25', '26'];
+    const nodes = nodeVersions.supported;
     for (const lane of ['pr', 'periodic']) {
       const inventory = cli.ciPlan(lane, platforms, nodes);
-      expect(inventory).toHaveLength(97);
+      expect(inventory).toHaveLength(82);
       const unique = new Set(inventory);
       expect(unique.size).toBe(inventory.length);
     }
@@ -635,6 +643,39 @@ await import(moduleUrl);
     const untrusted = { ...save, env };
     await expect(cli.saveCiHistory(untrusted)).rejects.toThrow('untrusted');
   });
+  it('shares the supported Node matrix across workflow setup, reporting and CLI defaults', async () => {
+    const supported = ['22', '24', '26'];
+    expect(nodeVersions.supported).toEqual(supported);
+    expect(nodeVersions.supported).toContain(nodeVersions.primary);
+    const paths = ['.github/workflows/ci.yml', '.github/workflows/publish-test-report.yml'];
+    for (const filename of paths) {
+      const workflow = await readFile(filename, 'utf8');
+      expect(workflow).not.toMatch(/node-version: (?:22|24|25|26)\b/u);
+    }
+    const ciWorkflow = await readFile(paths[0], 'utf8');
+    expect(ciWorkflow).toContain('echo "node_versions=$NODE_CHECK_VERSIONS"');
+    expect(ciWorkflow).toContain('fromJSON(needs.node-versions.outputs.node_versions)');
+    const publicationWorkflow = await readFile(paths[1], 'utf8');
+    expect(publicationWorkflow).toContain('.github/workflows/ci.yml');
+    expect(publicationWorkflow).not.toContain('NODE_CHECK_VERSIONS:');
+    const platforms = ['ubuntu-latest'];
+    const encoded = JSON.stringify(platforms);
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      CLOAK_REPORT_LANE: 'pr',
+      CLOAK_REPORT_PLATFORMS: encoded,
+      GITHUB_RUN_ID: '42',
+      GITHUB_RUN_ATTEMPT: '1',
+    };
+    delete env.NODE_CHECK_VERSIONS;
+    const args = ['scripts/test-report.mjs', 'ci-plan'];
+    const options = { env };
+    const result = await execute(process.execPath, args, options);
+    const actual = JSON.parse(result.stdout) as string[];
+    const expected = cli.ciPlan('pr', platforms, supported);
+    expect(actual).toEqual(expected);
+    expect(actual.some((id) => id.includes('-node25-'))).toBe(false);
+  });
   it('includes every functional suite and CDP engine in the required native inventory', () => {
     const platforms = [
       'ubuntu-latest',
@@ -643,18 +684,18 @@ await import(moduleUrl);
       'macos-15-intel',
       'windows-latest',
     ];
-    const nodes = ['22', '24', '25', '26'];
+    const nodes = nodeVersions.supported;
     const periodic = cli.ciPlan('periodic', platforms, nodes);
     const pr = cli.ciPlan('pr', platforms, nodes);
     expect(new Set(pr).size).toBe(pr.length);
     for (const environment of ['linux-x64', 'linux-arm64', 'darwin-arm64', 'darwin-x64', 'win32-x64']) {
       expect(periodic.some((id) => id.startsWith(environment) && id.includes('npm'))).toBe(true);
       expect(pr.some((id) => id.startsWith(environment) && id.includes('quality-unit'))).toBe(true);
-      expect(pr).toContain(`${environment}-node26-mixed-pr-cdp`);
+      expect(pr).toContain(`${environment}-node${nodeVersions.supported.at(-1)}-mixed-pr-cdp`);
     }
     for (const environment of ['linux-x64', 'linux-arm64', 'darwin-arm64', 'darwin-x64', 'win32-x64']) {
       for (const suite of ['npm', 'proxy-geoip', 'extensions', 'lifecycle']) {
-        const expected = `${environment}-node24-cloak-pr-${suite}`;
+        const expected = `${environment}-node${nodeVersions.primary}-cloak-pr-${suite}`;
         expect(pr).toContain(expected);
       }
     }

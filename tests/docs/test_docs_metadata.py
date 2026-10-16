@@ -22,6 +22,10 @@ class ProjectMetadataTests(unittest.TestCase):
             "cloakbrowser": "^0.5.11",
             "playwrightMcpDockerBase": "mcr.microsoft.com/playwright/mcp:v0.0.81",
         }]
+        self.workflow_path = self.root / ".github" / "workflows" / "ci.yml"
+        self.workflow_path.parent.mkdir(parents=True)
+        self.node_versions = {"supported": ["22", "24", "26"], "primary": "24"}
+        self.write_ci_node_versions(self.node_versions)
         self.package_path = self.root / "package.json"
         self.compatibility_path = self.root / "docs" / "data" / "version-compatibility.json"
         self.compatibility_path.parent.mkdir(parents=True)
@@ -33,6 +37,19 @@ class ProjectMetadataTests(unittest.TestCase):
         self.image_argument = f"ARG PLAYWRIGHT_MCP_IMAGE={self.base}@sha256:{digest}\n"
         self.dockerfile_path.write_text(self.image_argument, encoding="utf-8")
 
+    def write_ci_node_versions(self, versions):
+        supported = json.dumps(versions["supported"])
+        minimum = versions["supported"][0]
+        current = versions["supported"][-1]
+        primary = versions["primary"]
+        workflow = (
+            f"env:\n  NODE_CHECK_VERSIONS: '{supported}'\n"
+            f"  NODE_MINIMUM_VERSION: '{minimum}'\n"
+            f"  NODE_PRIMARY_VERSION: '{primary}'\n"
+            f"  NODE_CURRENT_VERSION: '{current}'\n"
+        )
+        self.workflow_path.write_text(workflow, encoding="utf-8")
+
     def write_json(self, path, data):
         content = json.dumps(data)
         path.write_text(content, encoding="utf-8")
@@ -43,6 +60,15 @@ class ProjectMetadataTests(unittest.TestCase):
         self.write_json(self.package_path, self.package)
         metadata = read_project_metadata(self.root)
         self.assertEqual(metadata["node_engine_range"], expected)
+
+    def test_ci_node_versions_track_the_shared_configuration(self):
+        versions = {"supported": ["24", "26", "27"], "primary": "26"}
+        self.write_ci_node_versions(versions)
+        metadata = read_project_metadata(self.root)
+        self.assertEqual(metadata["node_check_versions"], "24, 26, 27")
+        self.assertEqual(metadata["node_minimum_version"], "24")
+        self.assertEqual(metadata["node_current_version"], "27")
+        self.assertEqual(metadata["node_primary_version"], "26")
 
     def test_current_dependencies_are_independent_of_release_history(self):
         metadata = read_project_metadata(self.root)

@@ -17,6 +17,7 @@ the [version compatibility table](https://swimmwatch.github.io/cloakbrowser-mcp/
 - @playwright/mcp: ^0.0.83
 - Playwright MCP Docker base: mcr.microsoft.com/playwright/mcp:v0.0.82
 - CloakBrowser: ^0.6.3
+- Tested Node.js majors: 22, 24, 26
 - Transports: stdio and Streamable HTTP
 
 ## Key Pages

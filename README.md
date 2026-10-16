@@ -51,7 +51,7 @@ Use it when you need:
 - GeoIP-aware proxy matching for regional QA;
 - humanized mouse, keyboard, and scroll behavior for interaction-sensitive flows.
 
-Cross-platform checks cover npm on Linux x64/arm64, macOS arm64/x64, and Windows x64 across Node.js 22 and 24-26. Docker images are built and smoke-tested for `linux/amd64` and `linux/arm64`.
+Cross-platform checks cover npm on Linux x64/arm64, macOS arm64/x64, and Windows x64 across the Node.js versions listed in [Testing](https://swimmwatch.github.io/cloakbrowser-mcp/testing/). Docker images are built and smoke-tested for `linux/amd64` and `linux/arm64`.
 
 See [`@playwright/mcp` vs `cloakbrowser-mcp`](docs/comparison.md) when deciding whether plain upstream Playwright MCP or CloakBrowser MCP fits a deployment better. The [Recipes](docs/recipes/index.md) pages show task-focused setup paths for persistent login profiles, Chrome extensions, reverse proxies, regional QA, client connections, and CI smoke tests.
 

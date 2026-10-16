@@ -24,7 +24,9 @@ npm run test:integration
 
 集成测试使用假的 upstream MCP 子进程，并验证桥接层会合并本地工具，同时原样转发 upstream 调用。
 
-`npm run check` 包含静态检查、单元/集成测试及使用模拟 upstream MCP 的已打包 CLI 测试，不启动 Chromium。PR CI 对每个平台与 Node.js 组合执行一次单元/集成及 CLI 测试：Linux x64/arm64、macOS x64/arm64 和 Windows x64，配合 Node.js 22 与 24-26。Linux x64 在同一次测试运行中收集覆盖率并上传 Codecov。静态检查和包验证仅在 Linux x64/Node.js 22 上执行一次。
+`npm run check` 包含静态检查、单元/集成测试及使用模拟 upstream MCP 的已打包 CLI 测试，不启动 Chromium。PR CI 对每个平台与 Node.js 组合执行一次单元/集成及 CLI 测试：Linux x64/arm64、macOS x64/arm64 和 Windows x64，配合 Node.js {{ project.node_check_versions }}。Linux x64 在同一次测试运行中收集覆盖率并上传 Codecov。静态检查和包验证仅在 Linux x64/Node.js {{ project.node_minimum_version }} 上执行一次。
+
+CI 矩阵、预期结果清单和文档均从 `.github/workflows/ci.yml` 读取 Node.js 版本。测试的发行版本分支发生变化时，请更新该文件。
 
 ## 真实浏览器及发行包测试
 
@@ -41,7 +43,7 @@ npm run test:e2e:cdp:docker
 
 `test:e2e:npm-package` 打包并安装到临时项目。转发契约检查使用模拟上游；浏览器场景使用真实 CloakBrowser 和本地页面验证标准工具、持久状态及两种人性化预设。另有测试验证空缓存中的并发下载及 stdout 不含额外文本。仅通过包验证并不代表浏览器验收通过。
 
-PR 浏览器矩阵在相同五个平台上使用 Node.js 26 验证 Playwright 控制台和托管 CDP，并额外在 Linux x64/Node.js 22 上验证 CDP。并行的 Node.js 24 矩阵在五个平台上执行 npm 包、proxy/GeoIP、扩展和生命周期测试，包括两种类人操作预设。Docker 分发和 CDP 验收在 `linux/amd64` 与 `linux/arm64` 上覆盖两种引擎。
+PR 浏览器矩阵在相同五个平台上使用 Node.js {{ project.node_current_version }} 验证 Playwright 控制台和托管 CDP，并额外在 Linux x64/Node.js {{ project.node_minimum_version }} 上验证 CDP。并行的 Node.js {{ project.node_primary_version }} 矩阵在五个平台上执行 npm 包、proxy/GeoIP、扩展和生命周期测试，包括两种类人操作预设。Docker 分发和 CDP 验收在 `linux/amd64` 与 `linux/arm64` 上覆盖两种引擎。
 
 `required-ci` 要求所有测试套件和完整汇总报告成功后才能合并。同一个 `CI` 工作流也按周和手动运行。`Release` 从已测试的代码版本构建并发布产物。
 
