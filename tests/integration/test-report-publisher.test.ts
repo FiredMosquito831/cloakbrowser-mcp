@@ -88,19 +88,27 @@ const report = {
   ],
 };
 const reportUrl = `https://swimmwatch.github.io/cloakbrowser-mcp-reports/${identity.path}/`;
-function fakeApi(comments: unknown[] = [], current: unknown = pr, runs: unknown[] = [run]) {
+function fakeApi(
+  comments: unknown[] = [],
+  current: unknown = pr,
+  runs: unknown[] = [run],
+  jobs: unknown[] = [],
+) {
   const writes: { method: string; endpoint: string; body: unknown }[] = [];
+  const reads: string[] = [];
   const api: Api = async (method, endpoint, body) => {
     if (method !== 'GET') {
       writes.push({ method, endpoint, body });
       return {};
     }
+    reads.push(endpoint);
     if (endpoint === `${base}/pulls/7`) return current;
     if (endpoint.startsWith(`${base}/actions/workflows/ci.yml/runs?`)) return { workflow_runs: runs };
     if (endpoint.startsWith(`${base}/issues/7/comments?`)) return comments;
+    if (endpoint.startsWith(`${base}/actions/runs/20/attempts/2/jobs?`)) return { jobs };
     throw new Error(`Unexpected API access: ${endpoint}`);
   };
-  return { api, writes };
+  return { api, writes, reads };
 }
 async function fixture() {
   const temporary = await mkdtemp(path.join(tmpdir(), 'report-publisher-'));
@@ -204,13 +212,96 @@ describe('trusted report publisher', () => {
     const body = (f.writes[0]?.body as { body: string }).body;
     const [overview, details] = body.split('<details>');
     expect(overview).toContain('| 2 | 1 | 1 | 0 | 0 |');
-    expect(overview).toContain('macOS · x64 · Node.js 22 · quality');
+    expect(overview).toContain('#### macOS');
+    expect(overview).toContain('| x64 | 22 | — | quality | 1 | — |');
     expect(overview).not.toContain('Linux');
     expect(overview).not.toContain('none');
     expect(details).toContain('All environments (2)');
-    expect(details).toContain('Linux · arm64 · Node.js 24 · quality');
+    expect(details).toContain('#### Linux');
+    expect(details).toContain('| arm64 | 24 | — | quality | 0 | — |');
     expect(body).toContain(`Commit [\`${sha.slice(0, 7)}\`]`);
     expect(body).toContain('**[Open Allure report →]');
+  });
+  it('groups operating systems into separate tables with direct links to the matching attempt jobs', async () => {
+    const cases = [
+      ['linux/x64/22/none/pr-quality', 'quality (ubuntu-latest, node 22)', 101],
+      ['linux/x64/22/mixed/pr-cdp', 'e2e (ubuntu-24.04, node 22)', 102],
+      ['darwin/arm64/26/playwright/pr-console', 'e2e (macos-latest, node 26)', 103],
+      ['darwin/arm64/26/mixed/pr-cdp', 'e2e (macos-latest, node 26)', 103],
+      ['darwin/x64/24/cloak/pr-npm', 'functional (macos-15-intel, npm, node 24)', 104],
+      ['win32/x64/24/cloak/pr-extensions', 'functional (windows-latest, extensions, node 24)', 105],
+      ['linux/arm64/22/cloak/pr-docker', 'docker (linux/arm64)', 106],
+      ['linux/arm64/22/cloak/pr-docker-cdp', 'docker (linux/arm64)', 106],
+      ['linux/arm64/22/playwright/pr-docker-cdp', 'docker (linux/arm64)', 106],
+    ] as const;
+    const jobEntries = cases.map(([, name, id]) => [id, { id, name }] as const);
+    const uniqueJobs = new Map(jobEntries);
+    const jobs = [...uniqueJobs.values()].map((job) => ({
+      ...job,
+      run_id: identity.run,
+      head_sha: identity.sha,
+      run_attempt: identity.attempt,
+      html_url: 'https://untrusted.invalid/ignored',
+    }));
+    const comments: unknown[] = [];
+    const runs = [run];
+    const f = fakeApi(comments, pr, runs, jobs);
+    const summary = {
+      ...report,
+      status: 'passed',
+      total: cases.length,
+      passed: cases.length,
+      failed: 0,
+      environments: cases.map(([id]) => ({ id, failed: 0 })),
+    };
+    await publisher.updateReportComment(f.api, identity, summary, reportUrl);
+    const body = (f.writes[0]?.body as { body: string }).body;
+    const headings = body.match(/^#### .+$/gmu);
+    const expectedHeadings = ['#### macOS', '#### Linux', '#### Windows'];
+    expect(headings).toEqual(expectedHeadings);
+    const headers = body.match(
+      /^\| Architecture \| Node.js \| Browser \| Suite \| Failed \/ broken \| Job \|$/gmu,
+    );
+    expect(headers).toHaveLength(3);
+    for (const [environment, , id] of cases) {
+      const [, arch, node, browser, lane] = environment.split('/');
+      const engine = browser === 'none' ? '—' : browser;
+      const suite = lane?.replace(/^pr-/u, '');
+      const link = `https://github.com/swimmwatch/cloakbrowser-mcp/actions/runs/20/job/${id}`;
+      const row = `| ${arch} | ${node} | ${engine} | ${suite} | 0 | [Open job](${link}) |`;
+      expect(body).toContain(row);
+    }
+    expect(body).not.toContain('untrusted.invalid');
+    const jobsEndpoint = `${base}/actions/runs/20/attempts/2/jobs?per_page=100&page=1`;
+    expect(f.reads).toContain(jobsEndpoint);
+  });
+  it.each([
+    { id: -1 },
+    { run_id: 21 },
+    { head_sha: 'b'.repeat(40) },
+    { run_attempt: 1 },
+    { name: 'quality (macos-latest, node 24)' },
+  ])('omits a job link when API identity or environment does not match: %j', async (change) => {
+    const job = {
+      id: 101,
+      name: 'quality (ubuntu-latest, node 24)',
+      run_id: identity.run,
+      head_sha: identity.sha,
+      run_attempt: identity.attempt,
+      ...change,
+    };
+    const comments: unknown[] = [];
+    const runs = [run];
+    const jobs = [job];
+    const f = fakeApi(comments, pr, runs, jobs);
+    const summary = {
+      ...report,
+      environments: [{ id: 'linux/x64/24/none/pr-quality', failed: 0 }],
+    };
+    await publisher.updateReportComment(f.api, identity, summary, reportUrl);
+    const body = (f.writes[0]?.body as { body: string }).body;
+    expect(body).toContain('| x64 | 24 | — | quality | 0 | — |');
+    expect(body).not.toContain('[Open job]');
   });
   it('omits attention warnings for a successful run and sorts environments deterministically', async () => {
     const summary = {

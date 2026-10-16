@@ -47,7 +47,7 @@ const flags = {
   'ci-history-save': [],
 };
 
-const nativePlatforms = {
+export const nativePlatforms = {
   'ubuntu-latest': 'linux-x64',
   'ubuntu-24.04-arm': 'linux-arm64',
   'macos-latest': 'darwin-arm64',

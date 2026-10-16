@@ -5,7 +5,7 @@ import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { ciAggregate, ciPlan } from '#scripts/test-report';
+import { ciAggregate, ciPlan, nativePlatforms } from '#scripts/test-report';
 import { sanitizeDiagnostic } from '#scripts/lib/test-diagnostics';
 
 const sourceRepository = 'swimmwatch/cloakbrowser-mcp';
@@ -259,27 +259,71 @@ function commentText(value) {
   return safe.replace(/[|`[\]\\*_]/gu, (character) => `&#${character.codePointAt(0)};`).replace(/\s+/gu, ' ');
 }
 
-function environmentRow(entry) {
+function environmentJobLink(entry, identity, jobs) {
   const [os, arch, node, browser, lane] = entry.id.split('/');
-  const operatingSystem = { linux: 'Linux', darwin: 'macOS', win32: 'Windows', windows: 'Windows' }[os] ?? os;
-  const parts = [
-    operatingSystem,
-    arch,
-    node ? `Node.js ${node}` : undefined,
-    browser && browser !== 'none' ? browser : undefined,
-    lane?.replace(/^pr-/u, ''),
-  ];
-  const label = parts.filter(Boolean).join(' · ');
-  const name = commentText(label);
-  return `| ${name} | ${entry.failed} |`;
+  const suite = lane?.replace(/^pr-/u, '');
+  const environment = `${os}-${arch}`;
+  const platforms = Object.entries(nativePlatforms)
+    .filter(([, value]) => value === environment)
+    .map(([platform]) => platform);
+  if (environment === 'linux-x64') platforms.push('ubuntu-24.04');
+  let names = [];
+  if (suite === 'quality' && browser === 'none')
+    names = platforms.map((platform) => `quality (${platform}, node ${node})`);
+  else if (['cdp', 'console'].includes(suite))
+    names = platforms.map((platform) => `e2e (${platform}, node ${node})`);
+  else if (['npm', 'extensions', 'lifecycle', 'proxy-geoip'].includes(suite))
+    names = platforms.map((platform) => `functional (${platform}, ${suite}, node ${node})`);
+  else if (os === 'linux' && ['docker', 'docker-cdp'].includes(suite)) {
+    const architecture = arch === 'x64' ? 'amd64' : arch;
+    names = [`docker (linux/${architecture})`];
+  }
+  const matching = jobs.filter(
+    (job) =>
+      names.includes(job.name) &&
+      job.run_id === identity.run &&
+      job.head_sha === identity.sha &&
+      (job.run_attempt === undefined || job.run_attempt === identity.attempt) &&
+      Number.isSafeInteger(job.id) &&
+      job.id > 0,
+  );
+  if (matching.length !== 1) return '—';
+  return `[Open job](https://github.com/${sourceRepository}/actions/runs/${identity.run}/job/${matching[0].id})`;
 }
 
-function environmentTable(environments) {
-  const rows = environments.map(environmentRow).join('\n');
-  return `| Environment | Failed / broken |\n| --- | ---: |\n${rows}`;
+function environmentRow(entry, identity, jobs) {
+  const [, arch, node, browser, lane] = entry.id.split('/');
+  const suite = lane?.replace(/^pr-/u, '');
+  const cells = [arch, node, browser === 'none' ? undefined : browser, suite];
+  const columns = cells
+    .map((value) => {
+      const text = value || '—';
+      return commentText(text);
+    })
+    .join(' | ');
+  const job = environmentJobLink(entry, identity, jobs);
+  return `| ${columns} | ${entry.failed} | ${job} |`;
 }
 
-function commentBody(identity, summary, href) {
+function environmentTables(environments, identity, jobs) {
+  const groups = new Map();
+  for (const entry of environments) {
+    const [os] = entry.id.split('/');
+    const name = { linux: 'Linux', darwin: 'macOS', win32: 'Windows', windows: 'Windows' }[os] ?? os;
+    const entries = groups.get(name) ?? [];
+    entries.push(entry);
+    groups.set(name, entries);
+  }
+  return [...groups]
+    .map(([name, entries]) => {
+      const heading = commentText(name);
+      const rows = entries.map((entry) => environmentRow(entry, identity, jobs)).join('\n');
+      return `#### ${heading}\n\n| Architecture | Node.js | Browser | Suite | Failed / broken | Job |\n| --- | --- | --- | --- | ---: | --- |\n${rows}`;
+    })
+    .join('\n\n');
+}
+
+function commentBody(identity, summary, href, jobs) {
   const ownership = `<!-- cloakbrowser-report:${identity.run}:${identity.attempt}:${identity.sha} -->`;
   const introduction = `${marker}\n${ownership}\n## Test report\n\n`;
   const shortSha = identity.sha.slice(0, 7);
@@ -294,11 +338,13 @@ function commentBody(identity, summary, href) {
   const stats = `| Total | Passed | Failed | Broken | Skipped |\n| ---: | ---: | ---: | ---: | ---: |\n| ${summary.total} | ${summary.passed} | ${summary.failed} | ${summary.broken} | ${summary.skipped} |`;
   const environments = [...summary.environments].sort((left, right) => left.id.localeCompare(right.id, 'en'));
   const failing = environments.filter((entry) => entry.failed > 0);
-  const attention = failing.length ? `\n\n### Needs attention\n\n${environmentTable(failing)}` : '';
+  const attention = failing.length
+    ? `\n\n### Needs attention\n\n${environmentTables(failing, identity, jobs)}`
+    : '';
   const missing = summary.missing.length
     ? `\n\n⚠️ **Missing producers: ${summary.missing.length}**\n\n${summary.missing.map((id) => `- ${commentText(id)}`).join('\n')}`
     : '';
-  const environmentDetails = environmentTable(environments);
+  const environmentDetails = environmentTables(environments, identity, jobs);
   const safeDetails = sanitizeDiagnostic(environmentDetails);
   const details = environments.length
     ? `\n\n<details>\n<summary>All environments (${environments.length})</summary>\n\n${safeDetails}\n\n</details>`
@@ -347,7 +393,9 @@ export async function updateReportComment(api, identity, summary, href) {
       comment.body?.startsWith(marker),
   );
   if (owned.length > 1) throw new Error('Report publication: multiple bot-owned report comments');
-  const body = commentBody(identity, summary, href);
+  const jobsEndpoint = `${base}/actions/runs/${identity.run}/attempts/${identity.attempt}/jobs`;
+  const jobs = summary && href ? await list(api, jobsEndpoint, 'jobs') : [];
+  const body = commentBody(identity, summary, href, jobs);
   if (owned[0]?.body === body) return 'unchanged';
   if (owned[0]) {
     const id = owned[0].id;
