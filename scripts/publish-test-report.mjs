@@ -636,7 +636,7 @@ async function main() {
   checkedIdentity(state.identity);
   if (command === 'prepare') {
     const platforms = JSON.parse(env.CLOAK_REPORT_PLATFORMS);
-    const nodes = JSON.parse(env.NODE_CHECK_VERSIONS);
+    const nodes = env.NODE_CHECK_VERSIONS ? JSON.parse(env.NODE_CHECK_VERSIONS) : undefined;
     const expected = ciPlan('pr', platforms, nodes);
     const options = {
       input: env.REPORT_INPUT,

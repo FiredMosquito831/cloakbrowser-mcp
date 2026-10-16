@@ -56,7 +56,7 @@ const nativePlatforms = {
 };
 
 /** Derive the expected inventory from the workflow's existing native/Node matrix. */
-export function ciPlan(lane, platforms, nodes) {
+export function ciPlan(lane, platforms, nodes = supportedNodeVersions) {
   if (!['pr', 'periodic'].includes(lane) || !Array.isArray(platforms) || !Array.isArray(nodes))
     throw new Error('CI reporting: invalid matrix');
   const environments = platforms.map((platform) => {

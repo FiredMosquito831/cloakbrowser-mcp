@@ -1,4 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import {
   mkdir,
   mkdtemp,
@@ -128,6 +131,50 @@ async function producer(input: string) {
 }
 
 describe('trusted report publisher', () => {
+  it('prepares a report through the CLI using workflow Node versions without an environment override', async () => {
+    const root = await fixture();
+    const input = path.join(root, 'download');
+    const output = path.join(root, 'public');
+    await mkdir(input);
+    const repository = 'swimmwatch/cloakbrowser-mcp-reports';
+    const state = { repository, identity };
+    const statePath = path.join(root, 'cloak-report-publication.json');
+    const serializedState = JSON.stringify(state);
+    await writeFile(statePath, serializedState);
+    const platforms = ['ubuntu-latest'];
+    const encodedPlatforms = JSON.stringify(platforms);
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      GITHUB_TOKEN: 'controlled-test-credential',
+      GITHUB_REPOSITORY: 'swimmwatch/cloakbrowser-mcp',
+      REPORTS_REPOSITORY: repository,
+      RUNNER_TEMP: root,
+      REPORT_INPUT: input,
+      REPORT_PUBLIC_TREE: output,
+      CLOAK_REPORT_PLATFORMS: encodedPlatforms,
+    };
+    delete env.NODE_CHECK_VERSIONS;
+    const filename = fileURLToPath(url);
+    const args = [filename, 'prepare'];
+    const options = { env };
+    const execute = promisify(execFile);
+    const result = await execute(process.execPath, args, options);
+    expect(result.stderr).toBe('');
+    const saved = await readFile(statePath, 'utf8');
+    const updated = JSON.parse(saved) as {
+      publication: { summary: { missing: string[]; status: string }; identity: Identity };
+    };
+    const reportCliUrl = new URL('../../scripts/test-report.mjs', import.meta.url);
+    const cli = (await import(reportCliUrl.href)) as {
+      ciPlan: (lane: string, platforms: string[]) => string[];
+    };
+    const expected = cli.ciPlan('pr', platforms);
+    expect(updated.publication.summary.missing).toEqual(expected);
+    expect(updated.publication.summary.status).toBe('failed');
+    const htmlPath = path.join(output, identity.path, 'index.html');
+    const html = await readFile(htmlPath, 'utf8');
+    expect(html).toContain('<html');
+  });
   it('keeps matrix failures truthful and never updates a user-owned marker comment', async () => {
     const human = {
       id: 1,
