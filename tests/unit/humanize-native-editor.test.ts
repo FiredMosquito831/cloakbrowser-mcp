@@ -24,7 +24,7 @@ type SetDatetime = (...args: unknown[]) => Promise<void>;
 function setDatetimeFrom(source: string): SetDatetime {
   const executable = source.replace(/^import .*$/gmu, '').replaceAll('export ', '');
   const expression = `${executable}\nHuman.prototype.setDatetime;`;
-  const context = { fields, rand: () => 0, sleep: async () => undefined };
+  const context = { fields, rand: () => 0, sleep: async () => undefined, keyGap: () => 0, keyHold: () => 0 };
   return runInNewContext(expression, context) as SetDatetime;
 }
 
@@ -58,6 +58,10 @@ async function fillNativeEditor(method: SetDatetime, editor: Editor, focus: 'fir
     },
     pointerAction: async () => {
       selected = focus === 'last' ? segments.length - 1 : 0;
+    },
+    pressKey: async (key: string) => {
+      if (key === 'ArrowRight') selected = Math.min(segments.length - 1, selected + 1);
+      if (key === 'ArrowUp' || key === 'ArrowDown') throw new Error('Unexpected month adjustment');
     },
     raw: {
       keyPress: async (key: string) => {

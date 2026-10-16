@@ -9,12 +9,16 @@ const resolvedValue = require.resolve('cloakbrowser');
 const dependencyDir = path.dirname(resolvedValue);
 const joinedPath = path.join(dependencyDir, 'human', 'worldHelpers.js');
 const helpers = readFileSync(joinedPath, 'utf8');
-const previousHelpers = helpers
-  .replace('I.checkElementStates(e, states, true)', 'I.checkElementStates(e, states)')
-  .replace('I.elementState(e, s, true)', 'I.elementState(e, s)');
+// Published 0.6.1 helpers retain the legacy state-check signatures.
+const legacyUrl = new URL('../fixtures/humanize/worldHelpers-0.6.1.txt', import.meta.url);
+const legacyHelpers = readFileSync(legacyUrl, 'utf8');
+const previousHelpers = legacyHelpers
+  .replace('I.checkElementStates(e, states)', 'I.checkElementStates(e, states, true)')
+  .replace('I.elementState(e, s)', 'I.elementState(e, s, true)');
 const helperVersions = [
-  { version: '0.6.1', source: previousHelpers },
-  { version: '0.6.2', source: helpers },
+  { version: '0.6.1', source: legacyHelpers },
+  { version: '0.6.2', source: previousHelpers },
+  { version: '0.6.3', source: helpers },
 ] as const;
 const joinedPath2 = path.join(dependencyDir, 'human', 'world.js');
 const world = readFileSync(joinedPath2, 'utf8');

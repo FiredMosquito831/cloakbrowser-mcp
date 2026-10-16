@@ -14,18 +14,18 @@ afterEach(() => {
   metadata.mockReset();
 });
 describe('humanize compatibility registration', () => {
-  const values: readonly string[] = ['0.5.11', '0.6.3'];
+  const values: readonly string[] = ['0.5.11', '0.6.4'];
   it.each(values)('rejects unverified dependency version %s', async (version) => {
     const stringifyOptions = { version } as const;
     const serializedValue = JSON.stringify(stringifyOptions);
     metadata.mockReturnValue(serializedValue);
     const { registerHumanizeCompatibility } = await import('@/runtime/humanizeCompatibility.js');
     expect(() => registerHumanizeCompatibility()).toThrow(
-      'verified only for CloakBrowser 0.6.0, 0.6.1, and 0.6.2',
+      'verified only for CloakBrowser 0.6.0, 0.6.1, 0.6.2, and 0.6.3',
     );
     expect(register).not.toHaveBeenCalled();
   });
-  const verifiedVersions = ['0.6.0', '0.6.1', '0.6.2'] as const;
+  const verifiedVersions = ['0.6.0', '0.6.1', '0.6.2', '0.6.3'] as const;
   it.each(verifiedVersions)(
     'registers one loader for %s even across repeated initialization',
     async (version) => {
@@ -39,7 +39,7 @@ describe('humanize compatibility registration', () => {
       const receiverActual = register;
       const anyResult = expect.any(URL);
       const engineMatcher = expect.stringMatching(/\/human\/engine\.js$/u);
-      const expectedEngineUrl = version === '0.6.2' ? engineMatcher : undefined;
+      const expectedEngineUrl = version === '0.6.2' || version === '0.6.3' ? engineMatcher : undefined;
       const toHaveBeenCalledWithOptions = {
         data: {
           helpersUrl: expect.stringMatching(/\/human\/worldHelpers\.js$/u),

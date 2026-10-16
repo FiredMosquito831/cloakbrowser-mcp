@@ -12,9 +12,13 @@ const helperHashes = [
   '3b698b81b3ceb5dc400237b088eb80178fbbc3ce6ab0fcf84ce3d83041913919',
   '189fb94cf919c1c6993adf7d5868f87f0e9288e4cf1e16c1c15c41d98d47525d',
   '4e2737cf9342924e31f44bdd9eb4f6d80b24f13c57605722613d447f44c2166d',
+  'd00c1b498782e11b6e422af4d674967fc9c45c7b2019e9b7ddc9cd1ea49d5451',
 ] as const;
 const worldHashes = ['2949df4184c14d6022bac0f552d0428481ab199fb7658e4ed584e96071d81258'] as const;
-const engineHashes = ['fc4aafe8f6f45a3f349aa1644fb832f012bf1e4bc9229aa83a01ad7da70e447b'] as const;
+const engineHashes = [
+  'fc4aafe8f6f45a3f349aa1644fb832f012bf1e4bc9229aa83a01ad7da70e447b',
+  '1800523fa80680c07053667824566cff46a84fc33c7268f8d6e1652c0d0bcd02',
+] as const;
 function requireSource(source: string, hashes: readonly string[]): void {
   const actualHash = createHash('sha256').update(source).digest('hex');
   if (!hashes.includes(actualHash)) {
