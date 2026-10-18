@@ -1,6 +1,6 @@
 import { expectedDependencyVersions } from '@tests/helpers/dependency-versions.js';
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -75,6 +75,145 @@ describe('packaged CLI end-to-end', () => {
       const remaining = existsSync(lock);
       expect(remaining).toBe(false);
     }
+  });
+  it('recovers a persistent profile after its CLI owner is forcefully terminated', async () => {
+    const base = createCliEnv();
+    const profile = path.join(base.PLAYWRIGHT_MCP_OUTPUT_DIR ?? '', 'profile');
+    const env = { ...base, PLAYWRIGHT_MCP_USER_DATA_DIR: profile };
+    const lock = path.join(profile, '.cloakbrowser-mcp-profile.lock');
+    const spawnOptions = { cwd: repoRoot, env };
+    const argumentsForCli = [distCliPath];
+    const owner = spawn(process.execPath, argumentsForCli, spawnOptions);
+    children.push(owner);
+    const ownerClosed = once(owner, 'close');
+    owner.stdout.setEncoding('utf8');
+    owner.stderr.setEncoding('utf8');
+    const ownerStdout = collectStream(owner.stdout);
+    const ownerStderr = collectStream(owner.stderr);
+    const initializeRequest = {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: LATEST_PROTOCOL_VERSION,
+        capabilities: {},
+        clientInfo: { name: 'stale profile recovery', version: '1' },
+      },
+    };
+    const initializeInput = `${JSON.stringify(initializeRequest)}\n`;
+    const initializeResponsePattern = /"id":1/u;
+    owner.stdin.write(initializeInput);
+    const initializeResponse = await waitForLine(owner, ownerStdout, initializeResponsePattern);
+    expect(initializeResponse).toContain('"result"');
+    const lockContent = readFileSync(lock, 'utf8');
+    const parsedLock = JSON.parse(lockContent) as { pid: number };
+    const ownerPid = owner.pid;
+    expect(parsedLock.pid).toBe(ownerPid);
+
+    const forceTerminateSignal: NodeJS.Signals = 'SIGKILL';
+    killChild(owner, forceTerminateSignal);
+    const ownerCloseResult = await ownerClosed;
+    const ownerCloseCode: number | null = ownerCloseResult[0];
+    const ownerCloseSignal: NodeJS.Signals | null = ownerCloseResult[1];
+    const ownerWasKilled =
+      (ownerCloseCode === null && ownerCloseSignal === forceTerminateSignal) ||
+      (ownerCloseCode !== null && ownerCloseCode !== 0 && ownerCloseSignal === null);
+    expect(ownerWasKilled).toBe(true);
+    expect(ownerStderr.text).not.toContain('fatal:');
+    const expectedProcessError = { code: 'ESRCH' };
+    const processErrorMatcher = expect.objectContaining(expectedProcessError);
+    const checkOwnerProcess = (): void => {
+      process.kill(parsedLock.pid, 0);
+    };
+    expect(checkOwnerProcess).toThrow(processErrorMatcher);
+    const staleLockExists = existsSync(lock);
+    expect(staleLockExists).toBe(true);
+
+    const recovered = spawn(process.execPath, argumentsForCli, spawnOptions);
+    children.push(recovered);
+    const recoveredClosed = once(recovered, 'close');
+    recovered.stdout.setEncoding('utf8');
+    recovered.stderr.setEncoding('utf8');
+    const recoveredStdout = collectStream(recovered.stdout);
+    const recoveredStderr = collectStream(recovered.stderr);
+    recovered.stdin.write(initializeInput);
+    const recoveredResponse = await waitForLine(recovered, recoveredStdout, initializeResponsePattern);
+    expect(recoveredResponse).toContain('"result"');
+    const recoveredLockExists = existsSync(lock);
+    expect(recoveredLockExists).toBe(true);
+    recovered.stdin.end();
+    const recoveredCloseResult = await recoveredClosed;
+    const recoveredCloseCode: number | null = recoveredCloseResult[0];
+    const recoveredCloseSignal: NodeJS.Signals | null = recoveredCloseResult[1];
+    expect(recoveredCloseCode).toBe(0);
+    expect(recoveredCloseSignal).toBeNull();
+    expect(recoveredStderr.text).not.toContain('fatal:');
+    const remainingLockExists = existsSync(lock);
+    expect(remainingLockExists).toBe(false);
+  });
+  it('rejects a competing CLI while the persistent profile owner is alive', async () => {
+    const base = createCliEnv();
+    const profile = path.join(base.PLAYWRIGHT_MCP_OUTPUT_DIR ?? '', 'profile');
+    const env = { ...base, PLAYWRIGHT_MCP_USER_DATA_DIR: profile };
+    const lock = path.join(profile, '.cloakbrowser-mcp-profile.lock');
+    const spawnOptions = { cwd: repoRoot, env };
+    const argumentsForCli = [distCliPath];
+    const initializeRequest = {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: LATEST_PROTOCOL_VERSION,
+        capabilities: {},
+        clientInfo: { name: 'live profile owner', version: '1' },
+      },
+    };
+    const initializeInput = `${JSON.stringify(initializeRequest)}\n`;
+    const initializeResponsePattern = /"id":1/u;
+    const owner = spawn(process.execPath, argumentsForCli, spawnOptions);
+    children.push(owner);
+    const ownerClosed = once(owner, 'close');
+    owner.stdout.setEncoding('utf8');
+    owner.stderr.setEncoding('utf8');
+    const ownerStdout = collectStream(owner.stdout);
+    const ownerStderr = collectStream(owner.stderr);
+    owner.stdin.write(initializeInput);
+    const initializeResponse = await waitForLine(owner, ownerStdout, initializeResponsePattern);
+    expect(initializeResponse).toContain('"result"');
+    const ownerLockContent = readFileSync(lock, 'utf8');
+    const parsedLock = JSON.parse(ownerLockContent) as { pid: number };
+    const ownerPid = owner.pid;
+    expect(parsedLock.pid).toBe(ownerPid);
+
+    const contender = spawn(process.execPath, argumentsForCli, spawnOptions);
+    children.push(contender);
+    const contenderClosed = once(contender, 'close');
+    contender.stdout.setEncoding('utf8');
+    contender.stderr.setEncoding('utf8');
+    const contenderStdout = collectStream(contender.stdout);
+    const contenderStderr = collectStream(contender.stderr);
+    contender.stdin.write(initializeInput);
+    contender.stdin.end();
+    const contenderCloseResult = await contenderClosed;
+    const contenderCloseCode: number | null = contenderCloseResult[0];
+    const contenderCloseSignal: NodeJS.Signals | null = contenderCloseResult[1];
+    expect(contenderCloseCode).toBe(1);
+    expect(contenderCloseSignal).toBeNull();
+    expect(contenderStdout.text).toBe('');
+    expect(contenderStderr.text).toContain('Persistent profile is already active');
+    expect(() => process.kill(parsedLock.pid, 0)).not.toThrow();
+    const unchangedOwnerLock = readFileSync(lock, 'utf8');
+    expect(unchangedOwnerLock).toBe(ownerLockContent);
+
+    owner.stdin.end();
+    const ownerCloseResult = await ownerClosed;
+    const ownerCloseCode: number | null = ownerCloseResult[0];
+    const ownerCloseSignal: NodeJS.Signals | null = ownerCloseResult[1];
+    expect(ownerCloseCode).toBe(0);
+    expect(ownerCloseSignal).toBeNull();
+    expect(ownerStderr.text).not.toContain('fatal:');
+    const remainingLockExists = existsSync(lock);
+    expect(remainingLockExists).toBe(false);
   });
   it('serves stdio MCP without routine stdout logs', async () => {
     const stdioClientTransportOptions: import('@modelcontextprotocol/sdk/client/stdio.js').StdioServerParameters =

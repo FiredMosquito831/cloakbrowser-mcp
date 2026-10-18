@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.15.1] - 2026-10-18
+
+### Fixed
+
+- Reclaim persistent-profile locks after the recorded owner process has exited,
+  while preserving live, unreadable, malformed, or changed locks. Close and clean
+  up newly created lock files when writing fails. Profile restarts must remain
+  sequential because the final file check and removal are not atomic.
+
+### Changed
+
+- Refresh nine GitHub Actions with full commit SHA pins, align CodeQL steps,
+  and use read-only workflow defaults while retaining explicit job permissions.
+  The updates include fixes for workflow command injection in Docker metadata
+  logs and token-variable logging in Scorecard.
+- Clarify profile recovery, Docker scanning stages, and regression coverage in
+  documentation and all ten supported translations.
+
 ## [1.15.0] - 2026-10-18
 
 ### Added
@@ -533,7 +551,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Generated configuration documentation based on the removed native config schema.
 - Public SEO setup guide and stale roadmap page from the published documentation.
 
-[Unreleased]: https://github.com/swimmwatch/cloakbrowser-mcp/compare/v1.15.0...HEAD
+[Unreleased]: https://github.com/swimmwatch/cloakbrowser-mcp/compare/v1.15.1...HEAD
+[1.15.1]: https://github.com/swimmwatch/cloakbrowser-mcp/compare/v1.15.0...v1.15.1
 [1.15.0]: https://github.com/swimmwatch/cloakbrowser-mcp/compare/v1.14.1...v1.15.0
 [1.14.1]: https://github.com/swimmwatch/cloakbrowser-mcp/compare/v1.14.0...v1.14.1
 [1.14.0]: https://github.com/swimmwatch/cloakbrowser-mcp/compare/v1.13.0...v1.14.0

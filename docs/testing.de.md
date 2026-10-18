@@ -16,6 +16,8 @@ npm run test:unit
 
 Unit-Tests decken das Parsen der Umgebung, die Bridge-Konfigurationserzeugung, die Verarbeitung von Startargumenten und lokale Cloak-Introspection-Tools ab.
 
+Tests für persistente Profilsperren prüfen die Wiederherstellung nach dem Ende des Besitzerprozesses, aktive oder unklare Besitzer, geänderte Sperrdateien und die Bereinigung nach teilweisen Schreibvorgängen.
+
 ## Integrationstests
 
 ```bash
@@ -25,6 +27,8 @@ npm run test:integration
 Integrationstests verwenden einen gefälschten upstream MCP-Kindprozess und prüfen, dass die Bridge lokale Tools zusammenführt und upstream-Aufrufe unverändert weiterleitet.
 
 `npm run check` umfasst statische Prüfungen, Unit-/Integrationstests und Tests der paketierten CLI mit simuliertem Upstream MCP, ohne Chromium. PR CI führt Unit-/Integrations- und CLI-Tests einmal je Plattform-/Node.js-Kombination aus: Node.js {{ project.node_check_versions }} auf Linux x64/arm64, macOS x64/arm64 und Windows x64. Linux x64 erfasst dabei im selben Testlauf die Abdeckung für Codecov. Statische Prüfungen und Paketverifikation laufen einmal auf Linux x64/Node.js {{ project.node_minimum_version }}.
+
+Tests des paketierten CLI prüfen den Neustart nach erzwungenem Beenden, die Ablehnung eines konkurrierenden Servers bei aktivem Besitzer und die Bereinigung, wenn der Client stdin schließt.
 
 Die CI-Matrix, das Inventar der erwarteten Ergebnisse und die Dokumentation lesen die Node.js-Versionen aus `.github/workflows/ci.yml`. Aktualisieren Sie diese Datei, wenn sich die getesteten Versionszweige ändern.
 

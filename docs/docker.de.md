@@ -63,10 +63,7 @@ docker run --rm -i \
 ```
 
 Umgebungsvariablen innerhalb von Docker müssen Containerpfade wie
-`/data/profiles/default` verwenden, keine Hostpfade. Die Bridge erstellt das
-Profilverzeichnis bei Bedarf, prüft die Schreibbarkeit, schreibt den
-Containerpfad in die generierte Playwright-MCP-Konfiguration und weist doppelte
-aktive Profilverzeichnisse innerhalb eines Serverprozesses zurück.
+`/data/profiles/default` verwenden, keine Hostpfade. Die Bridge erstellt fehlende Profilverzeichnisse, prüft den Schreibzugriff, schreibt den Containerpfad in die generierte Playwright-MCP-Konfiguration und sperrt ausdrücklich konfigurierte Profile. Verwenden Sie auch über Container hinweg nur einen aktiven Server pro Profil; die Grenzen der Wiederherstellung sind unter [Persistentes Login-Profil](recipes/persistent-login-profile.md) beschrieben.
 
 ## CloakBrowser-Lizenzcache
 
@@ -312,7 +309,7 @@ npm run docker:smoke
 
 Das Dockerfile verwendet das festgelegte offizielle Playwright-MCP-Image als Laufzeitbasis, wendet während des Builds verfügbare Debian-Sicherheitsupdates an, entfernt die ungenutzte globale npm-Nutzlast aus dem Laufzeit-Image und installiert die Bridge unter `/opt/cloakbrowser-mcp`.
 
-Der Release-Workflow veröffentlicht SBOM- und Herkunftsbescheinigungen, fügt OCI-Labels für Quelle, Revision, Version, Lizenz, Name des Basis-Images und Digest des Basis-Images hinzu und scannt das erstellte Image vor der Veröffentlichung mit Trivy.
+CI scannt Docker-Images vor dem Zusammenführen von Änderungen mit Trivy. Der Release-Workflow veröffentlicht SBOM und Herkunftsbescheinigungen und enthält OCI-Labels für Quelle, Revision, Version, Lizenz, Name und Digest des Basis-Images.
 
 ## Weitere praktische Pfade
 

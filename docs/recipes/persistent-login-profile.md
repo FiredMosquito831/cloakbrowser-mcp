@@ -21,6 +21,10 @@ PLAYWRIGHT_MCP_USER_DATA_DIR="$PWD/.profiles/default" \
 
 Point your MCP client at the same stdio command. Keep one active server per profile directory; the bridge rejects duplicate active use to reduce Chromium profile corruption risk.
 
+After an unclean shutdown, the bridge reclaims `.cloakbrowser-mcp-profile.lock` only when its recorded process ID is valid and the process no longer exists. Locks with a live owner, unreadable or invalid contents, or an uncertain process status still block startup. This recovery does not terminate surviving Chromium processes or remove Chromium's own locks.
+
+Restart only one server per profile at a time: rechecking and removing a stale lock are not atomic. If writing a newly created lock fails, the bridge closes its file descriptor and removes the file only if the path still identifies that file.
+
 ## Docker
 
 ```bash

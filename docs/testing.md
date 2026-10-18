@@ -16,6 +16,8 @@ npm run test:unit
 
 Unit tests cover environment parsing, bridge config generation, launch argument handling, and local Cloak introspection tools.
 
+Persistent profile lock tests cover dead-owner recovery, live or uncertain owners, changed lock files, and cleanup after partial writes.
+
 ## Integration Tests
 
 ```bash
@@ -25,6 +27,8 @@ npm run test:integration
 Integration tests use a fake upstream MCP child process and verify that the bridge merges local tools and forwards upstream calls unchanged.
 
 `npm run check` includes static checks, unit/integration tests and packaged CLI tests against fake upstream MCP, without Chromium. PR CI runs unit/integration and CLI tests once per platform/Node combination: Node.js {{ project.node_check_versions }} on Linux x64/arm64, macOS x64/arm64 and Windows x64. Linux x64 collects coverage in that same run for Codecov. Static checks and package verification run once on Linux x64/Node.js {{ project.node_minimum_version }}.
+
+Packaged CLI tests verify restart after forced termination, rejection of a competing server while the owner is alive, and cleanup when the client closes stdin.
 
 The CI matrix, report inventory and documentation read Node.js versions from `.github/workflows/ci.yml`. Update that file when the tested release lines change.
 

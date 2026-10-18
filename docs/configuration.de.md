@@ -347,9 +347,7 @@ Sitzungen behalten das während `initialize` erfasste Verhalten bei.
 absoluten, plattformnativen Pfad auf, erstellt es bei Bedarf, prüft die
 Schreibbarkeit und schreibt es in das generierte `browser.userDataDir`. Ein
 persistentes Profil deaktiviert das standardmäßige isolierte Streamable-HTTP-Profil
-für diese Sitzung. Die Bridge weist doppelte aktive Profilverzeichnisse
-innerhalb eines Prozesses zurück; prozessübergreifende Profilkonflikte bleiben
-Chromium/Playwright-Fehler.
+für diese Sitzung. Die Bridge weist die doppelte aktive Nutzung von Profilverzeichnissen sowohl innerhalb eines Prozesses als auch zwischen Prozessen im selben Prozess-ID-Namensraum zurück. Informationen zur Wiederherstellung von Sperren und ihren Grenzen finden Sie unter [Persistentes Login-Profil](recipes/persistent-login-profile.md).
 
 `contextOptions` werden validiert und flach über
 `CLOAK_PLAYWRIGHT_MCP_CONTEXT_OPTIONS` zusammengeführt; verschachtelte Objekte

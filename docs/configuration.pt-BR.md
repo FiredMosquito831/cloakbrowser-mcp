@@ -342,9 +342,7 @@ sessões existentes mantêm o comportamento capturado durante `initialize`.
 substitui `PLAYWRIGHT_MCP_USER_DATA_DIR`. A ponte resolve o diretório como um
 caminho absoluto nativo da plataforma, cria se estiver ausente, verifica se é
 gravável e grava no `browser.userDataDir` gerado. Um perfil persistente
-desabilita o perfil isolado padrão do Streamable HTTP para essa sessão. A ponte
-rejeita diretórios de perfil ativos duplicados dentro de um mesmo processo;
-conflitos de perfil entre processos continuam sendo erros do Chromium/Playwright.
+desabilita o perfil isolado padrão do Streamable HTTP para essa sessão. A ponte rejeita o uso ativo duplicado de diretórios de perfil tanto dentro de um processo quanto entre processos no mesmo espaço de identificadores de processo. Consulte [Perfil de login persistente](recipes/persistent-login-profile.md) para saber como o bloqueio é recuperado e quais são os limites.
 
 `contextOptions` são validadas e mescladas superficialmente sobre
 `CLOAK_PLAYWRIGHT_MCP_CONTEXT_OPTIONS`; objetos aninhados substituem valores

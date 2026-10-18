@@ -339,9 +339,7 @@ Streamable HTTP では、`initialize` メタデータの `extensionMode` と `pr
 プラットフォームネイティブの絶対パスに解決し、存在しない場合は作成し、
 書き込み可能であることを確認して、生成された `browser.userDataDir` に
 書き込みます。永続プロファイルは、そのセッションのデフォルトの
-Streamable HTTP 分離プロファイルを無効にします。ブリッジは、同一プロセス内で
-重複するアクティブなプロファイルディレクトリを拒否します。プロセス間の
-プロファイル競合は、引き続き Chromium/Playwright のエラーになります。
+Streamable HTTP 分離プロファイルを無効にします。ブリッジは、同一プロセス内と同じプロセス ID 名前空間のプロセス間で、同じプロファイルディレクトリの重複したアクティブ利用を拒否します。ロックの復旧とその制限については、[永続ログインプロファイル](recipes/persistent-login-profile.md)を参照してください。
 
 `contextOptions` は検証され、`CLOAK_PLAYWRIGHT_MCP_CONTEXT_OPTIONS` の上に
 浅くマージされます。ネストされたオブジェクトは値全体として置き換えられます。

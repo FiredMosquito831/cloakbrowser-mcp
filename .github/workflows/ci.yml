@@ -53,7 +53,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ needs.node-versions.outputs.minimum_node }}
           cache: npm
@@ -76,7 +76,7 @@ jobs:
         node-version: ${{ fromJSON(needs.node-versions.outputs.node_versions) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -115,7 +115,7 @@ jobs:
           name: vitest-node${{ matrix.node-version }}
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always() && matrix.os == 'ubuntu-latest'
         with:
           name: coverage-node${{ matrix.node-version }}-attempt-${{ github.run_attempt }}
@@ -123,7 +123,7 @@ jobs:
           if-no-files-found: error
       - name: Upload sanitized test evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-results-quality-${{ matrix.os }}-node${{ matrix.node-version }}-attempt-${{ github.run_attempt }}
           path: ${{ env.CLOAK_REPORT_ROOT }}
@@ -161,7 +161,7 @@ jobs:
             native-architecture: linux/amd64
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node-version }}
           package-manager-cache: false
@@ -209,7 +209,7 @@ jobs:
           CLOAKBROWSER_MCP_CDP_EXPECTED_ARCHITECTURE: ${{ matrix.native-architecture }}
       - name: Upload sanitized test evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-results-e2e-${{ matrix.os }}-node${{ matrix.node-version }}-attempt-${{ github.run_attempt }}
           path: ${{ env.CLOAK_REPORT_ROOT }}
@@ -231,7 +231,7 @@ jobs:
       CLOAKBROWSER_AUTO_UPDATE: 'false'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ needs.node-versions.outputs.primary_node }}
           cache: npm
@@ -285,7 +285,7 @@ jobs:
         run: npm exec -- vitest run --config vitest.distribution-e2e.config.mjs "tests/e2e/$REPORT_FILE"
       - name: Upload sanitized functional evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-results-functional-${{ matrix.os }}-${{ matrix.suite }}-attempt-${{ github.run_attempt }}
           path: ${{ env.CLOAK_REPORT_ROOT }}
@@ -299,7 +299,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ needs.node-versions.outputs.minimum_node }}
           cache: npm
@@ -344,7 +344,7 @@ jobs:
             compare: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ needs.node-versions.outputs.minimum_node }}
           cache: npm
@@ -357,8 +357,8 @@ jobs:
           version="$(node -p "require('./package.json').version")"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "version_tag=v$version" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - id: base
         name: Resolve Playwright MCP base digest
         run: |
@@ -369,7 +369,7 @@ jobs:
           fi
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
       - name: Build image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           load: true
@@ -422,7 +422,7 @@ jobs:
           CLOAKBROWSER_MCP_DOCKER_IMAGE: ${{ matrix.image_tag }}
       - name: Upload sanitized test evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-results-docker-${{ matrix.platform_slug }}-attempt-${{ github.run_attempt }}
           path: ${{ env.CLOAK_REPORT_ROOT }}
@@ -431,7 +431,7 @@ jobs:
       - name: Compare with upstream Playwright MCP
         if: matrix.compare
         run: npm run bridge:compare -- "${{ matrix.image_tag }}" --report bridge-parity-report.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always() && matrix.compare
         with:
           name: bridge-parity-report-${{ matrix.platform_slug }}-attempt-${{ github.run_attempt }}
@@ -450,7 +450,7 @@ jobs:
           vuln-type: os,library
           ignore-unfixed: true
           exit-code: '1'
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: trivy-results-${{ matrix.platform_slug }}-attempt-${{ github.run_attempt }}
@@ -458,7 +458,7 @@ jobs:
           if-no-files-found: warn
       - name: Upload Trivy SARIF
         if: always() && github.event_name != 'pull_request' && hashFiles('trivy-results.sarif') != ''
-        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
           sarif_file: trivy-results.sarif
 
@@ -510,7 +510,7 @@ jobs:
       CLOAK_REPORT_OUTPUT: artifacts/ci-combined-report
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ needs.node-versions.outputs.primary_node }}
           cache: npm
@@ -543,7 +543,7 @@ jobs:
         run: node scripts/test-report.mjs ci-aggregate
       - name: Upload combined sanitized HTML and evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: combined-test-report-attempt-${{ github.run_attempt }}
           path: ${{ env.CLOAK_REPORT_OUTPUT }}
@@ -555,7 +555,7 @@ jobs:
         run: node scripts/test-report.mjs ci-history-save
       - name: Upload trusted launch history
         if: always() && steps.report.outcome == 'success' && steps.history.outputs.name != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.history.outputs.save-name }}-attempt-${{ github.run_attempt }}
           path: ${{ env.CLOAK_REPORT_HISTORY_OUTPUT }}

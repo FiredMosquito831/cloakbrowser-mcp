@@ -331,9 +331,7 @@ PLAYWRIGHT_MCP_EXTENSION=true \
 `userDataDir` 为该会话启用持久化 Chromium 配置文件，并覆盖
 `PLAYWRIGHT_MCP_USER_DATA_DIR`。桥接器会将目录解析为平台原生绝对路径，
 在缺失时创建它，验证其可写，并写入生成的 `browser.userDataDir`。
-持久化配置文件会禁用该会话默认的 Streamable HTTP 隔离配置文件。桥接器会
-拒绝同一进程内重复的活动配置文件目录；跨进程配置文件冲突仍由
-Chromium/Playwright 报错。
+持久化配置文件会禁用该会话默认的 Streamable HTTP 隔离配置文件。桥接器会拒绝同一进程内以及同一进程 ID 命名空间中不同进程之间对同一配置文件目录的重复活动使用。锁恢复方式及其限制见[持久登录配置文件](recipes/persistent-login-profile.md)。
 
 `contextOptions` 会经过验证，并在 `CLOAK_PLAYWRIGHT_MCP_CONTEXT_OPTIONS`
 之上进行浅合并；嵌套对象会整体替换。支持的字段为 `userAgent`、

@@ -63,10 +63,7 @@ docker run --rm -i \
 ```
 
 Environment variables inside Docker must use container paths such as
-`/data/profiles/default`, not host paths. The bridge creates the profile
-directory if it is missing, verifies it is writable, writes the container path
-to generated Playwright MCP config, and rejects duplicate active profile
-directories inside one server process.
+`/data/profiles/default`, not host paths. The bridge creates missing profile directories, verifies write access, writes the container path to generated Playwright MCP config, and locks explicitly configured profiles. Keep one active server per profile, including across containers; see [Persistent Login Profile](recipes/persistent-login-profile.md) for recovery limits.
 
 ## CloakBrowser License Cache
 
@@ -316,4 +313,4 @@ npm run docker:smoke
 
 The Dockerfile uses the pinned official Playwright MCP image as the runtime base, applies available Debian security updates during the build, removes the unused global npm payload from the runtime image, and installs the bridge under `/opt/cloakbrowser-mcp`.
 
-The release workflow publishes SBOM and provenance attestations, includes OCI labels for source, revision, version, license, base image name, and base image digest, and scans the built image with Trivy before publishing.
+CI scans Docker images with Trivy before merge. The release workflow publishes SBOM and provenance attestations and includes OCI labels for source, revision, version, license, base image name, and base image digest.

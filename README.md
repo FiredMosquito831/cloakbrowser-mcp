@@ -47,7 +47,7 @@ Use it when you need:
 - npm or Docker installation over stdio or Streamable HTTP;
 - opt-in, session-scoped [managed CDP access](docs/configuration.md#managed-cdp) for
   CDP-capable clients through `chromium.connectOverCDP()`;
-- persistent browser profiles, validated context options, and Chrome extension loading;
+- [persistent browser profiles](docs/recipes/persistent-login-profile.md), validated context options, and Chrome extension loading;
 - GeoIP-aware proxy matching for regional QA;
 - humanized mouse, keyboard, and scroll behavior for interaction-sensitive flows.
 
@@ -191,6 +191,7 @@ The common variable table now lives in [Configuration](docs/configuration.md). T
 
 | cloakbrowser-mcp | @playwright/mcp | CloakBrowser | Node.js                | Platform                                                                                  |
 | ---------------- | --------------- | ------------ | ---------------------- | ----------------------------------------------------------------------------------------- |
+| `1.15.1`         | `^0.0.83`       | `^0.6.3`     | `^22.13.0 || >=24.0.0` | npm on Linux x64/arm64, macOS arm64/x64, Windows x64; Docker `linux/amd64`, `linux/arm64` |
 | `1.15.0`         | `^0.0.83`       | `^0.6.3`     | `^22.13.0 || >=24.0.0` | npm on Linux x64/arm64, macOS arm64/x64, Windows x64; Docker `linux/amd64`, `linux/arm64` |
 | `1.14.1`         | `^0.0.82`       | `^0.5.10`    | `^22.13.0 || >=24.0.0` | npm on Linux x64/arm64, macOS arm64/x64, Windows x64; Docker `linux/amd64`, `linux/arm64` |
 | `1.14.0`         | `^0.0.82`       | `^0.5.10`    | `^22.13.0 || >=24.0.0` | npm on Linux x64/arm64, macOS arm64/x64, Windows x64; Docker `linux/amd64`, `linux/arm64` |

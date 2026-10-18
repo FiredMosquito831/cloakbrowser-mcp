@@ -64,10 +64,7 @@ docker run --rm -i \
 ```
 
 Variáveis de ambiente dentro do Docker devem usar caminhos do contêiner, como
-`/data/profiles/default`, não caminhos do host. A ponte cria o diretório de
-perfil se ele estiver ausente, verifica se é gravável, grava o caminho do
-contêiner na configuração gerada do Playwright MCP e rejeita diretórios de perfil
-ativos duplicados dentro de um mesmo processo do servidor.
+`/data/profiles/default`, não caminhos do host. A ponte cria os diretórios de perfil ausentes, verifica o acesso de gravação, passa o caminho do contêiner à configuração gerada do Playwright MCP e bloqueia os perfis configurados explicitamente. Mantenha apenas um servidor ativo por perfil, inclusive entre contêineres; consulte os limites de recuperação em [Perfil de login persistente](recipes/persistent-login-profile.md).
 
 ## Cache de licença do CloakBrowser
 
@@ -310,7 +307,7 @@ npm run docker:smoke
 
 O Dockerfile utiliza a imagem oficial fixada do Playwright MCP como base de execução, aplica as atualizações de segurança disponíveis do Debian durante a compilação, remove o payload global do npm não utilizado da imagem de execução e instala a ponte sob `/opt/cloakbrowser-mcp`.
 
-O fluxo de trabalho de lançamento publica os atestados de SBOM e de proveniência, inclui rótulos OCI para fonte, revisão, versão, licença, nome da imagem base e hash da imagem base, e verifica a imagem compilada com o Trivy antes da publicação.
+O CI verifica as imagens Docker com o Trivy antes da integração das alterações. O fluxo de lançamento publica SBOM e atestações de proveniência e inclui rótulos OCI para fonte, revisão, versão, licença, nome da imagem base e seu resumo criptográfico.
 
 ## Mais caminhos práticos
 

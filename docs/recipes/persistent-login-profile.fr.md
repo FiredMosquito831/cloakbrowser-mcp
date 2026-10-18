@@ -21,6 +21,10 @@ PLAYWRIGHT_MCP_USER_DATA_DIR="$PWD/.profiles/default" \
 
 Configurez le client MCP avec la même commande. Ne partagez pas un répertoire de profil entre deux serveurs actifs.
 
+Après un arrêt anormal, le pont supprime `.cloakbrowser-mcp-profile.lock` uniquement si l’identifiant de processus enregistré est valide et que le processus n’existe plus. Les verrous dont le propriétaire est encore actif, dont le contenu est illisible ou invalide, ou dont l’état du processus est incertain bloquent toujours le démarrage. Cette récupération n’arrête pas les processus Chromium restants et ne supprime pas les verrous propres à Chromium.
+
+Ne redémarrez qu’un seul serveur par profil à la fois : la nouvelle vérification et la suppression d’un verrou obsolète ne sont pas atomiques. Si l’écriture d’un fichier de verrou nouvellement créé échoue, le pont ferme son descripteur et ne supprime le fichier que si le chemin désigne toujours ce fichier.
+
 ## Docker
 
 ```bash

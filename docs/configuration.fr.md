@@ -347,9 +347,7 @@ remplace `PLAYWRIGHT_MCP_USER_DATA_DIR`. Le pont résout le répertoire en chemi
 absolu natif de la plateforme, le crée s'il manque, vérifie qu'il est accessible
 en écriture et l'écrit dans le `browser.userDataDir` généré. Un profil
 persistant désactive le profil isolé Streamable HTTP par défaut pour cette
-session. Le pont rejette les répertoires de profil actifs en double dans un même
-processus ; les conflits de profil entre processus restent des erreurs
-Chromium/Playwright.
+session. Le pont rejette l’utilisation active en double des répertoires de profil, dans un même processus comme entre processus du même espace d’identifiants de processus. Consultez [Profil de connexion persistant](recipes/persistent-login-profile.md) pour connaître la récupération des verrous et ses limites.
 
 `contextOptions` sont validées et fusionnées superficiellement au-dessus de
 `CLOAK_PLAYWRIGHT_MCP_CONTEXT_OPTIONS` ; les objets imbriqués remplacent des
