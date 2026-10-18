@@ -3,6 +3,7 @@ import {
   mkdtempSync,
   mkdirSync as originalMkdirSync,
   readFileSync as originalReadFileSync,
+  realpathSync,
   writeFileSync as originalWriteFileSync,
   rmSync,
 } from 'node:fs';
@@ -143,7 +144,7 @@ afterEach(() => {
 
 function createRoot(): string {
   const prefix = path.join(tmpdir(), 'cloak-profile-lock-');
-  const root = mkdtempSync(prefix);
+  const root = realpathSync.native(mkdtempSync(prefix));
   roots.push(root);
   const profile = path.join(root, 'profile');
   originalMkdirSync(profile);
@@ -253,6 +254,7 @@ describe('persistent profile lock recovery', () => {
     const preparing = prepareBridgeRuntime(options);
     const expectedError = 'already active';
     await expectRejection(preparing, expectedError);
+    expect(faults.reads).toBeGreaterThan(0);
     const actualContents = originalReadFileSync(lockPath, 'utf8');
     expect(actualContents).toBe(contents);
   });
