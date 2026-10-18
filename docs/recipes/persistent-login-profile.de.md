@@ -21,6 +21,10 @@ PLAYWRIGHT_MCP_USER_DATA_DIR="$PWD/.profiles/default" \
 
 Konfigurieren Sie den MCP-Client mit demselben Befehl. Teilen Sie ein Profilverzeichnis nicht zwischen zwei aktiven Servern.
 
+Nach einem unerwarteten Abbruch entfernt die Bridge `.cloakbrowser-mcp-profile.lock` nur, wenn die gespeicherte Prozess-ID gültig ist und der Prozess nicht mehr existiert. Sperren mit einem noch laufenden Besitzer, unlesbarem oder ungültigem Inhalt oder unklarem Prozessstatus verhindern weiterhin den Start. Diese Wiederherstellung beendet keine verbliebenen Chromium-Prozesse und entfernt keine Chromium-eigenen Sperren.
+
+Starten Sie immer nur einen Server pro Profil gleichzeitig neu: Das erneute Prüfen und Entfernen einer veralteten Sperre ist nicht atomar. Schlägt das Schreiben einer neu erstellten Sperrdatei fehl, schließt die Bridge den Dateideskriptor und entfernt die Datei nur, wenn der Pfad weiterhin diese Datei bezeichnet.
+
 ## Docker
 
 ```bash

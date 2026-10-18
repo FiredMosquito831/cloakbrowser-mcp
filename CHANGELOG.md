@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Reclaim persistent-profile locks after the recorded owner process has exited,
+  while preserving live, unreadable, malformed, or changed locks. Close and clean
+  up newly created lock files when writing fails. Profile restarts must remain
+  sequential because the final file check and removal are not atomic.
+
+### Changed
+
+- Refresh nine GitHub Actions with full commit SHA pins, align CodeQL steps,
+  and use read-only workflow defaults while retaining explicit job permissions.
+  The updates include fixes for workflow command injection in Docker metadata
+  logs and token-variable logging in Scorecard.
+- Clarify profile recovery, Docker scanning stages, and regression coverage in
+  documentation and all ten supported translations.
+
 ## [1.15.0] - 2026-10-18
 
 ### Added

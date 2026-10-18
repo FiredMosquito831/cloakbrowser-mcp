@@ -366,9 +366,7 @@ is never accepted in metadata.
 overrides `PLAYWRIGHT_MCP_USER_DATA_DIR`. The bridge resolves the directory to
 an absolute platform-native path, creates it if missing, verifies it is writable,
 and writes it to generated `browser.userDataDir`. A persistent profile disables
-the default Streamable HTTP isolated profile for that session. The bridge
-rejects duplicate active profile directories inside one process; cross-process
-profile conflicts remain Chromium/Playwright errors.
+the default Streamable HTTP isolated profile for that session. The bridge rejects duplicate active profile directories within one process and across processes in the same process ID namespace. See [Persistent Login Profile](recipes/persistent-login-profile.md) for lock recovery and its limits.
 
 `contextOptions` are validated and shallow-merged over
 `CLOAK_PLAYWRIGHT_MCP_CONTEXT_OPTIONS`; nested objects replace whole values.

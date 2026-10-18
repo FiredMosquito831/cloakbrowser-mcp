@@ -16,6 +16,8 @@ npm run test:unit
 
 单元测试覆盖环境解析、桥接配置生成、启动参数处理以及本地 Cloak introspection 工具。
 
+持久配置文件锁测试覆盖所有者进程已退出后的恢复、所有者仍在运行或状态不明、锁文件发生变化，以及部分写入后的清理。
+
 ## 集成测试
 
 ```bash
@@ -25,6 +27,8 @@ npm run test:integration
 集成测试使用假的 upstream MCP 子进程，并验证桥接层会合并本地工具，同时原样转发 upstream 调用。
 
 `npm run check` 包含静态检查、单元/集成测试及使用模拟 upstream MCP 的已打包 CLI 测试，不启动 Chromium。PR CI 对每个平台与 Node.js 组合执行一次单元/集成及 CLI 测试：Linux x64/arm64、macOS x64/arm64 和 Windows x64，配合 Node.js {{ project.node_check_versions }}。Linux x64 在同一次测试运行中收集覆盖率并上传 Codecov。静态检查和包验证仅在 Linux x64/Node.js {{ project.node_minimum_version }} 上执行一次。
+
+打包后的 CLI 测试验证强制终止后的重启、所有者仍在运行时拒绝竞争服务器，以及客户端关闭 stdin 后的清理。
 
 CI 矩阵、预期结果清单和文档均从 `.github/workflows/ci.yml` 读取 Node.js 版本。测试的发行版本分支发生变化时，请更新该文件。
 

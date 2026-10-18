@@ -36,6 +36,9 @@ docker run --rm -i \
   swimmwatch/cloakbrowser-mcp:latest
 ```
 
+Keep one active server per profile directory, including across containers. See
+[profile lock recovery and its limits](https://swimmwatch.github.io/cloakbrowser-mcp/recipes/persistent-login-profile/).
+
 For Chrome extensions, mount the extension directory separately and pass the
 container path:
 

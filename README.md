@@ -47,7 +47,7 @@ Use it when you need:
 - npm or Docker installation over stdio or Streamable HTTP;
 - opt-in, session-scoped [managed CDP access](docs/configuration.md#managed-cdp) for
   CDP-capable clients through `chromium.connectOverCDP()`;
-- persistent browser profiles, validated context options, and Chrome extension loading;
+- [persistent browser profiles](docs/recipes/persistent-login-profile.md), validated context options, and Chrome extension loading;
 - GeoIP-aware proxy matching for regional QA;
 - humanized mouse, keyboard, and scroll behavior for interaction-sensitive flows.
 

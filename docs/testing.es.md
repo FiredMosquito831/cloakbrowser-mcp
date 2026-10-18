@@ -16,6 +16,8 @@ npm run test:unit
 
 Las pruebas unitarias cubren el análisis del entorno, la generación de configuración del puente, el manejo de argumentos de lanzamiento y las herramientas locales de introspección de Cloak.
 
+Las pruebas de bloqueo de perfiles persistentes cubren la recuperación tras finalizar el propietario, los propietarios activos o de estado incierto, los cambios del archivo de bloqueo y la limpieza tras escrituras parciales.
+
 ## Pruebas de integración
 
 ```bash
@@ -25,6 +27,8 @@ npm run test:integration
 Las pruebas de integración usan un proceso hijo MCP upstream falso y verifican que el puente combine las herramientas locales y reenvíe las llamadas upstream sin cambios.
 
 `npm run check` incluye comprobaciones estáticas, pruebas unitarias/de integración y del CLI empaquetado con upstream MCP simulado, sin Chromium. En los PR, las pruebas unitarias/de integración y del CLI se ejecutan una vez por combinación de plataforma y Node.js: {{ project.node_check_versions }} en Linux x64/arm64, macOS x64/arm64 y Windows x64. Linux x64 recoge la cobertura para Codecov en esa misma ejecución. Las comprobaciones estáticas y la verificación del paquete se ejecutan una vez en Linux x64/Node.js {{ project.node_minimum_version }}.
+
+Las pruebas del CLI empaquetado verifican el reinicio tras una terminación forzada, el rechazo de un servidor competidor mientras el propietario sigue activo y la limpieza cuando el cliente cierra stdin.
 
 La matriz de CI, el inventario de resultados esperados y la documentación leen las versiones de Node.js de `.github/workflows/ci.yml`. Actualiza ese archivo cuando cambien las ramas de versiones probadas.
 

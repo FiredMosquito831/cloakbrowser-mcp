@@ -16,6 +16,8 @@ npm run test:unit
 
 単体テストは、環境変数の解析、ブリッジ設定の生成、起動引数の処理、ローカル Cloak introspection ツールをカバーします。
 
+永続プロファイルのロックテストでは、所有者プロセス終了後の復旧、動作中または状態不明の所有者、ロックファイルの変更、部分的な書き込み後のクリーンアップを検証します。
+
 ## 統合テスト
 
 ```bash
@@ -25,6 +27,8 @@ npm run test:integration
 統合テストは偽の upstream MCP 子プロセスを使用し、ブリッジがローカルツールを統合し、upstream 呼び出しを変更せずに転送することを検証します。
 
 `npm run check` は静的チェック、単体/統合テスト、模擬 upstream MCP を使うパッケージ済み CLI テストを実行し、Chromium は起動しません。PR CI はプラットフォームと Node.js の組み合わせごとに単体/統合と CLI のテストを一度実行します。対象は Linux x64/arm64、macOS x64/arm64、Windows x64 と Node.js {{ project.node_check_versions }} です。Linux x64 では同じテスト実行でカバレッジを収集し Codecov に送信します。静的チェックとパッケージ検証は Linux x64/Node.js {{ project.node_minimum_version }} で一度実行します。
+
+パッケージ化された CLI のテストでは、強制終了後の再起動、所有者が動作中の場合の競合サーバーの拒否、クライアントが stdin を閉じたときのクリーンアップを検証します。
 
 CI 行列、期待される結果の一覧、ドキュメントは `.github/workflows/ci.yml` から Node.js のバージョンを読み取ります。テスト対象のリリース系列が変わったら、このファイルを更新してください。
 

@@ -21,6 +21,10 @@ PLAYWRIGHT_MCP_USER_DATA_DIR="$PWD/.profiles/default" \
 
 Configura el cliente MCP con el mismo comando. No compartas un directorio de perfil entre dos servidores activos.
 
+Tras un cierre anormal, el puente elimina `.cloakbrowser-mcp-profile.lock` solo si el identificador de proceso registrado es válido y el proceso ya no existe. Los bloqueos con un propietario activo, contenido ilegible o inválido, o un estado de proceso incierto siguen impidiendo el inicio. Esta recuperación no termina los procesos de Chromium que sigan en ejecución ni elimina los bloqueos propios de Chromium.
+
+Reinicia un solo servidor por perfil a la vez: volver a comprobar y eliminar un bloqueo obsoleto no es una operación atómica. Si falla la escritura de un archivo de bloqueo recién creado, el puente cierra su descriptor y lo elimina solo si la ruta sigue identificando ese archivo.
+
 ## Docker
 
 ```bash

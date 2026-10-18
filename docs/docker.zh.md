@@ -62,8 +62,7 @@ docker run --rm -i \
 ```
 
 Docker 内部的环境变量必须使用容器路径，例如 `/data/profiles/default`，
-而不是主机路径。桥接器会在配置文件目录缺失时创建它，验证其可写，将容器路径写入
-生成的 Playwright MCP 配置，并拒绝同一服务器进程内重复的活动配置文件目录。
+而不是主机路径。桥接器会创建缺失的配置文件目录、检查写入权限、将容器路径写入生成的 Playwright MCP 配置，并锁定显式配置的持久配置文件。每个配置文件只能有一个活动服务器，包括在多个容器之间；恢复限制见[持久登录配置文件](recipes/persistent-login-profile.md)。
 
 ## CloakBrowser 许可证缓存
 
@@ -300,7 +299,7 @@ npm run docker:smoke
 
 该 Dockerfile 使用已锁定的官方 Playwright MCP 镜像作为运行时基础镜像，在构建过程中应用可用的 Debian 安全更新，从运行时镜像中移除未使用的全局 npm 有效载荷，并在 `/opt/cloakbrowser-mcp`下安装桥接服务。
 
-该发布工作流会发布 SBOM 和溯源证明，包含源代码、修订版、版本、许可证、基础镜像名称以及基础镜像摘要的 OCI 标签，并在发布前使用 Trivy 对构建好的镜像进行扫描。
+CI 会在合并更改前使用 Trivy 扫描 Docker 镜像。发布工作流会发布 SBOM 和溯源证明，并包含源代码、修订版、版本、许可证、基础镜像名称及其摘要的 OCI 标签。
 
 ## 更多实用路径
 

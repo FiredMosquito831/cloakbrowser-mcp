@@ -16,6 +16,8 @@ npm run test:unit
 
 Les tests unitaires couvrent l'analyse de l'environnement, la génération de configuration du pont, la gestion des arguments de lancement et les outils locaux d'introspection Cloak.
 
+Les tests de verrouillage des profils persistants couvrent la récupération après la fin du processus propriétaire, les propriétaires actifs ou d’état incertain, les fichiers de verrou modifiés et le nettoyage après une écriture partielle.
+
 ## Tests d'intégration
 
 ```bash
@@ -25,6 +27,8 @@ npm run test:integration
 Les tests d'intégration utilisent un processus enfant MCP upstream factice et vérifient que le pont fusionne les outils locaux et transmet les appels upstream sans modification.
 
 `npm run check` comprend les vérifications statiques, les tests unitaires/d’intégration et les tests du CLI empaqueté avec un upstream MCP simulé, sans Chromium. En PR, les tests unitaires/d’intégration et du CLI s’exécutent une fois par combinaison plateforme/Node.js : {{ project.node_check_versions }} sur Linux x64/arm64, macOS x64/arm64 et Windows x64. Linux x64 collecte la couverture pour Codecov lors de cette même exécution. Les vérifications statiques et du paquet s’exécutent une fois sur Linux x64/Node.js {{ project.node_minimum_version }}.
+
+Les tests du CLI empaqueté vérifient le redémarrage après un arrêt forcé, le rejet d’un serveur concurrent tant que le propriétaire est actif et le nettoyage lorsque le client ferme stdin.
 
 La matrice CI, l’inventaire des résultats attendus et la documentation lisent les versions de Node.js depuis `.github/workflows/ci.yml`. Mettez ce fichier à jour lorsque les branches de versions testées changent.
 
