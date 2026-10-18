@@ -3,12 +3,15 @@ import {
   accessSync,
   closeSync,
   constants as fsConstants,
+  fstatSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   openSync,
   readFileSync,
   realpathSync,
   rmSync,
+  type Stats,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -914,28 +917,101 @@ function acquireProfileLock(userDataDir: string): () => void {
   };
 }
 function createProfileLockFile(lockPath: string, userDataDir: string): void {
-  let fd: number | undefined;
-  try {
-    fd = openSync(lockPath, 'wx', 0o600);
-    const currentFd = fd;
-    const stringifyOptions = {
-      pid: process.pid,
-      createdAt: new Date().toISOString(),
-      userDataDir,
-    } as const;
-    const templateValue = JSON.stringify(stringifyOptions, null, 2);
-    const message21 = `${templateValue}\n`;
-    writeFileSync(currentFd, message21);
-  } catch (error) {
-    if (isFileExistsError(error)) {
-      const message22 = `Persistent profile is already active: ${userDataDir}${formatProfileLockDetails(lockPath)}`;
-      throw new BridgeRuntimeConfigurationError(message22);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      writeProfileLockFile(lockPath, userDataDir);
+      return;
+    } catch (error) {
+      if (isFileExistsError(error)) {
+        if (attempt === 0 && reclaimProfileLockFile(lockPath)) continue;
+        const details = formatProfileLockDetails(lockPath);
+        const message = `Persistent profile is already active: ${userDataDir}${details}`;
+        throw new BridgeRuntimeConfigurationError(message);
+      }
+      const reason = error instanceof Error ? error.message : String(error);
+      const message = `Could not create profile lock for ${userDataDir}: ${reason}`;
+      throw new BridgeRuntimeConfigurationError(message);
     }
-    const message = error instanceof Error ? error.message : String(error);
-    const message23 = `Could not create profile lock for ${userDataDir}: ${message}`;
-    throw new BridgeRuntimeConfigurationError(message23);
-  } finally {
-    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+function writeProfileLockFile(lockPath: string, userDataDir: string): void {
+  const fd = openSync(lockPath, 'wx', 0o600);
+  let identity: Stats | undefined;
+  try {
+    try {
+      identity = fstatSync(fd);
+      const createdAt = new Date().toISOString();
+      const owner = { pid: process.pid, createdAt, userDataDir };
+      const contents = JSON.stringify(owner, null, 2);
+      const record = `${contents}\n`;
+      writeFileSync(fd, record);
+    } finally {
+      closeSync(fd);
+    }
+  } catch (error) {
+    if (identity !== undefined) removeOwnedProfileLockFile(lockPath, identity);
+    throw error;
+  }
+}
+
+function removeOwnedProfileLockFile(lockPath: string, identity: Stats): void {
+  try {
+    const current = lstatSync(lockPath);
+    if (sameProfileLockIdentity(identity, current)) unlinkSync(lockPath);
+  } catch (error) {
+    if (!isFileMissingError(error)) throw error;
+  }
+}
+
+interface ProfileLockSnapshot {
+  identity: Stats;
+  contents: string;
+}
+
+function readProfileLockSnapshot(lockPath: string): ProfileLockSnapshot | undefined {
+  const identity = lstatSync(lockPath);
+  if (!identity.isFile()) return undefined;
+  const contents = readFileSync(lockPath, 'utf8');
+  return { identity, contents };
+}
+
+function sameProfileLockIdentity(left: Stats, right: Stats): boolean {
+  return right.isFile() && left.dev === right.dev && left.ino === right.ino;
+}
+
+function reclaimProfileLockFile(lockPath: string): boolean {
+  try {
+    const snapshot = readProfileLockSnapshot(lockPath);
+    if (snapshot === undefined) return false;
+    const owner = JSON.parse(snapshot.contents) as unknown;
+    if (!isRecord(owner)) return false;
+    const pid = owner.pid;
+    if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0) return false;
+    if (!isProfileOwnerDead(pid)) return false;
+    const current = readProfileLockSnapshot(lockPath);
+    if (current === undefined || snapshot.contents !== current.contents) return false;
+    if (!sameProfileLockIdentity(snapshot.identity, current.identity)) return false;
+    if (
+      snapshot.identity.mtimeMs !== current.identity.mtimeMs ||
+      snapshot.identity.ctimeMs !== current.identity.ctimeMs
+    ) {
+      return false;
+    }
+    // Rechecking narrows concurrent replacement races; path-based unlink is not an atomic comparison.
+    unlinkSync(lockPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isProfileOwnerDead(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return isNodeError(error) && error.code === systemErrorCodes.ESRCH;
   }
 }
 function removeProfileLockFile(lockPath: string): void {
