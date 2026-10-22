@@ -7,9 +7,6 @@ on:
       - .github/zizmor.yml
       - .github/workflows/**
   pull_request:
-    paths:
-      - .github/zizmor.yml
-      - .github/workflows/**
   workflow_dispatch:
 
 concurrency:
