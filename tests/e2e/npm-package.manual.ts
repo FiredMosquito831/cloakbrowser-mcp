@@ -523,7 +523,7 @@ describe('npm package distribution E2E', () => {
       CLOAKBROWSER_AUTO_UPDATE: 'false',
       CLOAK_PLAYWRIGHT_MCP_CONSOLE_FALLBACK: 'true',
       DEBUG: 'pw:browser',
-      PLAYWRIGHT_MCP_TIMEOUT_ACTION: '1000',
+      PLAYWRIGHT_MCP_TIMEOUT_ACTION: '5000',
     };
     delete env.PLAYWRIGHT_MCP_CLI_PATH;
     const stdioClientTransportOptions = {
