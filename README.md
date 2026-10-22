@@ -15,6 +15,7 @@
 [![GitHub Release](https://img.shields.io/github/v/release/swimmwatch/cloakbrowser-mcp?logo=github&label=GitHub%20release)](https://github.com/swimmwatch/cloakbrowser-mcp/releases)
 [![MCP Registry](https://img.shields.io/badge/MCP%20Registry-published-2E8555)](https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.swimmwatch%2Fcloakbrowser-mcp)
 [![cloakbrowser-mcp MCP server](https://glama.ai/mcp/servers/swimmwatch/cloakbrowser-mcp/badges/score.svg)](https://glama.ai/mcp/servers/swimmwatch/cloakbrowser-mcp)
+[![LobeHub MCP](https://lobehub.com/badge/mcp/swimmwatch-cloakbrowser-mcp)](https://lobehub.com/mcp/swimmwatch-cloakbrowser-mcp)
 [![Awesome MCP Servers](https://img.shields.io/badge/Awesome%20MCP%20Servers-listed-2E8555)](https://github.com/punkpeye/awesome-mcp-servers)
 [![npm](https://img.shields.io/npm/v/cloakbrowser-mcp.svg?logo=npm)](https://www.npmjs.com/package/cloakbrowser-mcp)
 [![npm downloads](https://img.shields.io/npm/dm/cloakbrowser-mcp.svg?logo=npm&label=npm%20downloads)](https://www.npmjs.com/package/cloakbrowser-mcp)
