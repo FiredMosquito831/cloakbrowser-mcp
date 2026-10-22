@@ -7,9 +7,6 @@ on:
       - .github/actionlint.yml
       - .github/workflows/**
   pull_request:
-    paths:
-      - .github/actionlint.yml
-      - .github/workflows/**
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
