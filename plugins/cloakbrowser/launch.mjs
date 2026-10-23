@@ -48,12 +48,23 @@ function parsePackageSpec(spec) {
   return { name: spec.slice(0, at), version: spec.slice(at + 1) };
 }
 
+function dataDir(env) {
+  return env.CLAUDE_PLUGIN_DATA !== undefined && env.CLAUDE_PLUGIN_DATA.trim() !== ''
+    ? env.CLAUDE_PLUGIN_DATA
+    : path.join(homedir(), '.cloakbrowser-mcp-plugin');
+}
+
+function applyDefaultProfile(env) {
+  if (env.PLAYWRIGHT_MCP_USER_DATA_DIR !== undefined) {
+    return;
+  }
+  const profile = path.join(dataDir(env), 'profiles', 'default');
+  mkdirSync(profile, { recursive: true });
+  env.PLAYWRIGHT_MCP_USER_DATA_DIR = profile;
+}
+
 function runtimeDir(env) {
-  const base =
-    env.CLAUDE_PLUGIN_DATA !== undefined && env.CLAUDE_PLUGIN_DATA.trim() !== ''
-      ? env.CLAUDE_PLUGIN_DATA
-      : path.join(homedir(), '.cloakbrowser-mcp-plugin');
-  return path.join(base, 'runtime');
+  return path.join(dataDir(env), 'runtime');
 }
 
 function cliPath(dir, name) {
@@ -112,6 +123,7 @@ function ensureRuntime(env, spec) {
 
 function main() {
   const env = buildChildEnv(process.env);
+  applyDefaultProfile(env);
   const packageSpec = resolvePackage(env);
   const isWindows = process.platform === 'win32';
 

@@ -1,7 +1,7 @@
 {
   "name": "cloakbrowser",
   "displayName": "CloakBrowser",
-  "version": "1.15.1",
+  "version": "1.15.2",
   "description": "CloakBrowser stealth Chromium through the Playwright MCP tool contract, via cloakbrowser-mcp.",
   "author": {
     "name": "FiredMosquito831"
@@ -58,7 +58,7 @@
     "profile_dir": {
       "type": "string",
       "title": "Persistent profile directory",
-      "description": "Directory that keeps cookies, logins and the fingerprint seed. It is created if it does not exist. Use one directory per account. Leave empty for a temporary profile.",
+      "description": "Directory that keeps cookies, logins and the fingerprint seed. It is created if it does not exist. Leave empty to use the plugin's own persistent profile in Claude Code's plugin data directory (profiles/default). Use one directory per account.",
       "default": ""
     },
     "proxy_server": {
