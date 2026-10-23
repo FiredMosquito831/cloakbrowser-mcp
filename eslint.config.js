@@ -16,6 +16,7 @@ const configOptions = {
     'dist/**',
     'coverage/**',
     'artifacts/**',
+    'plugins/**',
     'node_modules/**',
     '.agents/skills/brag/**',
     '.agents/skills/humanizer/**',

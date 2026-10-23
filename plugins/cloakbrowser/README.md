@@ -20,36 +20,33 @@ From a local checkout:
 /plugin install cloakbrowser@cloakbrowser-mcp
 ```
 
+Claude Code prompts for the settings below during install. Change them later with `/plugin` or `claude plugin configure cloakbrowser`.
+
 ## Requirements
 
 - Node 22.13+ or 24+.
 - The first launch downloads the CloakBrowser Chromium binary (~200 MB) into `~/.cloakbrowser`. Nothing binary is committed to this repository.
 
-## Default settings
+## Settings
 
-The plugin ships these values in `.mcp.json`:
+Values live in Claude Code's plugin configuration, not in this repository. Non-sensitive values are stored in `pluginConfigs` in `settings.json`; the licence key goes to the operating system credential store.
 
-| Variable | Value | Why |
+| Setting | Default | What it does |
 |---|---|---|
-| `PLAYWRIGHT_MCP_HEADLESS` | `false` | Upstream defaults to `true`; headed is needed for login, debugging and watching the run |
-| `PLAYWRIGHT_MCP_BROWSER_ENGINE` | `cloak` | Use CloakBrowser rather than plain Playwright Chromium |
-| `PLAYWRIGHT_MCP_CAPS` | `vision,pdf,devtools,storage,network,testing,config` | **Required for full parity.** Without caps the server exposes only 25 browser tools; this list exposes all 72 |
-| `CLOAK_PLAYWRIGHT_MCP_HUMANIZE` | `true` | Humanised mouse, keyboard and scrolling |
-| `CLOAK_PLAYWRIGHT_MCP_GEOIP_PROXY_MATCH` | `false` | Enable only together with a proxy; it aligns timezone and locale to the proxy exit |
-| `CLOAK_PLAYWRIGHT_MCP_RELEASE_CHANNEL` | `stable` | Free/stable binary channel; `preview` is Pro-only |
+| Headless | `false` | Headed is measurably less detectable. Turn on only for a display-less server |
+| Browser engine | `cloak` | `playwright` falls back to stock Chromium and loses the stealth patches |
+| Tool capabilities | all seven | `vision,pdf,devtools,storage,network,testing,config` exposes all 72 tools; removing entries hides tools. Without this list the server exposes 25 |
+| Humanised input | `true` | Human-like mouse paths, keystroke timing and scrolling |
+| Humanised preset | `default` | `careful` is slower and more deliberate |
+| Release channel | `stable` | `preview` requires a Pro licence |
+| GeoIP proxy match | `false` | Aligns timezone and locale to the proxy exit; enable with a proxy |
+| Profile directory | empty | Persistent cookies, logins and fingerprint seed. One directory per account |
+| Proxy server / bypass | empty | Sticky proxy and hosts that skip it |
+| Licence key | empty | CloakBrowser Pro key; the free tier allows one concurrent session |
+| Engine version pin | empty | Pin a specific Chromium build; empty follows the stable channel |
+| Artifacts directory | empty | Where screenshots, traces and session files are written |
 
-## Per-user settings
-
-Set these in your environment before starting Claude Code. They cannot be shared in a public plugin.
-
-| Variable | Use |
-|---|---|
-| `PLAYWRIGHT_MCP_USER_DATA_DIR` | Persistent profile directory. Use one per account; the bridge refuses two servers on one profile |
-| `PLAYWRIGHT_MCP_PROXY_SERVER` | Sticky residential proxy, for example `http://user:pass@host:port` |
-| `PLAYWRIGHT_MCP_PROXY_BYPASS` | Hosts that should not use the proxy |
-| `CLOAK_PLAYWRIGHT_MCP_GEOIP_PROXY_MATCH` | Set `true` when a proxy is configured, so timezone and locale match its exit |
-| `CLOAKBROWSER_LICENSE_KEY` | CloakBrowser Pro key. The free tier allows one concurrent session |
-| `CLOAKBROWSER_VERSION` | Pin a specific engine build instead of the stable channel |
+The launcher drops empty optional values before starting the server, so leaving a directory or proxy blank behaves as "not configured" rather than as an empty path.
 
 ## Sign-in
 
@@ -59,7 +56,7 @@ Sign in to Google or any site manually, in the headed window, with the persisten
 
 Pinned to `cloakbrowser-mcp@1.15.1`. The plugin version mirrors the MCP version.
 
-- The MCP package does **not** self-update. Update by changing the pin in `.mcp.json` and `plugin.json` together (the upstream-sync workflow does this).
+- The MCP package does **not** self-update. Update by changing the pin in `.mcp.json` (`CLOAK_PLAYWRIGHT_MCP_PACKAGE`) and `plugin.json` together.
 - The Chromium binary **does** self-update: on each launch the wrapper checks at most once per hour and downloads a newer build in the background.
 
 ## Licence
