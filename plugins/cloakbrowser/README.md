@@ -77,7 +77,7 @@ Sign in to Google or any site manually, in the headed window, with the persisten
 
 ## Version and updates
 
-The plugin is version 1.15.3. It pins `cloakbrowser-mcp@1.15.1`, runs it on `patchright@1.64.1`, and pins the engine wrapper to `0.6.3`. The plugin version moves independently of the MCP pin; the pin lives in `.mcp.json`.
+The plugin is version 1.15.4. It pins `cloakbrowser-mcp@1.15.1`, runs it on `patchright@1.64.1`, and pins the engine wrapper to `0.6.3`. The plugin version moves independently of the MCP pin; the pin lives in `.mcp.json`.
 
 - The MCP package does **not** self-update. Update by changing the pin in `.mcp.json` (`CLOAK_PLAYWRIGHT_MCP_PACKAGE`) and `plugin.json` together; the launcher reinstalls into the plugin data directory when either pin changes.
 - The Chromium binary **does** self-update: on each launch the wrapper checks at most once per hour and downloads a newer build in the background.

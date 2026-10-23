@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
@@ -72,6 +72,45 @@ function cliPath(dir, name) {
   return path.join(dir, 'node_modules', name, 'dist', 'cli.js');
 }
 
+function readPackage(file) {
+  try {
+    const data = JSON.parse(readFileSync(file, 'utf8'));
+    return { name: data.name, version: data.version };
+  } catch {
+    return null;
+  }
+}
+
+function runtimeHealthy(dir, marker, desired, cli) {
+  if (!existsSync(cli) || !existsSync(marker)) {
+    return false;
+  }
+  try {
+    const current = JSON.parse(readFileSync(marker, 'utf8'));
+    if (
+      current.package !== desired.package ||
+      current.engine !== desired.engine ||
+      current.driver !== desired.driver
+    ) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  const core = readPackage(path.join(dir, 'node_modules', 'playwright-core', 'package.json'));
+  const nested = readPackage(
+    path.join(dir, 'node_modules', '@playwright', 'mcp', 'node_modules', 'playwright', 'package.json'),
+  );
+  const topLevel = readPackage(path.join(dir, 'node_modules', 'playwright', 'package.json'));
+  const playwrightPackage = nested ?? topLevel;
+  const engine = readPackage(path.join(dir, 'node_modules', 'cloakbrowser', 'package.json'));
+  return (
+    core?.name === 'patchright-core' &&
+    playwrightPackage?.name === 'patchright' &&
+    engine?.version === ENGINE_WRAPPER_PIN
+  );
+}
+
 function ensureRuntime(env, spec) {
   const { name, version } = parsePackageSpec(spec);
   const dir = runtimeDir(env);
@@ -83,21 +122,14 @@ function ensureRuntime(env, spec) {
   };
   const cli = cliPath(dir, name);
 
-  if (existsSync(cli) && existsSync(marker)) {
-    try {
-      const current = JSON.parse(readFileSync(marker, 'utf8'));
-      if (
-        current.package === desired.package &&
-        current.engine === desired.engine &&
-        current.driver === desired.driver
-      ) {
-        return cli;
-      }
-    } catch {
-      // A corrupt marker falls through to a reinstall.
-    }
+  if (runtimeHealthy(dir, marker, desired, cli)) {
+    return cli;
   }
 
+  // A previous install may be a mixed tree (stock playwright-core with a
+  // nested patchright). npm will not fix that in place, so start clean.
+  rmSync(path.join(dir, 'node_modules'), { recursive: true, force: true });
+  rmSync(path.join(dir, 'package-lock.json'), { force: true });
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     path.join(dir, 'package.json'),
