@@ -1,0 +1,20 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "cloakbrowser-mcp",
+  "description": "Claude Code marketplace for CloakBrowser: stealth Chromium driven through the Playwright MCP tool contract.",
+  "owner": {
+    "name": "FiredMosquito831"
+  },
+  "plugins": [
+    {
+      "name": "cloakbrowser",
+      "description": "CloakBrowser stealth Chromium with the full Playwright MCP tool surface (72 browser_* tools), via cloakbrowser-mcp.",
+      "author": {
+        "name": "FiredMosquito831"
+      },
+      "category": "automation",
+      "keywords": ["browser", "mcp", "playwright", "stealth", "cloakbrowser", "automation"],
+      "source": "./plugins/cloakbrowser"
+    }
+  ]
+}

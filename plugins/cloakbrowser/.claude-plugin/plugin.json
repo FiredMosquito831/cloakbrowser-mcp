@@ -1,0 +1,96 @@
+{
+  "name": "cloakbrowser",
+  "displayName": "CloakBrowser",
+  "version": "1.15.1",
+  "description": "CloakBrowser stealth Chromium through the Playwright MCP tool contract, via cloakbrowser-mcp.",
+  "author": {
+    "name": "FiredMosquito831"
+  },
+  "homepage": "https://github.com/FiredMosquito831/cloakbrowser-mcp",
+  "license": "MIT",
+  "keywords": ["browser", "mcp", "playwright", "stealth", "cloakbrowser"],
+  "userConfig": {
+    "headless": {
+      "type": "boolean",
+      "title": "Headless",
+      "description": "Run the browser without a window. Headed mode is measurably less detectable, so leave this off unless you need a server with no display.",
+      "default": false
+    },
+    "browser_engine": {
+      "type": "string",
+      "title": "Browser engine",
+      "description": "cloak uses the patched CloakBrowser Chromium. playwright uses the stock Playwright Chromium and gives up the stealth patches.",
+      "options": ["cloak", "playwright"],
+      "default": "cloak"
+    },
+    "caps": {
+      "type": "string",
+      "title": "Tool capabilities",
+      "description": "Comma-separated capability list. The default exposes all 72 Playwright MCP browser tools; removing entries hides tools.",
+      "default": "vision,pdf,devtools,storage,network,testing,config"
+    },
+    "humanize": {
+      "type": "boolean",
+      "title": "Humanised input",
+      "description": "Human-like mouse paths, keystroke timing and scrolling instead of instant synthetic events.",
+      "default": true
+    },
+    "human_preset": {
+      "type": "string",
+      "title": "Humanised input preset",
+      "description": "default is the normal humanised behaviour. careful is slower and more deliberate.",
+      "options": ["default", "careful"],
+      "default": "default"
+    },
+    "release_channel": {
+      "type": "string",
+      "title": "Engine release channel",
+      "description": "stable is the free channel. preview requires a CloakBrowser Pro licence.",
+      "options": ["stable", "preview"],
+      "default": "stable"
+    },
+    "geoip_proxy_match": {
+      "type": "boolean",
+      "title": "Match timezone and locale to the proxy",
+      "description": "Resolve the proxy exit location and align the browser timezone and locale to it. Enable this together with a proxy server.",
+      "default": false
+    },
+    "profile_dir": {
+      "type": "string",
+      "title": "Persistent profile directory",
+      "description": "Directory that keeps cookies, logins and the fingerprint seed. It is created if it does not exist. Use one directory per account. Leave empty for a temporary profile.",
+      "default": ""
+    },
+    "proxy_server": {
+      "type": "string",
+      "title": "Proxy server",
+      "description": "Sticky proxy URL, for example http://user:pass@host:port. Leave empty for a direct connection.",
+      "default": ""
+    },
+    "proxy_bypass": {
+      "type": "string",
+      "title": "Proxy bypass list",
+      "description": "Comma-separated hosts that should not use the proxy. Leave empty to proxy everything.",
+      "default": ""
+    },
+    "licence_key": {
+      "type": "string",
+      "title": "CloakBrowser licence key",
+      "description": "CloakBrowser Pro key. The free tier works without it and allows one concurrent session. Stored in the operating system credential store.",
+      "sensitive": true,
+      "default": ""
+    },
+    "engine_version": {
+      "type": "string",
+      "title": "Engine version pin",
+      "description": "Pin a specific CloakBrowser Chromium build. Leave empty to use the stable channel and let the binary update itself.",
+      "default": ""
+    },
+    "output_dir": {
+      "type": "string",
+      "title": "Artifacts directory",
+      "description": "Where Playwright MCP writes screenshots, traces and session files. It is created if it does not exist. Leave empty for the default.",
+      "default": ""
+    }
+  }
+}
