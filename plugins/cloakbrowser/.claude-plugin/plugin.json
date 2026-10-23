@@ -7,11 +7,5 @@
   },
   "homepage": "https://github.com/FiredMosquito831/cloakbrowser-mcp",
   "license": "MIT",
-  "keywords": [
-    "browser",
-    "mcp",
-    "playwright",
-    "stealth",
-    "cloakbrowser"
-  ]
+  "keywords": ["browser", "mcp", "playwright", "stealth", "cloakbrowser"]
 }

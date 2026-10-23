@@ -13,14 +13,7 @@
         "name": "FiredMosquito831"
       },
       "category": "automation",
-      "keywords": [
-        "browser",
-        "mcp",
-        "playwright",
-        "stealth",
-        "cloakbrowser",
-        "automation"
-      ],
+      "keywords": ["browser", "mcp", "playwright", "stealth", "cloakbrowser", "automation"],
       "source": "./plugins/cloakbrowser"
     }
   ]
