@@ -1,5 +1,6 @@
 {
   "name": "cloakbrowser",
+  "displayName": "CloakBrowser",
   "version": "1.15.1",
   "description": "CloakBrowser stealth Chromium through the Playwright MCP tool contract, via cloakbrowser-mcp.",
   "author": {
@@ -55,41 +56,41 @@
       "default": false
     },
     "profile_dir": {
-      "type": "directory",
+      "type": "string",
       "title": "Persistent profile directory",
-      "description": "Directory that keeps cookies, logins and the fingerprint seed. Use one directory per account. Leave empty for a temporary profile.",
-      "required": false
+      "description": "Directory that keeps cookies, logins and the fingerprint seed. It is created if it does not exist. Use one directory per account. Leave empty for a temporary profile.",
+      "default": ""
     },
     "proxy_server": {
       "type": "string",
       "title": "Proxy server",
       "description": "Sticky proxy URL, for example http://user:pass@host:port. Leave empty for a direct connection.",
-      "required": false
+      "default": ""
     },
     "proxy_bypass": {
       "type": "string",
       "title": "Proxy bypass list",
       "description": "Comma-separated hosts that should not use the proxy. Leave empty to proxy everything.",
-      "required": false
+      "default": ""
     },
     "licence_key": {
       "type": "string",
       "title": "CloakBrowser licence key",
       "description": "CloakBrowser Pro key. The free tier works without it and allows one concurrent session. Stored in the operating system credential store.",
       "sensitive": true,
-      "required": false
+      "default": ""
     },
     "engine_version": {
       "type": "string",
       "title": "Engine version pin",
       "description": "Pin a specific CloakBrowser Chromium build. Leave empty to use the stable channel and let the binary update itself.",
-      "required": false
+      "default": ""
     },
     "output_dir": {
-      "type": "directory",
+      "type": "string",
       "title": "Artifacts directory",
-      "description": "Where Playwright MCP writes screenshots, traces and session files. Leave empty for the default.",
-      "required": false
+      "description": "Where Playwright MCP writes screenshots, traces and session files. It is created if it does not exist. Leave empty for the default.",
+      "default": ""
     }
   }
 }

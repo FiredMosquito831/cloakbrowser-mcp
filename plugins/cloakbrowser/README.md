@@ -20,7 +20,26 @@ From a local checkout:
 /plugin install cloakbrowser@cloakbrowser-mcp
 ```
 
-Claude Code prompts for the settings below during install. Change them later with `/plugin` or `claude plugin configure cloakbrowser`.
+Claude Code prompts for the settings below during install. You can also pass them non-interactively:
+
+```bash
+claude plugin install cloakbrowser@cloakbrowser-mcp \
+  --config headless=false \
+  --config profile_dir=/home/you/.cloakbrowser-profiles/linkedin \
+  --config proxy_server=http://user:pass@host:port
+```
+
+Change them later with `/plugin` → Configure, the per-option rows in `/config`, or:
+
+```bash
+claude plugin configure cloakbrowser@cloakbrowser-mcp
+
+# non-interactive: a JSON object of single-line strings on stdin
+printf '%s' '{"profile_dir":"/home/you/.cloakbrowser-profiles/linkedin"}' | \
+  claude plugin configure cloakbrowser@cloakbrowser-mcp --values-stdin
+```
+
+Non-sensitive values are stored under `pluginConfigs` in your user settings; the licence key goes to the operating system credential store. Restart Claude Code after a change so the MCP server restarts with the new environment.
 
 ## Requirements
 
