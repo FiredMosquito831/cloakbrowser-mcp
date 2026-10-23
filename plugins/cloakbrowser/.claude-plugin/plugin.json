@@ -1,0 +1,17 @@
+{
+  "name": "cloakbrowser",
+  "version": "1.15.1",
+  "description": "CloakBrowser stealth Chromium through the Playwright MCP tool contract, via cloakbrowser-mcp.",
+  "author": {
+    "name": "FiredMosquito831"
+  },
+  "homepage": "https://github.com/FiredMosquito831/cloakbrowser-mcp",
+  "license": "MIT",
+  "keywords": [
+    "browser",
+    "mcp",
+    "playwright",
+    "stealth",
+    "cloakbrowser"
+  ]
+}

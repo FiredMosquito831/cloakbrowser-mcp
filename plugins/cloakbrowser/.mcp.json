@@ -1,0 +1,17 @@
+{
+  "cloakbrowser": {
+    "command": "npx",
+    "args": [
+      "-y",
+      "cloakbrowser-mcp@1.15.1"
+    ],
+    "env": {
+      "PLAYWRIGHT_MCP_HEADLESS": "false",
+      "PLAYWRIGHT_MCP_BROWSER_ENGINE": "cloak",
+      "PLAYWRIGHT_MCP_CAPS": "vision,pdf,devtools,storage,network,testing,config",
+      "CLOAK_PLAYWRIGHT_MCP_HUMANIZE": "true",
+      "CLOAK_PLAYWRIGHT_MCP_GEOIP_PROXY_MATCH": "false",
+      "CLOAK_PLAYWRIGHT_MCP_RELEASE_CHANNEL": "stable"
+    }
+  }
+}
