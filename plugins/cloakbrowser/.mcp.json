@@ -8,6 +8,7 @@
       "PLAYWRIGHT_MCP_BROWSER_ENGINE": "${user_config.browser_engine}",
       "PLAYWRIGHT_MCP_CAPS": "${user_config.caps}",
       "CLOAK_PLAYWRIGHT_MCP_HUMANIZE": "${user_config.humanize}",
+      "CLOAK_PLAYWRIGHT_MCP_CONSOLE_FALLBACK": "false",
       "CLOAK_PLAYWRIGHT_MCP_HUMAN_PRESET": "${user_config.human_preset}",
       "CLOAK_PLAYWRIGHT_MCP_RELEASE_CHANNEL": "${user_config.release_channel}",
       "CLOAK_PLAYWRIGHT_MCP_GEOIP_PROXY_MATCH": "${user_config.geoip_proxy_match}",
