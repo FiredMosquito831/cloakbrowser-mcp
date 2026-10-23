@@ -8,6 +8,7 @@ import path from 'node:path';
 // the newest wrapper its compatibility check accepts. Remove this pin after the
 // bridge adds 0.6.4 to its allowlist.
 const ENGINE_WRAPPER_PIN = '0.6.3';
+const DRIVER_PIN = 'patchright@1.64.1';
 
 const EMPTY_OPTIONAL_VARS = [
   'PLAYWRIGHT_MCP_USER_DATA_DIR',
@@ -75,13 +76,21 @@ function ensureRuntime(env, spec) {
   const { name, version } = parsePackageSpec(spec);
   const dir = runtimeDir(env);
   const marker = path.join(dir, '.installed.json');
-  const desired = { package: spec, engine: ENGINE_WRAPPER_PIN };
+  const desired = {
+    package: spec,
+    engine: ENGINE_WRAPPER_PIN,
+    driver: DRIVER_PIN,
+  };
   const cli = cliPath(dir, name);
 
   if (existsSync(cli) && existsSync(marker)) {
     try {
       const current = JSON.parse(readFileSync(marker, 'utf8'));
-      if (current.package === desired.package && current.engine === desired.engine) {
+      if (
+        current.package === desired.package &&
+        current.engine === desired.engine &&
+        current.driver === desired.driver
+      ) {
         return cli;
       }
     } catch {
@@ -96,7 +105,11 @@ function ensureRuntime(env, spec) {
       {
         private: true,
         dependencies: { [name]: version },
-        overrides: { cloakbrowser: ENGINE_WRAPPER_PIN },
+        overrides: {
+          cloakbrowser: ENGINE_WRAPPER_PIN,
+          playwright: `npm:patchright@${DRIVER_PIN.split('@')[1]}`,
+          'playwright-core': `npm:patchright-core@${DRIVER_PIN.split('@')[1]}`,
+        },
       },
       null,
       2,
