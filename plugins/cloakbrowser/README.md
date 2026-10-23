@@ -45,6 +45,7 @@ Non-sensitive values are stored under `pluginConfigs` in your user settings; the
 
 - Node 22.13+ or 24+.
 - The first launch installs the MCP and its pinned engine wrapper into Claude Code's plugin data directory (about 10–20 seconds), then downloads the CloakBrowser Chromium binary (~200 MB) into `~/.cloakbrowser`. Nothing binary is committed to this repository.
+- With the profile setting empty, the plugin uses its own persistent profile at `<plugin data>/profiles/default`. It is a real on-disk profile, not a temporary one, and it survives plugin updates.
 
 The engine wrapper is pinned to `cloakbrowser@0.6.3` because the bridge (1.15.1) rejects `0.6.4` when humanize is enabled. The pin is in `launch.mjs` and is removed once the bridge accepts the newer wrapper.
 
@@ -61,7 +62,7 @@ Values live in Claude Code's plugin configuration, not in this repository. Non-s
 | Humanised preset | `default` | `careful` is slower and more deliberate |
 | Release channel | `stable` | `preview` requires a Pro licence |
 | GeoIP proxy match | `false` | Aligns timezone and locale to the proxy exit; enable with a proxy |
-| Profile directory | empty | Persistent cookies, logins and fingerprint seed. One directory per account |
+| Profile directory | empty → `<plugin data>/profiles/default` | Persistent cookies, logins and fingerprint seed. One directory per account |
 | Proxy server / bypass | empty | Sticky proxy and hosts that skip it |
 | Licence key | empty | CloakBrowser Pro key; the free tier allows one concurrent session |
 | Engine version pin | empty | Pin a specific Chromium build; empty follows the stable channel |
@@ -75,7 +76,7 @@ Sign in to Google or any site manually, in the headed window, with the persisten
 
 ## Version and updates
 
-Pinned to `cloakbrowser-mcp@1.15.1`. The plugin version mirrors the MCP version.
+The plugin is version 1.15.2 and pins `cloakbrowser-mcp@1.15.1`. The plugin version moves independently of the MCP pin; the pin lives in `.mcp.json`.
 
 - The MCP package does **not** self-update. Update by changing the pin in `.mcp.json` (`CLOAK_PLAYWRIGHT_MCP_PACKAGE`) and `plugin.json` together; the launcher reinstalls into the plugin data directory when either pin changes.
 - The Chromium binary **does** self-update: on each launch the wrapper checks at most once per hour and downloads a newer build in the background.
