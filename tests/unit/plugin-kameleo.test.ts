@@ -418,6 +418,12 @@ describe('launcher environment', () => {
     expect(launcherSource).toContain('CLOAK_PLAYWRIGHT_MCP_PACKAGE');
   });
 
+  it('keeps the launcher endpoint template and env names equal to the manifest runtime', () => {
+    expect(launcherSource).toContain(`'${manifest.runtime?.defaultEndpoint}'`);
+    expect(launcherSource).toContain(`'${manifest.runtime?.endpointEnv}'`);
+    expect(launcherSource).toContain(`'${manifest.runtime?.profileEnv}'`);
+  });
+
   it('keeps the shared runtime identities equal to launch.mjs', () => {
     const readConstant = (source: string, name: string): string | null => {
       const match = new RegExp(`const ${name} = '([^']+)'`).exec(source);
