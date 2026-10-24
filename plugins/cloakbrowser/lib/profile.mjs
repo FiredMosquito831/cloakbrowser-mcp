@@ -226,7 +226,11 @@ export function readAccountProxy(file) {
     if (error?.code === 'ENOENT') {
       return { value: null, error: null, exists: false };
     }
-    return { value: null, error: `Cannot read the account proxy file ${file}: ${error.message}`, exists: true };
+    return {
+      value: null,
+      error: `Cannot read the account proxy file ${file}: ${error.message}`,
+      exists: true,
+    };
   }
   let text;
   try {
@@ -264,10 +268,7 @@ export function redactSecrets(text) {
   if (typeof text !== 'string') {
     return text;
   }
-  return text.replace(
-    /([a-z][a-z0-9+.-]*:\/\/)([A-Za-z0-9._~%!$&'()*+,;=:-]+)@/giu,
-    '$1***@',
-  );
+  return text.replace(/([a-z][a-z0-9+.-]*:\/\/)([A-Za-z0-9._~%!$&'()*+,;=:-]+)@/giu, '$1***@');
 }
 
 // The child environment for the selected engine. With no account resolved and no

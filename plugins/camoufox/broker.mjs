@@ -205,11 +205,7 @@ const profileResolution =
         launcherName: resolveLauncherName(engine),
         ignoredSettings: Array.isArray(engine.ignoredSettings) ? engine.ignoredSettings : [],
       });
-if (
-  rawAccount.trim() !== '' &&
-  !rawAccount.includes('${') &&
-  profileResolution.accountApplies === false
-) {
+if (rawAccount.trim() !== '' && !rawAccount.includes('${') && profileResolution.accountApplies === false) {
   const ownSetting = engine?.profileArgument?.setting;
   log(
     `the "${selected.id}" engine does not use account profiles; ` +
@@ -267,7 +263,8 @@ function resolveProxy() {
   return { source: 'none', configured: false, value: null, error: null };
 }
 
-const proxyResolution = engineError === null ? resolveProxy() : { source: 'none', configured: false, value: null, error: null };
+const proxyResolution =
+  engineError === null ? resolveProxy() : { source: 'none', configured: false, value: null, error: null };
 if (engineError === null && proxyResolution.error !== null) {
   engineError = proxyResolution.error;
 }
