@@ -18,6 +18,7 @@ import {
   availableProfileNames,
   DEFAULT_ENGINE,
   engineChangeHelp,
+  firstMissingRequiredEnv,
   loadEngineConfiguration,
   manifestSupport,
   portableToolNames,
@@ -25,6 +26,7 @@ import {
   resolveLauncherName,
   resolveToolProfile,
 } from './engine-registry.mjs';
+import { enrichToolError, runtimeErrorHint, runtimeStatusFields } from './lib/attach.mjs';
 import {
   aliasSummary,
   buildNativeSurface,
@@ -60,6 +62,17 @@ const META_TOOLS = [
 
 function log(message) {
   process.stderr.write(`${LOG_PREFIX} ${message}\n`);
+}
+
+// The last non-empty stderr line a launcher wrote, bounded so a stack trace
+// cannot bloat a status payload. Used only for engines that declare a runtime
+// hint, so other engines keep their exact previous error text.
+function lastStderrLine(tail) {
+  const lines = String(tail)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line !== '');
+  return lines.length === 0 ? null : lines[lines.length - 1].slice(0, 300);
 }
 
 function nonEmptyString(value) {
@@ -138,6 +151,16 @@ if (engineError === null && native) {
     }
   }
 }
+if (engineError === null) {
+  // A manifest's requiredEnv is machine-checkable: without it the engine can
+  // never work, so fail at initialize instead of spawning a backend that
+  // cannot answer. The reason is the manifest's own actionable sentence.
+  const missingEnv = firstMissingRequiredEnv(engine, process.env);
+  if (missingEnv !== null) {
+    engineError = missingEnv;
+  }
+}
+const runtimeHint = runtimeErrorHint(engine, process.env);
 const profileSelection = resolveToolProfile(process.env.STEALTH_TOOL_PROFILE, engine, profiles);
 
 if (profileSelection.placeholder !== null) {
@@ -181,6 +204,7 @@ const state = {
   lastToolsListWaitMs: null,
   lastError: engineError,
   stderrTail: '',
+  toolCallSucceeded: false,
   shuttingDown: false,
   backend: {
     state: engineError === null ? 'idle' : 'failed',
@@ -431,6 +455,13 @@ function capabilitiesPayload() {
     label: state.engine?.label ?? null,
     contract: state.engine?.contract ?? null,
     transport: state.engine?.transport ?? null,
+    // Manifest-declared capability facts for a contract engine (cdpAttach,
+    // groupSwitchesApply). A native engine reports groupSwitchesApply through
+    // nativeCapabilitiesExtras, so its existing key order is unchanged; an
+    // engine that declares no capabilities gains no keys.
+    ...(!state.native && state.engine?.capabilities !== null && typeof state.engine?.capabilities === 'object'
+      ? state.engine.capabilities
+      : {}),
     toolProfile: state.toolProfile,
     engineChoices: [...state.engineChoices],
     engineSource: state.engineSource,
@@ -503,6 +534,9 @@ function statusPayload() {
     brokerVersion: BROKER_VERSION,
     howToChangeEngine: ENGINE_CHANGE_HELP,
     backendStderrTail: state.stderrTail.trim() === '' ? null : state.stderrTail.slice(-1500),
+    // A manifest that declares a runtime (an attach endpoint and profile id)
+    // names its own extra status keys here. Other engines add nothing.
+    ...runtimeStatusFields(state.engine, process.env),
     ...(state.native
       ? {
           surfaceBuilt: state.nativeSurface !== null,
@@ -818,6 +852,24 @@ function handleBackendMessage(message, rawLine) {
     state.pendingRequests.delete(id);
   }
 
+  // An engine whose manifest declares a runtime hint gets one actionable
+  // sentence appended to a failed tool result, until a tool call succeeds in
+  // this process. Protocol errors are never rewritten, and engines without the
+  // hint keep the raw line byte-for-byte.
+  if (pending?.method === 'tools/call' && message.error === undefined) {
+    if (message.result?.isError === true) {
+      if (runtimeHint !== null && !state.toolCallSucceeded) {
+        const enriched = enrichToolError(message.result, runtimeHint);
+        if (enriched !== null) {
+          process.stdout.write(`${JSON.stringify({ ...message, result: enriched })}\n`);
+          return;
+        }
+      }
+    } else {
+      state.toolCallSucceeded = true;
+    }
+  }
+
   if (pending?.method === 'initialize' && message.error !== undefined) {
     const reason = message.error?.message ?? 'unknown error';
     state.lastError = `Backend rejected initialize: ${String(reason)}`;
@@ -948,7 +1000,9 @@ function startBackend() {
     state.backend.state = wasStarting ? 'failed' : 'exited';
     if (!state.shuttingDown) {
       const detail = signal === null ? `code ${String(code)}` : `signal ${signal}`;
-      state.lastError = `Backend exited (${detail}).`;
+      const launcherLine = runtimeHint === null ? null : lastStderrLine(state.stderrTail);
+      state.lastError =
+        launcherLine === null ? `Backend exited (${detail}).` : `Backend exited (${detail}): ${launcherLine}`;
       log(state.lastError);
       drainPendingRequests(backendDescription());
     }

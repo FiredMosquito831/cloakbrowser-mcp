@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "id": "kameleo",
+  "label": "Kameleo (Chroma over CDP)",
+  "transport": "launch",
+  "contract": "playwright-mcp",
+  "defaultToolProfile": "portable",
+  "launch": {
+    "launcher": "launch-kameleo.mjs"
+  },
+  "requirements": [
+    "Kameleo desktop app installed and running",
+    "An activated Kameleo licence",
+    "A Chromium (Chroma) profile; Junglefox (Firefox) cannot attach over CDP",
+    "A profile ID in kameleo_profile_id. The plugin never starts the Kameleo app; Kameleo starts the profile itself when the endpoint is opened."
+  ],
+  "requiredEnv": [
+    {
+      "env": "KAMELEO_PROFILE_ID",
+      "reason": "The kameleo engine needs a profile ID. Set \"Kameleo profile ID\" (kameleo_profile_id) in the cloakbrowser plugin configuration and restart Claude Code."
+    }
+  ],
+  "runtime": {
+    "endpointEnv": "KAMELEO_ENDPOINT",
+    "profileEnv": "KAMELEO_PROFILE_ID",
+    "defaultEndpoint": "ws://127.0.0.1:5050/playwright/{profileId}",
+    "errorHint": "Kameleo is not answering at {endpoint}. Start the Kameleo app, sign in, and confirm the profile ID exists. Kameleo starts the profile itself when the endpoint is opened.",
+    "statusKeys": {
+      "endpoint": "kameleoEndpoint",
+      "profileId": "kameleoProfileId"
+    }
+  },
+  "ignoredSettings": [
+    "humanize",
+    "human_preset",
+    "release_channel",
+    "geoip_proxy_match",
+    "profile_dir",
+    "proxy_server",
+    "proxy_bypass",
+    "licence_key",
+    "engine_version",
+    "camoufox_profile",
+    "camoufox_data_dir",
+    "headless"
+  ],
+  "toolSupport": {
+    "*": "full",
+    "browser_close": "partial",
+    "browser_start_tracing": "partial",
+    "browser_stop_tracing": "partial",
+    "browser_start_video": "unknown",
+    "browser_stop_video": "unknown",
+    "browser_video_chapter": "unknown",
+    "browser_video_show_actions": "unknown",
+    "browser_video_hide_actions": "unknown",
+    "browser_start_recording": "unknown",
+    "browser_stop_recording": "unknown",
+    "browser_annotate": "unknown"
+  },
+  "toolSupportNotes": {
+    "browser_close": "Closes the attached context. On Kameleo this may close the profile window; call it only when you intend to release the profile.",
+    "browser_start_tracing": "Trace artifacts degrade over CDP attach; verify before relying on them.",
+    "browser_stop_tracing": "Trace artifacts degrade over CDP attach; verify before relying on them.",
+    "browser_start_video": "Video needs a context created with recording enabled; attach mode reuses Kameleo's context. Unknown, not unsupported.",
+    "browser_stop_video": "Same context-creation dependency as browser_start_video.",
+    "browser_video_chapter": "Depends on an active video recording.",
+    "browser_video_show_actions": "Depends on an active video recording.",
+    "browser_video_hide_actions": "Depends on an active video recording.",
+    "browser_start_recording": "Uses the Playwright dashboard recorder; unverified over attach.",
+    "browser_stop_recording": "Uses the Playwright dashboard recorder; unverified over attach.",
+    "browser_annotate": "Uses the Playwright dashboard; unverified over attach."
+  },
+  "capabilities": {
+    "groupSwitchesApply": true,
+    "cdpAttach": true
+  },
+  "notes": "Attaches to a Kameleo Chroma profile over CDP with the full 72-tool Playwright MCP contract. The profile, its cookies, its logins and its proxy belong to Kameleo; the plugin's profile, proxy, humanize and Camoufox settings do not apply, and the plugin never starts the Kameleo app. Junglefox (Firefox) profiles cannot be attached over CDP. Stealth over attach is UNVERIFIED in this release: Kameleo is not installed on the build machine, so no detector run exists; install the app, activate a licence, create a Chroma profile and provide its id, then record the detector result before claiming suppression. No local diagnostics: the surface is 72 browser tools + 2 broker meta-tools = 74 at full, 24 + 2 = 26 at portable."
+}

@@ -27,13 +27,16 @@ an engine means adding a manifest, not editing broker code.
 | `schemaVersion` | yes | `1` |
 | `id` | yes | Must equal the file name without `.json` |
 | `label` | yes | Non-empty human-readable name |
-| `transport` | yes | `launch` (the only transport this broker implements) |
+| `transport` | yes | `launch` (the only value this broker implements). An engine that attaches to an existing browser still uses `launch`: the broker spawns a launcher adapter, and the adapter makes the attach. The attach fact is reported through `capabilities.cdpAttach` |
 | `contract` | yes | `playwright-mcp` (canonical tool names and schemas) or `native-mcp` (the backend speaks its own names; see below) |
 | `defaultToolProfile` | yes | `full` or `portable`; must exist in `profiles.json` |
 | `toolSupport` | yes | Object mapping tool names (or `*`) to `full`, `partial`, `none` or `unknown`. For `native-mcp`, keys are the native-only tool names and the canonical names the backend cannot provide |
 | `toolSupportNotes` | no | Object of non-empty strings explaining a `partial` or `none` decision. For `native-mcp`, every `none` entry must have one |
 | `launch` | no | Object with one optional field, `launcher`: a launcher file name in the plugin root. Missing means `launch.mjs` |
 | `requirements` | no | Array of non-empty strings naming what the engine needs before it can run (reported by `browser_capabilities`) |
+| `requiredEnv` | no | Array of `{ "env": "...", "reason": "..." }`. The broker checks each variable before spawning. An empty value or an unresolved `${user_config.*}` placeholder is a configuration error: `initialize` carries `reason`, `tools/list` is meta-only, and no backend starts. `reason` is the complete actionable sentence |
+| `runtime` | no | Object describing an attached/remote runtime: `endpointEnv`, `profileEnv`, `defaultEndpoint` (must contain `{profileId}`), `errorHint` (may contain `{endpoint}`), `statusKeys` (`endpoint`/`profileId` → field names). The broker uses it for the extra `browser_engine_status` fields and to append `errorHint` to an `isError` tool result until the first successful tool call. Omit it for a normal launch engine; nothing is added |
+| `capabilities` | no | Object with only `groupSwitchesApply` and `cdpAttach` (booleans). The broker copies these into `browser_capabilities` for the engine that declares them |
 | `ignoredSettings` | no | Array of non-empty strings naming plugin settings the engine cannot honour (reported by `browser_capabilities`) |
 | `notes` | yes | String summarising the backend and its limitations |
 
@@ -141,6 +144,45 @@ Example excerpt:
 }
 ```
 
+## Attach runtime (`requiredEnv` + `runtime`)
+
+An engine that attaches to a browser it did not launch (a local antidetect
+profile, a CDP endpoint) still uses `transport: "launch"`: the launcher adapter
+opens the endpoint and starts the MCP backend in attach mode. Two optional,
+generic manifest blocks let the broker handle the configuration and the first
+failure without knowing the engine:
+
+```json
+{
+  "requiredEnv": [
+    { "env": "ENGINE_PROFILE_ID", "reason": "One actionable sentence naming the setting and how to fix it." }
+  ],
+  "runtime": {
+    "endpointEnv": "ENGINE_ENDPOINT",
+    "profileEnv": "ENGINE_PROFILE_ID",
+    "defaultEndpoint": "ws://127.0.0.1:5050/playwright/{profileId}",
+    "errorHint": "The engine is not answering at {endpoint}. Start it and check the profile.",
+    "statusKeys": { "endpoint": "engineEndpoint", "profileId": "engineProfileId" }
+  },
+  "capabilities": { "groupSwitchesApply": true, "cdpAttach": true }
+}
+```
+
+- `requiredEnv` is checked in the broker before any spawn. A missing value is a
+  configuration error: meta-only `tools/list`, `backendState: "failed"`, the
+  reason in `engineError` and `lastError`. The launcher should repeat the same
+  sentence when invoked directly.
+- `runtime.defaultEndpoint` is built by replacing `{profileId}` with the
+  percent-encoded value of `profileEnv`. `endpointEnv`, when set and non-empty,
+  wins. `errorHint` replaces `{endpoint}` and is appended to an `isError` tool
+  result only until the first successful tool call in that process; protocol
+  `error` objects are never rewritten. An engine without a `runtime` block gets
+  no enrichment and no extra status fields.
+- `statusKeys` names the extra `browser_engine_status` fields; `endpoint` and
+  `profileId` are the only recognised sources. Omit `statusKeys` to add none.
+- The endpoint rules themselves live in the launcher (loopback host, `ws(s)`,
+  no userinfo); the broker only reports the effective value.
+
 ## Tool profiles
 
 Profiles are per engine and shared across engines:
@@ -173,10 +215,14 @@ Profiles are per engine and shared across engines:
    plugin root named `launch-<id>.mjs`; that is a separate change, not a broker
    edit. A backend with its own tool names uses `native-mcp` and declares
    `contractSchemas`, `nativePrefix`, `profileArgument` and `toolAliases` as
-   above. The Camoufox engine in `engines/camoufox.json` is the worked example
-   for a contract engine; `engines/camoufox-native.json` is the worked example
-   for a native one. Both launchers are adapters only: no engine id or tool
-   name appears in `broker.mjs` or `lib/surface.mjs`.
+   above. A backend that attaches to a browser someone else owns declares
+   `requiredEnv` for the values without which it can never work and a `runtime`
+   block for its endpoint and error hint; `engines/kameleo.json` with
+   `launch-kameleo.mjs` is the worked attach example. The Camoufox engine in
+   `engines/camoufox.json` is the worked example for a contract engine;
+   `engines/camoufox-native.json` is the worked example for a native one. All
+   launchers are adapters only: no engine id, setting name or tool name appears
+   in `broker.mjs`, `lib/surface.mjs` or `lib/attach.mjs`.
 3. Regenerate the plugin's engine enum from the manifests:
 
    ```
