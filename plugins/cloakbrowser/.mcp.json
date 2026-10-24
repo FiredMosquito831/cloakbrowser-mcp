@@ -1,9 +1,11 @@
 {
   "cloakbrowser": {
     "command": "node",
-    "args": ["${CLAUDE_PLUGIN_ROOT}/launch.mjs"],
+    "args": ["${CLAUDE_PLUGIN_ROOT}/proxy.mjs"],
     "env": {
       "CLOAK_PLAYWRIGHT_MCP_PACKAGE": "cloakbrowser-mcp@1.15.1",
+      "CLOAK_TOOLS_PROFILE": "${user_config.tools_profile}",
+      "CLOAK_DISABLED_TOOLS": "${user_config.disabled_tools}",
       "PLAYWRIGHT_MCP_HEADLESS": "${user_config.headless}",
       "PLAYWRIGHT_MCP_BROWSER_ENGINE": "${user_config.browser_engine}",
       "PLAYWRIGHT_MCP_CAPS": "${user_config.caps}",

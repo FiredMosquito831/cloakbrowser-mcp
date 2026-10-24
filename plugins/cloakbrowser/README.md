@@ -58,7 +58,9 @@ Values live in Claude Code's plugin configuration, not in this repository. Non-s
 |---|---|---|
 | Headless | `false` | Headed is measurably less detectable. Turn on only for a display-less server |
 | Browser engine | `cloak` | `playwright` falls back to stock Chromium and loses the stealth patches |
-| Tool capabilities | all seven | `vision,pdf,devtools,storage,network,testing,config` exposes all 72 tools; removing entries hides tools. Without this list the server exposes 25 |
+| Tool capabilities | all seven | Custom capability list, used only when the tool profile is `custom` |
+| Tool profile | `full` | `minimal` exposes the 25 stock Playwright MCP tools, `standard` adds vision/pdf/devtools (45), `full` exposes all 72, `custom` uses the capability list |
+| Disabled tools | empty | Comma-separated tool names hidden from `tools/list` and rejected on call |
 | Humanised input | `true` | Human-like mouse paths, keystroke timing and scrolling |
 | Humanised preset | `default` | `careful` is slower and more deliberate |
 | Release channel | `stable` | `preview` requires a Pro licence |
@@ -77,7 +79,26 @@ Sign in to Google or any site manually, in the headed window, with the persisten
 
 ## Version and updates
 
-The plugin is version 1.15.4. It pins `cloakbrowser-mcp@1.15.1`, runs it on `patchright@1.64.1`, and pins the engine wrapper to `0.6.3`. The plugin version moves independently of the MCP pin; the pin lives in `.mcp.json`.
+The plugin is version 1.16.0. It pins `cloakbrowser-mcp@1.15.1`, runs it on `patchright@1.64.1`, and pins the engine wrapper to `0.6.3`. The plugin version moves independently of the MCP pin; the pin lives in `.mcp.json`.
+
+## Tool profiles and per-tool control
+
+| Profile | Browser tools | Capability list |
+|---|---:|---|
+| `minimal` | 25 | none (stock Playwright MCP) |
+| `standard` | 45 | `vision,pdf,devtools` |
+| `full` | 72 | all seven |
+| `custom` | varies | the capability list setting |
+
+The 47 tools beyond the default are capability-gated: vision adds 6 mouse primitives, pdf adds 1, devtools adds 13 (tracing, video, highlights), storage adds 17 (cookies, localStorage, sessionStorage), network adds 4 (routing), testing adds 5 (assertions), config adds 1. The two `cloakbrowser_*` diagnostics are always present.
+
+For individual tools, set **Disabled tools** to a comma-separated list. A stdio proxy hides those names from `tools/list` and returns an error if one is called, for example:
+
+```
+browser_pdf_save,browser_start_video,browser_mouse_wheel
+```
+
+Profile changes take effect after the MCP server restarts.
 
 - The MCP package does **not** self-update. Update by changing the pin in `.mcp.json` (`CLOAK_PLAYWRIGHT_MCP_PACKAGE`) and `plugin.json` together; the launcher reinstalls into the plugin data directory when either pin changes.
 - The Chromium binary **does** self-update: on each launch the wrapper checks at most once per hour and downloads a newer build in the background.

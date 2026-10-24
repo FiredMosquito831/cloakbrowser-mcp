@@ -1,7 +1,7 @@
 {
   "name": "cloakbrowser",
   "displayName": "CloakBrowser",
-  "version": "1.15.4",
+  "version": "1.16.0",
   "description": "CloakBrowser stealth Chromium through the Playwright MCP tool contract, via cloakbrowser-mcp.",
   "author": {
     "name": "FiredMosquito831"
@@ -25,9 +25,22 @@
     },
     "caps": {
       "type": "string",
-      "title": "Tool capabilities",
-      "description": "Comma-separated capability list. The default exposes all 72 Playwright MCP browser tools; removing entries hides tools.",
+      "title": "Custom capability list",
+      "description": "Only used when the tool profile is custom. Comma-separated groups: vision, pdf, devtools, storage, network, testing, config.",
       "default": "vision,pdf,devtools,storage,network,testing,config"
+    },
+    "tools_profile": {
+      "type": "string",
+      "title": "Tool profile",
+      "description": "minimal exposes the 25 stock Playwright MCP browser tools, standard adds vision, pdf and devtools (45), full exposes all 72, custom uses the capability list below.",
+      "options": ["minimal", "standard", "full", "custom"],
+      "default": "full"
+    },
+    "disabled_tools": {
+      "type": "string",
+      "title": "Disabled tools",
+      "description": "Comma-separated tool names to hide from the agent and reject when called, for example browser_pdf_save,browser_start_video. Leave empty to expose the selected profile unchanged.",
+      "default": ""
     },
     "humanize": {
       "type": "boolean",
