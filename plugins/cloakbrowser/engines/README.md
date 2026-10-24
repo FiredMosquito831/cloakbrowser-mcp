@@ -38,6 +38,7 @@ an engine means adding a manifest, not editing broker code.
 | `runtime` | no | Object describing an attached/remote runtime: `endpointEnv`, `profileEnv`, `defaultEndpoint` (must contain `{profileId}`), `errorHint` (may contain `{endpoint}`), `statusKeys` (`endpoint`/`profileId` → field names). The broker uses it for the extra `browser_engine_status` fields and to append `errorHint` to an `isError` tool result until the first successful tool call. Omit it for a normal launch engine; nothing is added |
 | `capabilities` | no | Object with only `groupSwitchesApply` and `cdpAttach` (booleans). The broker copies these into `browser_capabilities` for the engine that declares them |
 | `systemDependencies` | no | Array of external software the engine needs but the plugin never installs (see below). Reported generically in `browser_capabilities`; omitted engines gain no key |
+| `profileApplies` | no | Boolean, default `true`. Whether the plugin's profile model applies to this engine: `profile_dir`, `account`, `profile_isolation`, the workspace derivation and the lock preflight. Declare `false` for an engine that owns its profile elsewhere or attaches to a browser it did not start. Reported by both meta-tools |
 | `ignoredSettings` | no | Array of non-empty strings naming plugin settings the engine cannot honour (reported by `browser_capabilities`) |
 | `notes` | yes | String summarising the backend and its limitations |
 
@@ -145,6 +146,25 @@ Example excerpt:
 }
 ```
 
+## Profile applicability (`profileApplies`)
+
+The broker resolves the browser profile before it spawns a launcher. For an engine
+that owns a persistent local profile directory (`cloak`, `playwright`,
+`camoufox`) it applies, in this order: an explicit `profile_dir`, the `account`
+name, a `profile_isolation=workspace` derivation
+(`profiles/<engine>/ws-<sha256(cwd)[:7]>`), then the engine default. It reads the
+bridge's `<profile>/.cloakbrowser-mcp-profile.lock` before spawning and refuses a
+start when a live process holds it; in workspace mode it may move to the numbered
+siblings `-2` … `-5` and reports the switch as `profileFallback`.
+
+An engine whose profile belongs to someone else declares `"profileApplies":
+false`. The broker then skips every step above, reports `profileApplies: false`
+and `profileLock: null`, and the engine's own profile setting governs. The
+shipped examples are `camoufox-native` (mcp-camoufox owns its profile and lease)
+and `kameleo` (CDP attach). `ignoredSettings` is a separate, additive fact: an
+engine can ignore one plugin setting without opting out of the profile model, and
+vice versa. The rule is manifest-driven; no engine id appears in `broker.mjs`.
+
 ## Attach runtime (`requiredEnv` + `runtime`)
 
 An engine that attaches to a browser it did not launch (a local antidetect
@@ -165,7 +185,8 @@ failure without knowing the engine:
     "errorHint": "The engine is not answering at {endpoint}. Start it and check the profile.",
     "statusKeys": { "endpoint": "engineEndpoint", "profileId": "engineProfileId" }
   },
-  "capabilities": { "groupSwitchesApply": true, "cdpAttach": true }
+  "capabilities": { "groupSwitchesApply": true, "cdpAttach": true },
+  "profileApplies": false
 }
 ```
 
@@ -287,7 +308,10 @@ environment variables, not plugin settings.
    above. A backend that attaches to a browser someone else owns declares
    `requiredEnv` for the values without which it can never work and a `runtime`
    block for its endpoint and error hint; if it also needs external software the
-   plugin must not install, declare `systemDependencies`. `engines/kameleo.json`
+   plugin must not install, declare `systemDependencies`. Declare
+   `"profileApplies": false` when the engine owns its profile or attaches to one
+   it did not start, so the broker does not resolve a profile for it.
+   `engines/kameleo.json`
    with `launch-kameleo.mjs` is the worked attach example (and the worked
    `systemDependencies` example). The Camoufox engine in
    `engines/camoufox.json` is the worked example for a contract engine;

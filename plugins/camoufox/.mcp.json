@@ -16,6 +16,7 @@
       "CLOAK_DISABLED_TOOLS": "${user_config.disabled_tools}",
       "STEALTH_TOOL_PROFILE": "${user_config.tool_profile}",
       "STEALTH_ACCOUNT": "${user_config.account}",
+      "STEALTH_PROFILE_ISOLATION": "${user_config.profile_isolation}",
       "PLAYWRIGHT_MCP_HEADLESS": "${user_config.headless}",
       "PLAYWRIGHT_MCP_USER_DATA_DIR": "${user_config.profile_dir}",
       "PLAYWRIGHT_MCP_PROXY_SERVER": "${user_config.proxy_server}",

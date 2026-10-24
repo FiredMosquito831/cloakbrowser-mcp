@@ -467,6 +467,27 @@ function validateRuntime(manifest) {
   return null;
 }
 
+// Optional boolean: whether the plugin's own profile model applies to this
+// engine. A local-profile engine (cloak, playwright, camoufox) resolves
+// profile_dir, account, profile_isolation and the lock preflight; an engine that
+// owns its profile elsewhere (camoufox-native) or attaches to a browser it did
+// not start (kameleo) declares false and gains none of that behaviour. Omitted
+// means true, so every existing manifest keeps its previous meaning.
+function validateProfileApplies(manifest) {
+  if (manifest.profileApplies === undefined) {
+    return null;
+  }
+  if (typeof manifest.profileApplies !== 'boolean') {
+    return 'profileApplies must be a boolean';
+  }
+  return null;
+}
+
+// The profile model applies unless the manifest explicitly opts out.
+export function manifestProfileApplies(manifest) {
+  return manifest?.profileApplies !== false;
+}
+
 // Optional capability facts. Only the names the broker understands are allowed,
 // so a typo cannot silently disappear from browser_capabilities.
 function validateCapabilities(manifest) {
@@ -684,6 +705,7 @@ export function validateManifest(manifest, expectedId, profileNames, launcherDir
     validateRequiredEnv,
     validateRuntime,
     validateCapabilities,
+    validateProfileApplies,
     validateSystemDependencies,
   ]) {
     const error = validation(manifest);
