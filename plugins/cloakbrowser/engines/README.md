@@ -18,7 +18,7 @@ an engine means adding a manifest, not editing broker code.
   manifest stops the backend and exposes only the two broker meta-tools, with
   the exact validation error in `browser_capabilities.engineError`.
 - An unknown `browser_engine` value is rejected with the discovered ids, for
-  example: `Unknown engine "nope". Supported engines: cloak, playwright.`
+  example: `Unknown engine "nope". Supported engines: camoufox, cloak, playwright.`
 
 ## Manifest fields
 
@@ -32,7 +32,18 @@ an engine means adding a manifest, not editing broker code.
 | `defaultToolProfile` | yes | `full` or `portable`; must exist in `profiles.json` |
 | `toolSupport` | yes | Object mapping tool names (or `*`) to `full`, `partial`, `none` or `unknown` |
 | `toolSupportNotes` | no | Object of non-empty strings explaining a `partial` or `none` decision |
+| `launch` | no | Object with one optional field, `launcher`: a launcher file name in the plugin root. Missing means `launch.mjs` |
+| `requirements` | no | Array of non-empty strings naming what the engine needs before it can run (reported by `browser_capabilities`) |
+| `ignoredSettings` | no | Array of non-empty strings naming plugin settings the engine cannot honour (reported by `browser_capabilities`) |
 | `notes` | yes | String summarising the backend and its limitations |
+
+`launch.launcher` must be a bare file name matching `launch.mjs` or
+`launch-<engine>.mjs`; a path, a command or a shell string is rejected at
+validation time. When the value is present the file must exist in the plugin
+root. The broker starts it with `node <launcher>`, so every launcher is a Node
+script with the same stdio contract: stdout is the MCP protocol only, every log
+line goes to stderr, and a missing prerequisite exits 1 after one actionable
+line.
 
 Example:
 
@@ -44,6 +55,9 @@ Example:
   "transport": "launch",
   "contract": "playwright-mcp",
   "defaultToolProfile": "portable",
+  "launch": { "launcher": "launch-example.mjs" },
+  "requirements": ["Node 22.13+", "the engine binary (one-time download)"],
+  "ignoredSettings": ["humanize"],
   "toolSupport": {
     "*": "full",
     "browser_pdf_save": "none"
@@ -83,9 +97,12 @@ Profiles are per engine and shared across engines:
 1. Add `engines/<id>.json` with every field above. Keep the id equal to the
    file name.
 2. If the engine uses the existing `launch` transport and `playwright-mcp`
-   contract, no broker change is needed. A new transport or contract needs the
-   broker to implement it plus one launcher adapter in the plugin root named
-   `launch-<id>.mjs`; that is a separate change, not a manifest.
+   contract, name the launcher adapter (or omit `launch` for `launch.mjs`). A
+   new backend that needs its own runtime gets one launcher adapter in the
+   plugin root named `launch-<id>.mjs`; that is a separate change, not a broker
+   edit. The Camoufox engine in `engines/camoufox.json` is the worked example:
+   `launch-camoufox.mjs` provisions a vendored venv, pins the backend build,
+   spawns the backend and forwards signals.
 3. Regenerate the plugin's engine enum from the manifests:
 
    ```

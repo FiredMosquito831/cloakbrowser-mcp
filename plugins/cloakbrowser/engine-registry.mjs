@@ -4,12 +4,17 @@
 // engines/*.json, validates them and resolves the active engine and tool
 // profile. Importing it never starts a backend and never writes anything, so
 // the unit tests can exercise every rule directly.
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 export const DEFAULT_ENGINE = 'cloak';
 // Shared data file beside the manifests; never treated as an engine.
 export const PROFILES_FILE_NAME = 'profiles.json';
+// A manifest that names no launcher starts the default one. Every launcher is a
+// plain file in the plugin root, named launch.mjs or launch-<engine>.mjs; the
+// engine setting still selects a manifest id, never a command or a path.
+export const DEFAULT_LAUNCHER = 'launch.mjs';
+const LAUNCHER_NAME_PATTERN = /^launch(?:-[a-z0-9]+(?:-[a-z0-9]+)*)?\.mjs$/;
 export const SUPPORT_VALUES = Object.freeze(['full', 'partial', 'none', 'unknown']);
 const SUPPORT_VALUE_SET = new Set(SUPPORT_VALUES);
 const IMPLEMENTED_PROFILES = Object.freeze(['full', 'portable']);
@@ -95,9 +100,32 @@ export function portableToolNames(profiles) {
   return Array.isArray(tools) ? [...tools].sort() : [];
 }
 
+// A launcher is a file name in the plugin root: no directory, no command, no
+// "..". Anything else is a manifest error, not something to spawn.
+export function validateLauncherName(value) {
+  if (!nonEmptyString(value)) {
+    return 'launcher must be a non-empty string';
+  }
+  if (value !== value.trim()) {
+    return 'launcher must not have leading or trailing whitespace';
+  }
+  if (!LAUNCHER_NAME_PATTERN.test(value)) {
+    return `launcher "${value}" is not a launcher file name like "launch.mjs" or "launch-camoufox.mjs"`;
+  }
+  return null;
+}
+
+// The launcher a manifest names, or the default one. Callers still join this to
+// the plugin root; the value is always a bare basename.
+export function resolveLauncherName(manifest) {
+  const launch = isPlainObject(manifest?.launch) ? manifest.launch : null;
+  return launch !== null && nonEmptyString(launch.launcher) ? launch.launcher.trim() : DEFAULT_LAUNCHER;
+}
+
 // Validate one engine manifest. expectedId comes from the file name, so a
 // manifest cannot advertise an id different from the file that defines it.
-export function validateManifest(manifest, expectedId, profileNames) {
+// launcherDir is optional: when given, the named launcher must exist there.
+export function validateManifest(manifest, expectedId, profileNames, launcherDir) {
   if (!isPlainObject(manifest)) {
     return 'manifest is not a JSON object';
   }
@@ -153,6 +181,43 @@ export function validateManifest(manifest, expectedId, profileNames) {
       }
     }
   }
+  if (manifest.launch !== undefined) {
+    if (!isPlainObject(manifest.launch)) {
+      return 'launch must be an object';
+    }
+    for (const key of Object.keys(manifest.launch)) {
+      if (key !== 'launcher') {
+        return `launch has an unsupported field "${key}"`;
+      }
+    }
+    if (manifest.launch.launcher !== undefined) {
+      const launcherError = validateLauncherName(manifest.launch.launcher);
+      if (launcherError !== null) {
+        return launcherError;
+      }
+    }
+  }
+  if (launcherDir !== undefined) {
+    const launcher = resolveLauncherName(manifest);
+    const launcherPath = path.join(launcherDir, launcher);
+    if (!existsSync(launcherPath)) {
+      return `launcher "${launcher}" does not exist in ${launcherDir}`;
+    }
+  }
+  for (const field of ['requirements', 'ignoredSettings']) {
+    const value = manifest[field];
+    if (value === undefined) {
+      continue;
+    }
+    if (!Array.isArray(value)) {
+      return `${field} must be an array`;
+    }
+    for (const entry of value) {
+      if (!nonEmptyString(entry)) {
+        return `${field} must contain only non-empty strings`;
+      }
+    }
+  }
   if (typeof manifest.notes !== 'string') {
     return 'notes is missing';
   }
@@ -175,7 +240,7 @@ export function manifestSupport(manifest, toolName) {
 // Discover engines in deterministic order: JSON files sorted by file name,
 // excluding the shared profiles file. Every file is validated; a broken
 // manifest is reported and excluded from the supported id list.
-export function scanEngines(enginesDir, profileNames) {
+export function scanEngines(enginesDir, profileNames, launcherDir) {
   let fileNames;
   try {
     fileNames = readdirSync(enginesDir);
@@ -198,7 +263,7 @@ export function scanEngines(enginesDir, profileNames) {
     let entryError = null;
     try {
       manifest = JSON.parse(readFileSync(file, 'utf8'));
-      const validationError = validateManifest(manifest, id, profileNames);
+      const validationError = validateManifest(manifest, id, profileNames, launcherDir);
       if (validationError !== null) {
         entryError = `Invalid engine manifest ${file}: ${validationError}`;
       }
@@ -214,13 +279,13 @@ export function scanEngines(enginesDir, profileNames) {
   return { entries, ids: entries.filter((entry) => entry.error === null).map((entry) => entry.id), warnings };
 }
 
-export function loadEngineConfiguration({ enginesDir, profilesFile, engineId }) {
+export function loadEngineConfiguration({ enginesDir, profilesFile, engineId, launcherDir }) {
   const profilesResult = loadProfiles(profilesFile);
   if (profilesResult.profiles === null) {
     return { engine: null, profiles: null, engineIds: [], warnings: [], error: profilesResult.error };
   }
   const profiles = profilesResult.profiles;
-  const scan = scanEngines(enginesDir, availableProfileNames(profiles));
+  const scan = scanEngines(enginesDir, availableProfileNames(profiles), launcherDir);
   const entry = scan.entries.find((candidate) => candidate.id === engineId);
   if (entry === undefined) {
     const supported = scan.ids.length === 0 ? 'none' : scan.ids.join(', ');

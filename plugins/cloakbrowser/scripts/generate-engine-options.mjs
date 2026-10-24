@@ -112,7 +112,7 @@ function main() {
   if (profilesResult.profiles === null) {
     fail(profilesResult.error);
   }
-  const scan = scanEngines(ENGINES_DIR, availableProfileNames(profilesResult.profiles));
+  const scan = scanEngines(ENGINES_DIR, availableProfileNames(profilesResult.profiles), PLUGIN_ROOT);
   if (scan.warnings.length > 0) {
     fail(`refusing to generate options from invalid manifests:\n${scan.warnings.join('\n')}`);
   }
