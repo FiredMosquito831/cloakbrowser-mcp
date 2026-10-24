@@ -22,11 +22,11 @@ import {
   manifestSupport,
   portableToolNames,
   profileAllows,
+  resolveLauncherName,
   resolveToolProfile,
 } from './engine-registry.mjs';
 
 const PLUGIN_ROOT = path.dirname(fileURLToPath(import.meta.url));
-const LAUNCHER = path.join(PLUGIN_ROOT, 'launch.mjs');
 const ENGINES_DIR = path.join(PLUGIN_ROOT, 'engines');
 const PROFILES_FILE = path.join(ENGINES_DIR, 'profiles.json');
 const PLUGIN_MANIFEST = path.join(PLUGIN_ROOT, '.claude-plugin', 'plugin.json');
@@ -108,6 +108,7 @@ const loaded = loadEngineConfiguration({
   enginesDir: ENGINES_DIR,
   profilesFile: PROFILES_FILE,
   engineId: selected.id,
+  launcherDir: PLUGIN_ROOT,
 });
 const engine = loaded.engine;
 const profiles = loaded.profiles;
@@ -244,6 +245,38 @@ function supportedCounts() {
   };
 }
 
+function manifestStringList(field) {
+  const value = state.engine?.[field];
+  return Array.isArray(value) ? [...value] : [];
+}
+
+// Manifest "none" names the backend did not list. The rule is exact, so this
+// is available before tools/list and does not depend on the backend's own list;
+// a listed-but-hidden name is reported through hiddenByManifest instead.
+function unavailableToolEntries() {
+  const rules = state.engine?.toolSupport;
+  if (rules === null || typeof rules !== 'object' || Array.isArray(rules)) {
+    return [];
+  }
+  const notes = state.engine?.toolSupportNotes;
+  const listed = new Set(backendToolNames());
+  const entries = [];
+  for (const [name, support] of Object.entries(rules)) {
+    if (name === '*' || support !== 'none' || listed.has(name)) {
+      continue;
+    }
+    const note = notes !== null && typeof notes === 'object' ? notes[name] : undefined;
+    entries.push({
+      name,
+      support: 'none',
+      reason:
+        typeof note === 'string' && note.trim() !== '' ? note : 'Not supported by this engine.',
+    });
+  }
+  entries.sort((left, right) => left.name.localeCompare(right.name));
+  return entries;
+}
+
 function capabilitiesPayload() {
   const counts = state.toolsListed ? toolCounts() : null;
   const supported = state.toolsListed ? supportedCounts() : null;
@@ -285,7 +318,10 @@ function capabilitiesPayload() {
     portableToolNames: state.profiles === null ? [] : portableToolNames(state.profiles),
     perToolSupportNotes: state.engine?.toolSupportNotes ?? {},
     hiddenByProfile: [...state.hiddenByProfile],
-    unavailableTools: [],
+    unavailableTools: unavailableToolEntries(),
+    launch: resolveLauncherName(state.engine),
+    requirements: manifestStringList('requirements'),
+    ignoredSettings: manifestStringList('ignoredSettings'),
   };
 }
 
@@ -640,13 +676,14 @@ function startBackend() {
     log(`not starting a backend: ${state.engineError}`);
     return;
   }
+  const launcher = path.join(PLUGIN_ROOT, resolveLauncherName(state.engine));
   state.backend.state = 'starting';
   state.spawnedAt = Date.now();
   log(
     `engine=${state.engineId} source=${state.engineSource} contract=${state.engine.contract} ` +
-      `profile=${state.toolProfile} profileSource=${state.toolProfileSource} launcher=${path.basename(LAUNCHER)}`,
+      `profile=${state.toolProfile} profileSource=${state.toolProfileSource} launcher=${path.basename(launcher)}`,
   );
-  const child = spawn(process.execPath, [LAUNCHER], {
+  const child = spawn(process.execPath, [launcher], {
     stdio: ['pipe', 'pipe', 'pipe'],
     // The manifest is the source of truth for the selected engine; keep the
     // legacy backend variable in sync even if only STEALTH_ENGINE was set.

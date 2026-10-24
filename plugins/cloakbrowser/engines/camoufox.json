@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "id": "camoufox",
+  "label": "Camoufox (stealth Firefox)",
+  "transport": "launch",
+  "contract": "playwright-mcp",
+  "defaultToolProfile": "portable",
+  "launch": {
+    "launcher": "launch-camoufox.mjs"
+  },
+  "requirements": [
+    "Python 3.12+",
+    "uv",
+    "Camoufox build v156.0.1-beta.39 (one-time ~1.3 GB download, ~2.4 GB on disk)",
+    "camoufox-playwright-mcp==0.1.5"
+  ],
+  "toolSupport": {
+    "*": "full",
+    "browser_annotate": "none",
+    "browser_emulate_media": "none",
+    "browser_start_recording": "none",
+    "browser_stop_recording": "none",
+    "browser_pdf_save": "none",
+    "browser_run_code_unsafe": "partial"
+  },
+  "toolSupportNotes": {
+    "browser_annotate": "Not implemented by camoufox-playwright-mcp 0.1.5; it omits the upstream Node dashboard daemon.",
+    "browser_emulate_media": "Not implemented by camoufox-playwright-mcp 0.1.5; absent from its tool registry.",
+    "browser_start_recording": "Not implemented by camoufox-playwright-mcp 0.1.5; absent from its tool registry.",
+    "browser_stop_recording": "Not implemented by camoufox-playwright-mcp 0.1.5; absent from its tool registry.",
+    "browser_pdf_save": "Listed by the backend but unusable on Firefox: PDF output is only supported by headless Chromium.",
+    "browser_run_code_unsafe": "Executes asynchronous Python Playwright code, not JavaScript; a prompt written for the JS tool will fail."
+  },
+  "ignoredSettings": [
+    "humanize",
+    "human_preset",
+    "release_channel",
+    "geoip_proxy_match",
+    "licence_key",
+    "engine_version"
+  ],
+  "notes": "Stealth Firefox via camoufox-playwright-mcp 0.1.5. 68 of the 72 canonical browser tools; portable by default. Needs Python 3.12+ and uv; no CDP."
+}

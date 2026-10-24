@@ -12,6 +12,9 @@ interface Manifest {
   transport: string;
   contract: string;
   defaultToolProfile: string;
+  launch?: { launcher?: string };
+  requirements?: string[];
+  ignoredSettings?: string[];
   toolSupport: Record<string, string>;
   toolSupportNotes?: Record<string, string>;
   notes: string;
@@ -82,7 +85,9 @@ interface RegistryModule {
     engine: Manifest | null,
     profiles: ProfilesDocument | null,
   ): ProfileSelection;
-  scanEngines(enginesDir: string, profileNames: string[]): ScanResult;
+  resolveLauncherName(manifest: Manifest | null): string;
+  validateLauncherName(value: unknown): string | null;
+  scanEngines(enginesDir: string, profileNames: string[], launcherDir?: string): ScanResult;
   validateManifest(manifest: unknown, expectedId: string, profileNames: string[]): string | null;
   validateProfiles(document: unknown): string | null;
 }
@@ -131,6 +136,8 @@ const profiles = JSON.parse(readFileSync(profilesFile, 'utf8')) as ProfilesDocum
 const profileNames = registry.availableProfileNames(profiles);
 const cloak = JSON.parse(readFileSync(path.join(enginesDir, 'cloak.json'), 'utf8')) as Manifest;
 const playwright = JSON.parse(readFileSync(path.join(enginesDir, 'playwright.json'), 'utf8')) as Manifest;
+const camoufox = JSON.parse(readFileSync(path.join(enginesDir, 'camoufox.json'), 'utf8')) as Manifest;
+const chromiumManifests = [cloak, playwright];
 
 const tempRoots: string[] = [];
 
@@ -225,23 +232,30 @@ describe('shared profiles.json', () => {
 });
 
 describe('engine manifests', () => {
-  it('discovers both shipped engines in deterministic file-name order', () => {
+  it('discovers every shipped engine in deterministic file-name order', () => {
     const scan = registry.scanEngines(enginesDir, profileNames);
-    expect(scan.ids).toEqual(['cloak', 'playwright']);
+    expect(scan.ids).toEqual(['camoufox', 'cloak', 'playwright']);
     expect(scan.warnings).toEqual([]);
-    expect(scan.entries.map((entry) => entry.id)).toEqual(['cloak', 'playwright']);
+    expect(scan.entries.map((entry) => entry.id)).toEqual(['camoufox', 'cloak', 'playwright']);
   });
 
-  it.each([cloak, playwright])('validates $id and keeps its id equal to the file name', (manifest) => {
-    expect(registry.validateManifest(manifest, manifest.id, profileNames)).toBeNull();
-  });
+  it.each([cloak, playwright, camoufox])(
+    'validates $id and keeps its id equal to the file name',
+    (manifest) => {
+      expect(registry.validateManifest(manifest, manifest.id, profileNames)).toBeNull();
+    },
+  );
 
-  it('keeps full as the default profile for both shipped engines', () => {
+  it('keeps full as the default profile for both Chromium engines', () => {
     expect(cloak.defaultToolProfile).toBe('full');
     expect(playwright.defaultToolProfile).toBe('full');
   });
 
-  it.each([cloak, playwright])('uses only allowed support values ($id)', (manifest) => {
+  it('keeps portable as the default profile for the Camoufox engine', () => {
+    expect(camoufox.defaultToolProfile).toBe('portable');
+  });
+
+  it.each([cloak, playwright, camoufox])('uses only allowed support values ($id)', (manifest) => {
     const allowed = new Set(['full', 'partial', 'none', 'unknown']);
     for (const support of Object.values(manifest.toolSupport)) {
       expect(allowed.has(support)).toBe(true);
@@ -252,7 +266,7 @@ describe('engine manifests', () => {
     expect(manifest.notes).toBeTypeOf('string');
   });
 
-  it.each([cloak, playwright])('exposes every portable tool ($id)', (manifest) => {
+  it.each([cloak, playwright, camoufox])('exposes every portable tool ($id)', (manifest) => {
     expect(registry.findPortableGaps(manifest, profiles)).toEqual([]);
     for (const toolName of PORTABLE_TOOLS) {
       expect(registry.manifestSupport(manifest, toolName)).not.toBe('none');
@@ -387,6 +401,65 @@ describe('manifest discovery and rejection', () => {
   });
 });
 
+describe('manifest launcher, requirements and ignored settings', () => {
+  it('defaults to launch.mjs when a manifest names no launcher', () => {
+    expect(registry.resolveLauncherName(cloak)).toBe('launch.mjs');
+    expect(registry.resolveLauncherName(playwright)).toBe('launch.mjs');
+    expect(registry.resolveLauncherName(null)).toBe('launch.mjs');
+    expect(registry.resolveLauncherName(manifestWith({ launch: {} }))).toBe('launch.mjs');
+  });
+
+  it('resolves the launcher the Camoufox manifest names', () => {
+    expect(registry.resolveLauncherName(camoufox)).toBe('launch-camoufox.mjs');
+  });
+
+  it.each([
+    ['a directory path', 'launch-camoufox.mjs/../launch.mjs'],
+    ['a backslash path', 'sub\\launch.mjs'],
+    ['a command', 'node launch.mjs'],
+    ['a shell string', 'launch.mjs && calc'],
+    ['a non-launcher file', 'broker.mjs'],
+    ['an empty string', ''],
+  ])('rejects %s as a launcher', (_label, value) => {
+    expect(registry.validateLauncherName(value)).not.toBeNull();
+  });
+
+  it.each(['launch.mjs', 'launch-camoufox.mjs', 'launch-kameleo-cdp.mjs'])(
+    'accepts %s as a launcher',
+    (value) => {
+      expect(registry.validateLauncherName(value)).toBeNull();
+    },
+  );
+
+  it('rejects a launcher field with an unsupported key', () => {
+    const manifest = { ...manifestWith({ id: 'alpha' }), launch: { launcher: 'launch.mjs', argv: [] } };
+    const error = registry.validateManifest(manifest, 'alpha', profileNames);
+    expect(error).toContain('unsupported field "argv"');
+  });
+
+  it('rejects a launcher that does not exist in the plugin root', () => {
+    const missing = manifestWith({ id: 'alpha', launch: { launcher: 'launch-nothing.mjs' } });
+    const error = registry.validateManifest(missing, 'alpha', profileNames, pluginRoot);
+    expect(error).toContain('launcher "launch-nothing.mjs" does not exist');
+  });
+
+  it('accepts the shipped engines against the real plugin root', () => {
+    for (const manifest of [cloak, playwright, camoufox]) {
+      expect(registry.validateManifest(manifest, manifest.id, profileNames, pluginRoot)).toBeNull();
+    }
+  });
+
+  it.each([
+    ['requirements not an array', { requirements: 'Python 3.12+' }, 'requirements must be an array'],
+    ['an empty requirement', { requirements: [''] }, 'requirements must contain only non-empty strings'],
+    ['ignoredSettings not an array', { ignoredSettings: 'humanize' }, 'ignoredSettings must be an array'],
+    ['an empty ignored setting', { ignoredSettings: [''] }, 'ignoredSettings must contain only non-empty strings'],
+  ])('rejects %s', (_label, overrides, expected) => {
+    const manifest = { ...manifestWith({ id: 'alpha' }), ...overrides } as unknown;
+    expect(registry.validateManifest(manifest, 'alpha', profileNames)).toContain(expected);
+  });
+});
+
 describe('tool profile resolution', () => {
   it('uses the manifest default when nothing is set', () => {
     expect(registry.resolveToolProfile(undefined, cloak, profiles)).toEqual({
@@ -495,7 +568,7 @@ describe('generated browser_engine options', () => {
     const repaired = JSON.parse(readFileSync(copiedManifest, 'utf8')) as {
       userConfig: { browser_engine: { options: string[] } };
     };
-    expect(repaired.userConfig.browser_engine.options).toEqual(['cloak', 'playwright']);
+    expect(repaired.userConfig.browser_engine.options).toEqual(['camoufox', 'cloak', 'playwright']);
 
     const recheck = spawnSync(process.execPath, [script, '--check'], { cwd: repoRoot, encoding: 'utf8' });
     expect(recheck.status).toBe(0);

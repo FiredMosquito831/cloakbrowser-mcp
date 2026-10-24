@@ -1,7 +1,7 @@
 {
   "name": "cloakbrowser",
   "displayName": "CloakBrowser",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "CloakBrowser stealth Chromium through the Playwright MCP tool contract, via cloakbrowser-mcp.",
   "author": {
     "name": "FiredMosquito831"
@@ -19,8 +19,8 @@
     "browser_engine": {
       "type": "string",
       "title": "Browser engine",
-      "description": "cloak uses the patched CloakBrowser Chromium. playwright uses the stock Playwright Chromium and gives up the stealth patches.",
-      "options": ["cloak", "playwright"],
+      "description": "cloak uses the patched CloakBrowser Chromium. playwright uses the stock Playwright Chromium and gives up the stealth patches. camoufox uses the Camoufox stealth Firefox and needs Python 3.12+ with uv installed. The engine is read when the MCP server starts; changing it restarts the server and reloads the tool list.",
+      "options": ["camoufox", "cloak", "playwright"],
       "default": "cloak"
     },
     "tool_profile": {
