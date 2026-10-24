@@ -225,14 +225,15 @@ jobs:
           PR_TITLE: ${{ env.PR_TITLE }}
         run: |
           number="$(gh pr list --head "$SYNC_BRANCH" --state open --json number --jq '.[0].number')"
+          body="$(cat "$RUNNER_TEMP/upstream-sync-pr.md")"
           if [ -n "$number" ] && [ "$number" != "null" ]; then
-            gh pr edit "$number" --title "$PR_TITLE" --body-file "$RUNNER_TEMP/upstream-sync-pr.md"
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/pulls/$number" -f title="$PR_TITLE" -f body="$body" >/dev/null
           else
-            gh pr create --base main --head "$SYNC_BRANCH" --title "$PR_TITLE" --body-file "$RUNNER_TEMP/upstream-sync-pr.md" --assignee "$SYNC_ASSIGNEE"
+            number="$(gh api -X POST "repos/$GITHUB_REPOSITORY/pulls" -f title="$PR_TITLE" -f head="$SYNC_BRANCH" -f base=main -f body="$body" -f maintainer_can_modify=true --jq '.number')"
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$number/assignees" -f "assignees[]=$SYNC_ASSIGNEE" >/dev/null || true
           fi
-          number="$(gh pr list --head "$SYNC_BRANCH" --state open --json number --jq '.[0].number')"
           echo "number=$number" >> "$GITHUB_OUTPUT"
-          url="$(gh pr view "$number" --json url --jq '.url')"
+          url="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$number" --jq '.html_url')"
           echo "url=$url" >> "$GITHUB_OUTPUT"
 
       - name: Label a sensitive merge for review
@@ -242,7 +243,7 @@ jobs:
           PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: |
           gh label create "upstream-sync: review required" --force --color b60205 --description "Upstream sync touching a path that executes on the runner"
-          gh pr edit "$PR_NUMBER" --add-label "upstream-sync: review required"
+          gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/labels" -f "labels[]=upstream-sync: review required" >/dev/null
 
       - name: Merge the sync pull request
         if: ${{ inputs.allow_merge == true && inputs.dry_run != true && steps.commit.outputs.committed == 'true' && steps.plan.outputs.sensitive != 'true' }}
@@ -250,8 +251,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: |
-          gh pr merge "$PR_NUMBER" --squash
-          gh pr comment "$PR_NUMBER" --body "Squash-merged by the upstream-sync workflow after the in-workflow gate passed. This is not a CI result; see the PR body for the gate commands."
+          gh api -X PUT "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/merge" -f merge_method=squash >/dev/null
+          gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" -f body="Squash-merged by the upstream-sync workflow after the in-workflow gate passed. This is not a CI result; see the PR body for the gate commands." >/dev/null
 
       - name: Report the pull-request state
         if: ${{ inputs.dry_run != true && steps.commit.outputs.committed == 'true' }}
