@@ -10,7 +10,8 @@
 // Windows rules: no detached children, stdin EOF is the shutdown signal, and the
 // backend process tree is killed with taskkill after a 300 ms grace period.
 import { spawn, spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
@@ -28,6 +29,14 @@ import {
   systemDependencies,
 } from './engine-registry.mjs';
 import { enrichToolError, runtimeErrorHint, runtimeStatusFields } from './lib/attach.mjs';
+import {
+  accountProxyPath,
+  backendEnvironment,
+  DEFAULT_PROFILE_NAME,
+  readAccountProxy,
+  redactSecrets,
+  resolveProfile,
+} from './lib/profile.mjs';
 import {
   aliasSummary,
   buildNativeSurface,
@@ -161,6 +170,116 @@ if (engineError === null) {
     engineError = missingEnv;
   }
 }
+
+// The plugin data root the launchers use. ${CLAUDE_PLUGIN_DATA} is the only
+// supported location; the home fallback matches launch.mjs exactly.
+const PLUGIN_DATA_DIR =
+  typeof process.env.CLAUDE_PLUGIN_DATA === 'string' && process.env.CLAUDE_PLUGIN_DATA.trim() !== ''
+    ? path.resolve(process.env.CLAUDE_PLUGIN_DATA.trim())
+    : path.join(homedir(), '.cloakbrowser-mcp-plugin');
+
+// One profile per account. Resolution runs once, before the backend starts, and
+// its result feeds both the spawn environment and the meta-tools. With the
+// account and profile_dir settings unset it resolves to "default" and the
+// broker sets nothing, so launch.mjs keeps applying profiles/default exactly as
+// before. An unsubstituted placeholder is treated as unset, like the engine.
+const rawAccount = typeof process.env.STEALTH_ACCOUNT === 'string' ? process.env.STEALTH_ACCOUNT : '';
+if (rawAccount.includes('${')) {
+  log(`ignoring unsubstituted account placeholder: ${rawAccount.trim()}`);
+}
+const profileResolution =
+  engine === null
+    ? {
+        profileDir: null,
+        defaultProfileDir: null,
+        profileSource: null,
+        account: null,
+        accountApplies: false,
+        error: null,
+      }
+    : resolveProfile({
+        account: rawAccount,
+        profileDir: process.env.PLAYWRIGHT_MCP_USER_DATA_DIR,
+        engineId: engine.id,
+        dataDir: PLUGIN_DATA_DIR,
+        launcherName: resolveLauncherName(engine),
+        ignoredSettings: Array.isArray(engine.ignoredSettings) ? engine.ignoredSettings : [],
+      });
+if (rawAccount.trim() !== '' && !rawAccount.includes('${') && profileResolution.accountApplies === false) {
+  const ownSetting = engine?.profileArgument?.setting;
+  log(
+    `the "${selected.id}" engine does not use account profiles; ` +
+      (typeof ownSetting === 'string' && ownSetting.trim() !== ''
+        ? `set "${ownSetting}" instead`
+        : 'it uses its own profile settings'),
+  );
+}
+if (engineError === null && profileResolution.error !== null) {
+  engineError = profileResolution.error;
+}
+
+// The optional per-account proxy file. proxy_server wins when set; otherwise the
+// file beside the resolved profile is read for a named account and for the
+// default account (where it is used only when it exists). Engines whose
+// manifest ignores profile_dir have no account profile, so no file is read.
+function resolveProxy() {
+  const setting =
+    typeof process.env.PLAYWRIGHT_MCP_PROXY_SERVER === 'string'
+      ? process.env.PLAYWRIGHT_MCP_PROXY_SERVER.trim()
+      : '';
+  if (setting !== '') {
+    const candidate =
+      profileResolution.profileSource === 'account'
+        ? profileResolution.profileDir
+        : profileResolution.profileSource === 'default'
+          ? profileResolution.defaultProfileDir
+          : null;
+    if (candidate !== null && existsSync(accountProxyPath(candidate))) {
+      log('ignoring the account proxy file because the proxy_server setting is set');
+    }
+    return { source: 'setting', configured: true, value: null, error: null };
+  }
+  const candidate =
+    profileResolution.profileSource === 'account'
+      ? profileResolution.profileDir
+      : profileResolution.profileSource === 'default'
+        ? profileResolution.defaultProfileDir
+        : null;
+  if (candidate === null) {
+    return { source: 'none', configured: false, value: null, error: null };
+  }
+  const result = readAccountProxy(accountProxyPath(candidate));
+  if (result.error !== null) {
+    return { source: 'error', configured: false, value: null, error: result.error };
+  }
+  if (result.value !== null) {
+    log(
+      profileResolution.profileSource === 'account'
+        ? `using the account proxy file for account "${profileResolution.account}"`
+        : `using the account proxy file beside the default profile`,
+    );
+    return { source: 'account-file', configured: true, value: result.value, error: null };
+  }
+  return { source: 'none', configured: false, value: null, error: null };
+}
+
+const proxyResolution =
+  engineError === null ? resolveProxy() : { source: 'none', configured: false, value: null, error: null };
+if (engineError === null && proxyResolution.error !== null) {
+  engineError = proxyResolution.error;
+}
+
+// The broker creates the resolved account directory (it never deletes, copies or
+// migrates one). An explicit profile_dir is not created here: launch.mjs has
+// always created it, and its bytes are unchanged.
+if (engineError === null && profileResolution.profileSource === 'account') {
+  try {
+    mkdirSync(profileResolution.profileDir, { recursive: true });
+  } catch (error) {
+    engineError = `Cannot create the account profile directory ${profileResolution.profileDir}: ${error.message}`;
+  }
+}
+
 const runtimeHint = runtimeErrorHint(engine, process.env);
 const profileSelection = resolveToolProfile(process.env.STEALTH_TOOL_PROFILE, engine, profiles);
 
@@ -192,6 +311,24 @@ const state = {
   toolProfileSource: profileSelection.source,
   requestedToolProfile: profileSelection.requested,
   disabled: parseDisabledTools(process.env.CLOAK_DISABLED_TOOLS),
+  // Per-account profile state. `dir` is set only when the broker resolved an
+  // account and must set PLAYWRIGHT_MCP_USER_DATA_DIR itself; `appliedProxy` is
+  // the file proxy to inject into the spawn environment. Neither value is ever
+  // returned to the client except as the account name / a boolean.
+  profile: {
+    account: profileResolution.account,
+    dir: profileResolution.profileSource === 'account' ? profileResolution.profileDir : null,
+    source: profileResolution.profileSource,
+    applies: profileResolution.accountApplies,
+    defaultDir: profileResolution.defaultProfileDir,
+    error: profileResolution.error,
+  },
+  proxy: {
+    source: proxyResolution.source,
+    configured: proxyResolution.configured,
+    appliedProxy: proxyResolution.value,
+    error: proxyResolution.error,
+  },
   child: null,
   spawnedAt: null,
   initializeAnsweredAt: null,
@@ -382,6 +519,47 @@ function manifestStringList(field) {
   return Array.isArray(value) ? [...value] : [];
 }
 
+// Read-only inventory of the profiles that already exist for this engine. It
+// never creates, renames or deletes anything: the directory name is the
+// registry. The account root holds named accounts; the default profile lives
+// beside it for the Chromium engines, so it is added when its directory exists.
+// The current account is always listed. The count is untruncated; the list is
+// capped so a directory with thousands of profiles cannot bloat a payload.
+const MAX_AVAILABLE_ACCOUNTS = 100;
+
+function isDirectory(candidate) {
+  try {
+    return statSync(candidate).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function availableAccounts() {
+  if (state.profile.applies !== true || state.engine === null) {
+    return { names: [], count: 0 };
+  }
+  const names = new Set();
+  const accountRoot = path.join(PLUGIN_DATA_DIR, 'profiles', state.engine.id);
+  try {
+    for (const entry of readdirSync(accountRoot, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        names.add(entry.name);
+      }
+    }
+  } catch {
+    // A missing account root simply means no named account exists yet.
+  }
+  if (state.profile.defaultDir !== null && isDirectory(state.profile.defaultDir)) {
+    names.add(DEFAULT_PROFILE_NAME);
+  }
+  if (state.profile.account !== null) {
+    names.add(state.profile.account);
+  }
+  const sorted = [...names].sort();
+  return { names: sorted.slice(0, MAX_AVAILABLE_ACCOUNTS), count: sorted.length };
+}
+
 // Manifest "none" names the backend did not list. The rule is exact, so this
 // is available before tools/list and does not depend on the backend's own list;
 // a listed-but-hidden name is reported through hiddenByManifest instead.
@@ -466,6 +644,7 @@ function capabilitiesPayload() {
   const systemDeps = systemDependencyReport();
   const counts = state.toolsListed ? toolCounts() : null;
   const supported = state.toolsListed ? supportedCounts() : null;
+  const accounts = availableAccounts();
   const perToolSupport = {};
   if (state.toolsListed) {
     if (state.native) {
@@ -535,6 +714,17 @@ function capabilitiesPayload() {
     ignoredSettings: manifestStringList('ignoredSettings'),
     ...(systemDeps.length === 0 ? {} : { systemDependencies: systemDeps }),
     ...nativeCapabilitiesExtras(),
+    // Per-account profile facts, additive. The proxy URL itself is never
+    // returned: proxyConfigured is a boolean and proxySource names its origin.
+    account: state.profile.account,
+    profileDir: state.profile.dir,
+    profileSource: state.profile.source,
+    defaultProfileDir: state.profile.defaultDir,
+    availableAccounts: accounts.names,
+    availableAccountCount: accounts.count,
+    accountApplies: state.profile.applies,
+    proxySource: state.proxy.source,
+    proxyConfigured: state.proxy.configured,
   };
 }
 
@@ -542,7 +732,7 @@ function statusPayload() {
   const counts = state.toolsListed ? toolCounts() : null;
   const now = Date.now();
   const dependencyHint = systemDependencyHint();
-  const lastError =
+  const rawLastError =
     dependencyHint === null
       ? state.lastError
       : state.lastError === null
@@ -550,6 +740,7 @@ function statusPayload() {
         : state.lastError.includes(dependencyHint)
           ? state.lastError
           : `${state.lastError} ${dependencyHint}`;
+  const lastError = rawLastError === null ? null : redactSecrets(rawLastError);
   const startupMs =
     state.spawnedAt === null || state.initializeAnsweredAt === null
       ? null
@@ -579,7 +770,7 @@ function statusPayload() {
     metaToolCount: META_TOOL_NAMES.size,
     brokerVersion: BROKER_VERSION,
     howToChangeEngine: ENGINE_CHANGE_HELP,
-    backendStderrTail: state.stderrTail.trim() === '' ? null : state.stderrTail.slice(-1500),
+    backendStderrTail: state.stderrTail.trim() === '' ? null : redactSecrets(state.stderrTail.slice(-1500)),
     // A manifest that declares a runtime (an attach endpoint and profile id)
     // names its own extra status keys here. Other engines add nothing.
     ...runtimeStatusFields(state.engine, process.env),
@@ -589,6 +780,8 @@ function statusPayload() {
           surfaceError: state.nativeSurfaceError,
         }
       : {}),
+    account: state.profile.account,
+    profileDir: state.profile.dir,
   };
 }
 
@@ -1008,11 +1201,25 @@ function startBackend() {
     `engine=${state.engineId} source=${state.engineSource} contract=${state.engine.contract} ` +
       `profile=${state.toolProfile} profileSource=${state.toolProfileSource} launcher=${path.basename(launcher)}`,
   );
+  // Only an active account/profile or a proxy-file decision adds a line, so the
+  // default start-up log stays byte-identical.
+  if (state.profile.source === 'account' || state.proxy.source !== 'none') {
+    log(
+      `account=${state.profile.account ?? 'none'} profileSource=${state.profile.source ?? 'none'} ` +
+        `proxySource=${state.proxy.source} profileDir=${state.profile.dir ?? 'none'}`,
+    );
+  }
   const child = spawn(process.execPath, [launcher], {
     stdio: ['pipe', 'pipe', 'pipe'],
     // The manifest is the source of truth for the selected engine; keep the
-    // legacy backend variable in sync even if only STEALTH_ENGINE was set.
-    env: { ...process.env, PLAYWRIGHT_MCP_BROWSER_ENGINE: state.engineId },
+    // legacy backend variable in sync even if only STEALTH_ENGINE was set. The
+    // account profile and the file proxy are added only when they were resolved;
+    // otherwise the environment is the base plus that one variable.
+    env: backendEnvironment(process.env, {
+      engineId: state.engineId,
+      profileDir: state.profile.dir,
+      proxyServer: state.proxy.appliedProxy,
+    }),
     windowsHide: true,
     detached: false,
   });
@@ -1036,8 +1243,12 @@ function startBackend() {
   });
 
   child.stderr.on('data', (chunk) => {
-    process.stderr.write(chunk);
-    state.stderrTail = `${state.stderrTail}${chunk.toString('utf8')}`.slice(-4000);
+    // A credential-bearing proxy URL must never reach the log or a status
+    // payload. Ordinary lines are unchanged; redaction only rewrites a
+    // scheme://userinfo@host pattern.
+    const text = redactSecrets(chunk.toString('utf8'));
+    process.stderr.write(text);
+    state.stderrTail = `${state.stderrTail}${text}`.slice(-4000);
   });
 
   child.stdin.on('error', (error) => {

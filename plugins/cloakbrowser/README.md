@@ -139,13 +139,58 @@ Values live in Claude Code's plugin configuration, not in this repository. Non-s
 | Humanised preset | `default` | `careful` is slower and more deliberate |
 | Release channel | `stable` | `preview` requires a Pro licence |
 | GeoIP proxy match | `false` | Aligns timezone and locale to the proxy exit; enable with a proxy |
-| Profile directory | empty → `<plugin data>/profiles/default` | Persistent cookies, logins and fingerprint seed. One directory per account |
+| Account profile | empty → the plugin's default profile | One profile per account: `profiles/<engine>/<name>`, and `default` reaches the existing `profiles/default`. Ignored when Profile directory is set. Restart after changing it. See [Accounts](#accounts) |
+| Profile directory | empty → `<plugin data>/profiles/default` | Explicit profile path; wins over Account profile. Persistent cookies, logins and fingerprint seed. One directory per account |
 | Proxy server / bypass | empty | Sticky proxy and hosts that skip it |
 | Licence key | empty | CloakBrowser Pro key; the free tier allows one concurrent session |
 | Engine version pin | empty | Pin a specific Chromium build; empty follows the stable channel |
 | Artifacts directory | empty | Where screenshots, traces and session files are written |
 
 The launcher drops empty optional values before starting the server, so leaving a directory or proxy blank behaves as "not configured" rather than as an empty path.
+
+## Accounts
+
+One browser profile per account. Set **Account profile** to a name such as `alice`; the broker resolves it to a directory under Claude Code's plugin data directory and starts the engine with it. With both Account profile and Profile directory empty, nothing changes: the plugin uses `profiles/default` exactly as before.
+
+| Account / setting | Effective profile directory |
+|---|---|
+| empty, `profile_dir` empty | `<plugin data>/profiles/default` |
+| `default` | `<plugin data>/profiles/default` — the profile you already have |
+| `alice`, engine `cloak` | `<plugin data>/profiles/cloak/alice` |
+| `alice`, engine `playwright` | `<plugin data>/profiles/playwright/alice` |
+| `alice`, engine `camoufox` | `<plugin data>/profiles/camoufox/alice` |
+| `profile_dir` set | that path, unchanged; Account profile is ignored |
+
+- **Names:** 1–64 characters, starting with a letter or digit, then letters, digits, `.`, `_` or `-`. No trailing dot, no slash, no Windows device name (`CON`, `NUL`, `COM1`, …). An invalid name is a start-up error: no browser starts and `browser_engine_status.lastError` carries the exact reason. The name is validated before any path is built, so it can never escape the profiles directory.
+- **`camoufox-native` and `kameleo` do not use account profiles.** Their manifests ignore `profile_dir`, so `browser_capabilities.accountApplies` is `false`; use `camoufox_profile` for the native engine, and Kameleo's own profile for the attach engine.
+- **One account at a time.** The plugin configuration holds one value per key, so one plugin instance runs one account. Changing Account profile, Profile directory or the proxy takes effect when the MCP server restarts — restart Claude Code. There is no runtime account switch. Two Claude Code windows share the same configuration and therefore the same account.
+- **Visibility.** `browser_capabilities` reports `account`, `profileDir`, `profileSource` (`profile_dir`, `account`, `engine`, `default`), `defaultProfileDir`, `availableAccounts` (at most 100 names), `availableAccountCount` and `accountApplies`. `browser_engine_status` adds `account` and `profileDir`. The broker creates the account directory; it never copies, renames or deletes a profile.
+- **One profile per account, always.** Two identities in one profile overwrite each other's cookies and make the account history incoherent. Windows is case-insensitive, so `Alice` and `alice` are the same directory; the resolved path in `browser_capabilities` makes that visible.
+- **Concurrency.** The bridge refuses a second server on the same profile directory (`Persistent profile is already active: <dir>`), and the CloakBrowser free tier allows **one concurrent browser session**. A second session is expected to fail at the engine; the plugin adds no account counter. A Pro licence is the supported path for concurrent sessions.
+- See [Sign-in](#sign-in) for the manual, headed login each account needs.
+
+### Per-account proxy file
+
+A proxy can be sticky per account with a file beside the profile instead of the global **Proxy server** setting:
+
+```
+<plugin data>/profiles/cloak/alice.proxy        beside profiles/cloak/alice/
+<plugin data>/profiles/default.proxy            beside profiles/default/
+<plugin data>/profiles/camoufox/alice.proxy     beside profiles/camoufox/alice/
+```
+
+- **Proxy server set:** it wins, and one line in the MCP log says the file is ignored. **Proxy server empty:** the file is read for the active account, or beside the default profile when no account is set (only if the file exists). No file means a direct connection.
+- The file is one line, no comments: `http://user:pass@host:port`, `https://…`, `socks4://…` or `socks5://…`. A missing scheme means `http://`. Percent-encode `@`, `:`, `/` inside credentials. The value is passed to the engine unchanged.
+- A file that cannot be read, is not valid UTF-8, has more than one non-empty line, or does not parse as a proxy URL is a **start-up error**: the browser does not start and the error names the file, never its contents. A bad file never falls back to a silent direct connection.
+- **The file is a credential in plaintext.** On POSIX run `chmod 600 <file>`; on Windows it inherits the user-profile ACL (the plugin does not change permissions). Keep it out of the repository, shared backups, PRs and screenshots; back it up like a password. The plugin only reads it, never writes it.
+- The URL is never logged and never returned: `browser_capabilities` reports `proxySource` (`setting`, `account-file`, `none` or `error`) and `proxyConfigured` (boolean). Credential-bearing URLs in relayed backend log lines are masked as `scheme://***@host`.
+
+### Backup, rename and delete (manual)
+
+- **Backup:** close Claude Code (at least the browser), then copy the account directory and its `.proxy` file. A live Chromium profile contains lock files and can be copied in an inconsistent state. `.cloakbrowser-seed` sits inside the directory; keeping it keeps the fingerprint.
+- **Rename:** close the browser, rename the directory and the `.proxy` file, change Account profile (or Profile directory), and restart. Nothing is migrated for you.
+- **Delete:** close the browser, delete the directory and the `.proxy` file. Irreversible. There is no delete in the plugin.
+- To switch accounts: `/plugin` → Configure → set Account profile → restart Claude Code.
 
 ## Engines and the broker
 
@@ -235,11 +280,22 @@ Total surface for `cloak` at the default profile: 76 tools = 72 backend `browser
 
 ## Sign-in
 
-Sign in to Google or any site manually, in the headed window, with the persistent profile. Automate only the logged-in session. Do not automate the Google credential form.
+Sign in to Google or any site manually, in the headed window, with the persistent profile. Automate only the logged-in session. **Never automate the Google credential form** — or any site's password, recovery, 2FA, passkey or CAPTCHA step.
+
+Per account:
+
+1. Set **Account profile** to the account name and restart Claude Code.
+2. Ask the agent to open the site's sign-in page in the headed window (`headless` stays off).
+3. The agent stops at the credential form and says it is waiting.
+4. Type the email, password and any 2FA or CAPTCHA in that window yourself and finish the login.
+5. The agent confirms the signed-in state by reading the page (name or avatar), never by reading secrets.
+6. The session is stored in that account's profile directory and reused on the next start.
+
+Never automated, for any account or engine: the credential form, password entry, account recovery, 2FA or passkey prompts, CAPTCHA or bot challenges; account creation; copying cookies, storage state or a profile between accounts to skip a login. Log in through the same proxy and approximate location the account normally uses — a sudden geo change is an anomaly signal to the platform. One account per profile, always.
 
 ## Version and updates
 
-The plugin is version 2.6.0. It pins `cloakbrowser-mcp@1.15.1`, runs it on `patchright@1.64.1`, and pins the engine wrapper to `0.6.3`. The Camoufox engine pins `camoufox-playwright-mcp==0.1.5`, the managed `uv` `0.13.5`, CPython `3.13.17` and browser build `v156.0.1-beta.39`. The Camoufox native engine provisions `mcp-camoufox==0.4.5` from PyPI with the same uv/Python pins and browser build `156.0.1-beta.39` in `.mcp.json` (`CAMOUFOX_NATIVE_PACKAGE`, `CAMOUFOX_NATIVE_BROWSER_BUILD`). The Kameleo engine has no package pin of its own: it reuses the `cloakbrowser-mcp@1.15.1` runtime and starts its pinned `@playwright/mcp` CLI with `--cdp-endpoint`. The uv version, its per-platform SHA-256 values and the Python pin live in `lib/provision.mjs`; the package pins live in `.mcp.json` or the launcher. The plugin version moves independently of the MCP pins.
+The plugin is version 2.7.0. It pins `cloakbrowser-mcp@1.15.1`, runs it on `patchright@1.64.1`, and pins the engine wrapper to `0.6.3`. The Camoufox engine pins `camoufox-playwright-mcp==0.1.5`, the managed `uv` `0.13.5`, CPython `3.13.17` and browser build `v156.0.1-beta.39`. The Camoufox native engine provisions `mcp-camoufox==0.4.5` from PyPI with the same uv/Python pins and browser build `156.0.1-beta.39` in `.mcp.json` (`CAMOUFOX_NATIVE_PACKAGE`, `CAMOUFOX_NATIVE_BROWSER_BUILD`). The Kameleo engine has no package pin of its own: it reuses the `cloakbrowser-mcp@1.15.1` runtime and starts its pinned `@playwright/mcp` CLI with `--cdp-endpoint`. The uv version, its per-platform SHA-256 values and the Python pin live in `lib/provision.mjs`; the package pins live in `.mcp.json` or the launcher. The plugin version moves independently of the MCP pins.
 
 ## Tool groups and per-tool control
 

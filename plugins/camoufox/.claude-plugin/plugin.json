@@ -1,7 +1,7 @@
 {
   "name": "camoufox",
   "displayName": "Camoufox",
-  "version": "2.6.0",
+  "version": "2.7.0",
   "description": "Camoufox stealth Firefox through the Playwright MCP tool contract. Provisions a pinned uv, a managed Python and the engine venv automatically; the pinned Camoufox browser build downloads on first use. Portable profile by default; no CDP.",
   "author": {
     "name": "FiredMosquito831"
@@ -69,6 +69,12 @@
       "type": "string",
       "title": "Disabled tools",
       "description": "Comma-separated tool names to hide from the agent and reject when called, for example browser_start_video,browser_take_screenshot. Leave empty to expose the selected profile unchanged.",
+      "default": ""
+    },
+    "account": {
+      "type": "string",
+      "title": "Account profile",
+      "description": "Browser profile name for one account. Each name keeps its own cookies, logins and fingerprint seed under Claude Code's plugin data directory (profiles/camoufox/<name>). Leave empty to use this plugin's default profile (profiles/camoufox/default). Letters, digits, '.', '_' and '-' only, starting with a letter or digit, up to 64 characters, no trailing dot or space. Ignored when Persistent profile directory is set. Changing it takes effect when the Claude Code MCP server restarts; sign in to each account manually in the headed window.",
       "default": ""
     },
     "profile_dir": {
