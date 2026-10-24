@@ -1,8 +1,9 @@
 {
   "cloakbrowser": {
     "command": "node",
-    "args": ["${CLAUDE_PLUGIN_ROOT}/proxy.mjs"],
+    "args": ["${CLAUDE_PLUGIN_ROOT}/broker.mjs"],
     "env": {
+      "STEALTH_ENGINE": "${user_config.browser_engine}",
       "CLOAK_PLAYWRIGHT_MCP_PACKAGE": "cloakbrowser-mcp@1.15.1",
       "CLOAK_TOOL_GROUP_VISION": "${user_config.tools_vision}",
       "CLOAK_TOOL_GROUP_PDF": "${user_config.tools_pdf}",

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "playwright",
+  "label": "Playwright Chromium",
+  "transport": "launch",
+  "contract": "playwright-mcp",
+  "defaultToolProfile": "full",
+  "toolSupport": {
+    "*": "full"
+  },
+  "notes": "Stock Playwright Chromium through cloakbrowser-mcp. Same 74 backend tools as cloak (72 browser plus 2 local diagnostics), but the stealth patches are absent because PLAYWRIGHT_MCP_BROWSER_ENGINE selects the stock browser."
+}
