@@ -142,6 +142,9 @@ const profileNames = registry.availableProfileNames(profiles);
 const cloak = JSON.parse(readFileSync(path.join(enginesDir, 'cloak.json'), 'utf8')) as Manifest;
 const playwright = JSON.parse(readFileSync(path.join(enginesDir, 'playwright.json'), 'utf8')) as Manifest;
 const camoufox = JSON.parse(readFileSync(path.join(enginesDir, 'camoufox.json'), 'utf8')) as Manifest;
+const camoufoxNative = JSON.parse(
+  readFileSync(path.join(enginesDir, 'camoufox-native.json'), 'utf8'),
+) as Manifest;
 
 const tempRoots: string[] = [];
 
@@ -238,12 +241,17 @@ describe('shared profiles.json', () => {
 describe('engine manifests', () => {
   it('discovers every shipped engine in deterministic file-name order', () => {
     const scan = registry.scanEngines(enginesDir, profileNames);
-    expect(scan.ids).toEqual(['camoufox', 'cloak', 'playwright']);
+    expect(scan.ids).toEqual(['camoufox-native', 'camoufox', 'cloak', 'playwright']);
     expect(scan.warnings).toEqual([]);
-    expect(scan.entries.map((entry) => entry.id)).toEqual(['camoufox', 'cloak', 'playwright']);
+    expect(scan.entries.map((entry) => entry.id)).toEqual([
+      'camoufox-native',
+      'camoufox',
+      'cloak',
+      'playwright',
+    ]);
   });
 
-  it.each([cloak, playwright, camoufox])(
+  it.each([cloak, playwright, camoufox, camoufoxNative])(
     'validates $id and keeps its id equal to the file name',
     (manifest) => {
       expect(registry.validateManifest(manifest, manifest.id, profileNames)).toBeNull();
@@ -259,21 +267,42 @@ describe('engine manifests', () => {
     expect(camoufox.defaultToolProfile).toBe('portable');
   });
 
-  it.each([cloak, playwright, camoufox])('uses only allowed support values ($id)', (manifest) => {
-    const allowed = new Set(['full', 'partial', 'none', 'unknown']);
-    for (const support of Object.values(manifest.toolSupport)) {
-      expect(allowed.has(support)).toBe(true);
-    }
-    for (const note of Object.values(manifest.toolSupportNotes ?? {})) {
-      expect(note.trim()).not.toBe('');
-    }
-    expect(manifest.notes).toBeTypeOf('string');
-  });
+  it.each([cloak, playwright, camoufox, camoufoxNative])(
+    'uses only allowed support values ($id)',
+    (manifest) => {
+      const allowed = new Set(['full', 'partial', 'none', 'unknown']);
+      for (const support of Object.values(manifest.toolSupport)) {
+        expect(allowed.has(support)).toBe(true);
+      }
+      for (const note of Object.values(manifest.toolSupportNotes ?? {})) {
+        expect(note.trim()).not.toBe('');
+      }
+      expect(manifest.notes).toBeTypeOf('string');
+    },
+  );
 
   it.each([cloak, playwright, camoufox])('exposes every portable tool ($id)', (manifest) => {
     expect(registry.findPortableGaps(manifest, profiles)).toEqual([]);
     for (const toolName of PORTABLE_TOOLS) {
       expect(registry.manifestSupport(manifest, toolName)).not.toBe('none');
+    }
+  });
+
+  it('reports the native engine portable gaps as none instead of hiding them', () => {
+    expect(registry.findPortableGaps(camoufoxNative, profiles)).toEqual([
+      'browser_cookie_clear',
+      'browser_cookie_delete',
+      'browser_cookie_get',
+      'browser_cookie_list',
+      'browser_cookie_set',
+      'browser_drag',
+      'browser_file_upload',
+      'browser_hover',
+      'browser_network_request',
+      'browser_wait_for',
+    ]);
+    for (const toolName of registry.findPortableGaps(camoufoxNative, profiles)) {
+      expect(camoufoxNative.toolSupportNotes?.[toolName]?.trim()).not.toBe('');
     }
   });
 
@@ -448,7 +477,7 @@ describe('manifest launcher, requirements and ignored settings', () => {
   });
 
   it('accepts the shipped engines against the real plugin root', () => {
-    for (const manifest of [cloak, playwright, camoufox]) {
+    for (const manifest of [cloak, playwright, camoufox, camoufoxNative]) {
       expect(registry.validateManifest(manifest, manifest.id, profileNames, pluginRoot)).toBeNull();
     }
   });
@@ -576,7 +605,12 @@ describe('generated browser_engine options', () => {
     const repaired = JSON.parse(readFileSync(copiedManifest, 'utf8')) as {
       userConfig: { browser_engine: { options: string[] } };
     };
-    expect(repaired.userConfig.browser_engine.options).toEqual(['camoufox', 'cloak', 'playwright']);
+    expect(repaired.userConfig.browser_engine.options).toEqual([
+      'camoufox-native',
+      'camoufox',
+      'cloak',
+      'playwright',
+    ]);
 
     const recheck = spawnSync(process.execPath, [script, '--check'], { cwd: repoRoot, encoding: 'utf8' });
     expect(recheck.status).toBe(0);

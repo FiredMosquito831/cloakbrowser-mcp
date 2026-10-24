@@ -1,0 +1,201 @@
+{
+  "schemaVersion": 1,
+  "id": "camoufox-native",
+  "label": "Camoufox native (mcp-camoufox)",
+  "transport": "launch",
+  "contract": "native-mcp",
+  "defaultToolProfile": "portable",
+  "launch": {
+    "launcher": "launch-camoufox-native.mjs"
+  },
+  "contractSchemas": "contracts/playwright-canonical.json",
+  "requirements": [
+    "Python 3.12+ on PATH (mcp-camoufox runs on it)",
+    "mcp-camoufox==0.4.5 installed by the user and on PATH: uv tool install mcp-camoufox==0.4.5 (or pipx install mcp-camoufox==0.4.5). The plugin does not bundle or download it.",
+    "mcp-camoufox licence: FSL-1.1-MIT (source-available). Installing it is the user's decision; the plugin only starts it.",
+    "Camoufox browser build 156.0.1-beta.39 (pinned; the app downloads it on the first tool call when it is absent, into Camoufox's machine-wide cache)"
+  ],
+  "ignoredSettings": [
+    "humanize",
+    "human_preset",
+    "release_channel",
+    "geoip_proxy_match",
+    "profile_dir",
+    "proxy_server",
+    "proxy_bypass",
+    "licence_key",
+    "engine_version",
+    "output_dir"
+  ],
+  "profileArgument": {
+    "name": "profile",
+    "env": "CAMOUFOX_PROFILE",
+    "setting": "camoufox_profile",
+    "default": "default",
+    "except": ["list_sessions"]
+  },
+  "nativePrefix": "camoufox_native_",
+  "toolAliases": [
+    {
+      "canonical": "browser_navigate",
+      "native": "navigate",
+      "support": "full",
+      "args": { "url": "url" }
+    },
+    {
+      "canonical": "browser_navigate_back",
+      "native": "go_back",
+      "support": "full"
+    },
+    {
+      "canonical": "browser_snapshot",
+      "native": "snapshot",
+      "support": "partial",
+      "reject": ["target", "filename", "depth", "boxes"]
+    },
+    {
+      "canonical": "browser_click",
+      "native": "click",
+      "support": "partial",
+      "args": { "target": "uid", "doubleClick": "double_click" },
+      "ignore": ["element"],
+      "reject": ["button", "modifiers"]
+    },
+    {
+      "canonical": "browser_type",
+      "native": "fill",
+      "support": "partial",
+      "args": { "target": "uid", "text": "value" },
+      "ignore": ["element"],
+      "reject": ["slowly", "submit"]
+    },
+    {
+      "canonical": "browser_select_option",
+      "native": "fill",
+      "support": "partial",
+      "args": { "target": "uid" },
+      "ignore": ["element"],
+      "transform": "single-select-value"
+    },
+    {
+      "canonical": "browser_fill_form",
+      "native": "fill_form",
+      "support": "partial",
+      "transform": "form-fields"
+    },
+    {
+      "canonical": "browser_press_key",
+      "native": "press_key",
+      "support": "full",
+      "args": { "key": "key" }
+    },
+    {
+      "canonical": "browser_find",
+      "native": "find",
+      "support": "partial",
+      "args": { "text": "text" },
+      "reject": ["regex", "filename"]
+    },
+    {
+      "canonical": "browser_evaluate",
+      "native": "evaluate",
+      "support": "partial",
+      "args": { "function": "script" },
+      "ignore": ["element"],
+      "transform": "evaluate-function",
+      "reject": ["filename"]
+    },
+    {
+      "canonical": "browser_take_screenshot",
+      "native": "screenshot",
+      "support": "partial",
+      "args": { "target": "uid", "fullPage": "full_page" },
+      "ignore": ["element"],
+      "reject": ["type", "filename", "scale"]
+    },
+    {
+      "canonical": "browser_tabs",
+      "support": "partial",
+      "dispatch": {
+        "list": "list_pages",
+        "new": "new_page",
+        "close": "close_page",
+        "select": "select_page"
+      },
+      "send": {
+        "list": [],
+        "new": ["url"],
+        "close": ["index"],
+        "select": ["index"]
+      },
+      "required": {
+        "close": ["index"],
+        "select": ["index"]
+      },
+      "args": { "index": "page_idx", "url": "url" }
+    },
+    {
+      "canonical": "browser_network_requests",
+      "native": "list_network_requests",
+      "support": "partial",
+      "reject": ["static", "filter", "filename"]
+    },
+    {
+      "canonical": "browser_console_messages",
+      "native": "list_console_messages",
+      "support": "partial",
+      "args": { "level": "levels", "all": "include_preserved" },
+      "transform": "console-level",
+      "reject": ["filename"]
+    },
+    {
+      "canonical": "browser_handle_dialog",
+      "native": "handle_dialog",
+      "support": "full",
+      "args": { "promptText": "prompt_text" },
+      "transform": "accept-to-action"
+    },
+    {
+      "canonical": "browser_close",
+      "native": "close_session",
+      "support": "full"
+    }
+  ],
+  "toolSupport": {
+    "get_element": "full",
+    "get_html": "full",
+    "get_network_request": "full",
+    "scroll": "full",
+    "upload_file": "full",
+    "wait_for": "full",
+    "click_at": "full",
+    "reload": "full",
+    "list_sessions": "full",
+    "browser_hover": "none",
+    "browser_drag": "none",
+    "browser_file_upload": "none",
+    "browser_wait_for": "none",
+    "browser_network_request": "none",
+    "browser_cookie_list": "none",
+    "browser_cookie_get": "none",
+    "browser_cookie_set": "none",
+    "browser_cookie_delete": "none",
+    "browser_cookie_clear": "none"
+  },
+  "toolSupportNotes": {
+    "browser_hover": "mcp-camoufox has no hover tool; it exposes click and click_at only.",
+    "browser_drag": "mcp-camoufox has no drag tool.",
+    "browser_file_upload": "The canonical tool answers a pending file chooser; mcp-camoufox never subscribes to filechooser. Use camoufox_native_upload_file with a uid or selector.",
+    "browser_wait_for": "Canonical waits for text or time; the native wait_for waits for load, selector, network_idle or a predicate. Use camoufox_native_wait_for.",
+    "browser_network_request": "Canonical addresses a request by its 1-based index from browser_network_requests; the native tool needs a reqid. Use camoufox_native_get_network_request.",
+    "browser_cookie_list": "mcp-camoufox has no cookie tools; document.cookie cannot see HttpOnly cookies and is not an equivalent.",
+    "browser_cookie_get": "mcp-camoufox has no cookie tools.",
+    "browser_cookie_set": "mcp-camoufox has no cookie tools.",
+    "browser_cookie_delete": "mcp-camoufox has no cookie tools.",
+    "browser_cookie_clear": "mcp-camoufox has no cookie tools."
+  },
+  "capabilities": {
+    "groupSwitchesApply": false
+  },
+  "notes": "Camoufox native via the user-installed PyPI mcp-camoufox 0.4.5 (27 tools; not the npm mcp-camoufox project, which is a different 133-tool package). The broker renames 16 honest aliases to canonical browser_* names and exposes 9 native-only tools under camoufox_native_. Portable (default) exposes 14 canonical + 2 meta = 16 tools; full exposes 16 canonical + 9 prefixed = 25, plus 2 meta = 27. Ten portable verbs are absent with reasons. The daemon is fixed off, the browser build is pinned in the launcher, and the app downloads the browser on the first tool call. The package is not bundled or redistributed (FSL-1.1-MIT)."
+}
