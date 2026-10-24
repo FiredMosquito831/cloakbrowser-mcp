@@ -190,6 +190,9 @@ function startBroker(options: {
       KAMELEO_PROFILE_ID: options.profileId,
       KAMELEO_ENDPOINT: options.endpoint ?? '',
       CLAUDE_PLUGIN_DATA: options.dataDir,
+      // Keep the launcher's runtime identity deterministic even if the test
+      // process inherited a different pin from the developer's environment.
+      CLOAK_PLAYWRIGHT_MCP_PACKAGE: 'cloakbrowser-mcp@1.15.1',
     },
     windowsHide: true,
   });
