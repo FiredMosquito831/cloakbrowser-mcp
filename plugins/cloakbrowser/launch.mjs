@@ -25,6 +25,12 @@ const EMPTY_OPTIONAL_VARS = [
 
 const DEFAULT_PACKAGE = 'cloakbrowser-mcp@1.15.1';
 
+const TOOLS_PROFILES = {
+  minimal: '',
+  standard: 'vision,pdf,devtools',
+  full: 'vision,pdf,devtools,storage,network,testing,config',
+};
+
 function buildChildEnv(source) {
   const env = { ...source };
   for (const name of EMPTY_OPTIONAL_VARS) {
@@ -62,6 +68,24 @@ function applyDefaultProfile(env) {
   const profile = path.join(dataDir(env), 'profiles', 'default');
   mkdirSync(profile, { recursive: true });
   env.PLAYWRIGHT_MCP_USER_DATA_DIR = profile;
+}
+
+function applyToolsProfile(env) {
+  const requested = (env.CLOAK_TOOLS_PROFILE ?? 'full').trim().toLowerCase();
+  if (requested === 'custom') {
+    return;
+  }
+  const caps = TOOLS_PROFILES[requested];
+  if (caps === undefined) {
+    process.stderr.write(`[cloakbrowser] unknown tool profile "${requested}"; using full\n`);
+    env.PLAYWRIGHT_MCP_CAPS = TOOLS_PROFILES.full;
+    return;
+  }
+  if (caps === '') {
+    delete env.PLAYWRIGHT_MCP_CAPS;
+  } else {
+    env.PLAYWRIGHT_MCP_CAPS = caps;
+  }
 }
 
 function runtimeDir(env) {
@@ -169,6 +193,7 @@ function ensureRuntime(env, spec) {
 function main() {
   const env = buildChildEnv(process.env);
   applyDefaultProfile(env);
+  applyToolsProfile(env);
   const packageSpec = resolvePackage(env);
   const isWindows = process.platform === 'win32';
 
