@@ -229,7 +229,7 @@ jobs:
           if [ -n "$number" ] && [ "$number" != "null" ]; then
             gh api -X PATCH "repos/$GITHUB_REPOSITORY/pulls/$number" -f title="$PR_TITLE" -f body="$body" >/dev/null
           else
-            number="$(gh api -X POST "repos/$GITHUB_REPOSITORY/pulls" -f title="$PR_TITLE" -f head="$SYNC_BRANCH" -f base=main -f body="$body" -f maintainer_can_modify=true --jq '.number')"
+            number="$(gh api -X POST "repos/$GITHUB_REPOSITORY/pulls" -f title="$PR_TITLE" -f head="$SYNC_BRANCH" -f base=main -f body="$body" -F maintainer_can_modify=true --jq '.number')"
             gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$number/assignees" -f "assignees[]=$SYNC_ASSIGNEE" >/dev/null || true
           fi
           echo "number=$number" >> "$GITHUB_OUTPUT"
