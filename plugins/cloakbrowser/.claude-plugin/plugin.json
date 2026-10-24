@@ -26,7 +26,7 @@
     "tool_profile": {
       "type": "string",
       "title": "Tool profile",
-      "description": "Which tools the selected engine exposes. default follows the engine manifest: full for the engines shipped today (the current 76-tool surface); portable for engines added later (a shared 24-tool core). portable hides engine-specific and extra tools; full exposes everything the engine supports. The seven tool groups and disabled_tools still apply. Restart Claude Code after changing it.",
+      "description": "Which tools the selected engine exposes. default follows the engine manifest: full for cloak and playwright (the current 76-tool surface); portable for camoufox (a shared 24-tool core). portable hides engine-specific and extra tools; full exposes everything the engine supports. The seven tool groups and disabled_tools still apply. Restart Claude Code after changing it.",
       "options": ["default", "portable", "full"],
       "default": "default"
     },
