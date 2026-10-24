@@ -1,7 +1,7 @@
 {
   "name": "cloakbrowser",
   "displayName": "CloakBrowser",
-  "version": "2.6.0",
+  "version": "2.7.0",
   "description": "CloakBrowser stealth Chromium through the Playwright MCP tool contract, via cloakbrowser-mcp.",
   "author": {
     "name": "FiredMosquito831"
@@ -127,6 +127,12 @@
       "title": "Match timezone and locale to the proxy",
       "description": "Resolve the proxy exit location and align the browser timezone and locale to it. Enable this together with a proxy server.",
       "default": false
+    },
+    "account": {
+      "type": "string",
+      "title": "Account profile",
+      "description": "Browser profile name for one account. Each name keeps its own cookies, logins and fingerprint seed under Claude Code's plugin data directory (profiles/<engine>/<name>). Leave empty to use the plugin's default profile (profiles/default). Letters, digits, '.', '_' and '-' only, starting with a letter or digit, up to 64 characters, no trailing dot or space. Ignored when Persistent profile directory is set. Changing it takes effect when the Claude Code MCP server restarts; sign in to each account manually in the headed window.",
+      "default": ""
     },
     "profile_dir": {
       "type": "string",

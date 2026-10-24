@@ -5,6 +5,7 @@
     "env": {
       "STEALTH_ENGINE": "${user_config.browser_engine}",
       "STEALTH_TOOL_PROFILE": "${user_config.tool_profile}",
+      "STEALTH_ACCOUNT": "${user_config.account}",
       "CLOAK_PLAYWRIGHT_MCP_PACKAGE": "cloakbrowser-mcp@1.15.1",
       "CAMOUFOX_MCP_PACKAGE": "camoufox-playwright-mcp==0.1.5",
       "CAMOUFOX_BROWSER_BUILD": "v156.0.1-beta.39",

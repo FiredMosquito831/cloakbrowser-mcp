@@ -75,11 +75,67 @@ Only the official uv release (SHA-256 verified against the checksums in `lib/pro
 | Tool profile | `default` | `default` follows the engine manifest (`portable` for Camoufox). `portable` exposes the shared 24-tool browser core; `full` exposes everything this engine supports. The seven tool groups and `disabled_tools` still apply. Restart Claude Code after changing it |
 | Tool groups | all on | Seven checkboxes: vision, pdf, devtools, storage, network, testing, config. `tools_pdf` is kept for cross-engine configuration; this engine never exposes `browser_pdf_save` |
 | Disabled tools | empty | Comma-separated exposed names hidden from `tools/list` and rejected on call |
-| Profile directory | empty → `<plugin data>/profiles/camoufox/default` | Persistent cookies, logins and fingerprint seed. One directory per account |
+| Account profile | empty → this plugin's default profile | One profile per account: `profiles/camoufox/<name>`, and `default` reaches the existing `profiles/camoufox/default`. Ignored when Profile directory is set. Restart after changing it. See [Accounts](#accounts) |
+| Profile directory | empty → `<plugin data>/profiles/camoufox/default` | Explicit profile path; wins over Account profile. Persistent cookies, logins and fingerprint seed. One directory per account |
 | Proxy server / bypass | empty | Sticky proxy and hosts that skip it |
 | Artifacts directory | empty | Where screenshots, traces and session files are written |
 
 The launcher drops empty optional values before starting the server, so leaving a directory or proxy blank behaves as "not configured" rather than as an empty path.
+
+## Accounts
+
+One browser profile per account. Set **Account profile** to a name such as `alice`; the broker resolves it to a directory under Claude Code's plugin data directory and starts Camoufox with it. With both Account profile and Profile directory empty, nothing changes: the plugin uses `profiles/camoufox/default` exactly as before.
+
+| Account / setting | Effective profile directory |
+|---|---|
+| empty, `profile_dir` empty | `<plugin data>/profiles/camoufox/default` |
+| `default` | `<plugin data>/profiles/camoufox/default` — the profile you already have |
+| `alice` | `<plugin data>/profiles/camoufox/alice` |
+| `profile_dir` set | that path, unchanged; Account profile is ignored |
+
+- **Names:** 1–64 characters, starting with a letter or digit, then letters, digits, `.`, `_` or `-`. No trailing dot, no slash, no Windows device name (`CON`, `NUL`, `COM1`, …). An invalid name is a start-up error: no browser starts and `browser_engine_status.lastError` carries the exact reason. The name is validated before any path is built.
+- **One account at a time.** The plugin configuration holds one value per key, so one plugin instance runs one account. Changing Account profile, Profile directory or the proxy takes effect when the MCP server restarts — restart Claude Code. There is no runtime account switch.
+- **Visibility.** `browser_capabilities` reports `account`, `profileDir`, `profileSource` (`profile_dir`, `account`, `default`), `defaultProfileDir`, `availableAccounts` (at most 100 names), `availableAccountCount` and `accountApplies`. `browser_engine_status` adds `account` and `profileDir`. The broker creates the account directory; it never copies, renames or deletes a profile.
+- **One profile per account, always.** Two identities in one profile overwrite each other's cookies. Windows is case-insensitive, so `Alice` and `alice` are the same directory.
+- **Concurrency.** Camoufox locks a profile while a session uses it, so a second session on the same directory is refused by the engine. A second session on a different profile runs a second browser (each has its own process). The CloakBrowser free-tier one-session limit does **not** apply to this engine; there is no CloakBrowser binary here.
+- See [Sign-in](#sign-in) for the manual, headed login each account needs.
+
+### Per-account proxy file
+
+A proxy can be sticky per account with a file beside the profile instead of the global **Proxy server** setting:
+
+```
+<plugin data>/profiles/camoufox/alice.proxy     beside profiles/camoufox/alice/
+<plugin data>/profiles/camoufox/default.proxy   beside profiles/camoufox/default/
+```
+
+- **Proxy server set:** it wins, and one line in the MCP log says the file is ignored. **Proxy server empty:** the file is read for the active account, or beside the default profile when no account is set (only if the file exists). No file means a direct connection.
+- The file is one line, no comments: `http://user:pass@host:port`, `https://…`, `socks4://…` or `socks5://…`. A missing scheme means `http://`. Percent-encode `@`, `:`, `/` inside credentials. The value is passed to the engine unchanged.
+- A file that cannot be read, is not valid UTF-8, has more than one non-empty line, or does not parse as a proxy URL is a **start-up error**: the browser does not start and the error names the file, never its contents. A bad file never falls back to a silent direct connection.
+- **The file is a credential in plaintext.** On POSIX run `chmod 600 <file>`; on Windows it inherits the user-profile ACL (the plugin does not change permissions). Keep it out of the repository, shared backups, PRs and screenshots; back it up like a password. The plugin only reads it, never writes it.
+- The URL is never logged and never returned: `browser_capabilities` reports `proxySource` (`setting`, `account-file`, `none` or `error`) and `proxyConfigured` (boolean). Credential-bearing URLs in relayed backend log lines are masked as `scheme://***@host`.
+
+### Backup, rename and delete (manual)
+
+- **Backup:** close Claude Code (at least the browser), then copy the account directory and its `.proxy` file. A live profile contains lock files and can be copied inconsistently. The fingerprint seed sits inside the directory; keeping it keeps the fingerprint.
+- **Rename:** close the browser, rename the directory and the `.proxy` file, change Account profile (or Profile directory), and restart. Nothing is migrated for you.
+- **Delete:** close the browser, delete the directory and the `.proxy` file. Irreversible. There is no delete in the plugin.
+- To switch accounts: `/plugin` → Configure → set Account profile → restart Claude Code.
+
+## Sign-in
+
+Sign in to Google or any site manually, in the headed window, with the persistent profile. Automate only the logged-in session. **Never automate the Google credential form** — or any site's password, recovery, 2FA, passkey or CAPTCHA step.
+
+Per account:
+
+1. Set **Account profile** to the account name and restart Claude Code.
+2. Ask the agent to open the site's sign-in page in the headed window (`headless` stays off).
+3. The agent stops at the credential form and says it is waiting.
+4. Type the email, password and any 2FA or CAPTCHA in that window yourself and finish the login.
+5. The agent confirms the signed-in state by reading the page (name or avatar), never by reading secrets.
+6. The session is stored in that account's profile directory and reused on the next start.
+
+Never automated, for any account: the credential form, password entry, account recovery, 2FA or passkey prompts, CAPTCHA or bot challenges; account creation; copying cookies, storage state or a profile between accounts to skip a login. One account per profile, always.
 
 Settings that the Camoufox engine cannot honour are **not declared**: `humanize`, `human_preset`, `release_channel`, `geoip_proxy_match`, `licence_key`, `engine_version`, `browser_engine`, `camoufox_profile`, `camoufox_data_dir`, `kameleo_profile_id` and `kameleo_endpoint`. `browser_capabilities.ignoredSettings` still reports the first six, because the shared manifest names them for the universal broker. CloakBrowser's humanised input, release channel, GeoIP proxy matching and licence do not exist in this engine.
 
@@ -99,7 +155,7 @@ The seven group switches shape the backend list before the profile and `disabled
 
 ## Profile and sessions
 
-With the profile setting empty, the plugin uses `<plugin data>/profiles/camoufox/default` inside its own `${CLAUDE_PLUGIN_DATA}` (for example `.../data/camoufox-cloakbrowser-mcp/profiles/camoufox/default`). That directory is separate from the universal plugin's profile; cookies and logins are not shared. The browser engine locks a profile while a session uses it, so do not point two running sessions at the same directory. One directory per account.
+With the profile setting empty, the plugin uses `<plugin data>/profiles/camoufox/default` inside its own `${CLAUDE_PLUGIN_DATA}` (for example `.../data/camoufox-cloakbrowser-mcp/profiles/camoufox/default`). That directory is separate from the universal plugin's profile; cookies and logins are not shared. The browser engine locks a profile while a session uses it, so do not point two running sessions at the same directory. One directory per account; see [Accounts](#accounts) for the name setting.
 
 ## Detection record (2026-10-24)
 
@@ -115,7 +171,7 @@ This is one recorded run on this Windows host, not a general stealth validation.
 
 ## Updates and versions
 
-This plugin is version **2.6.0**, the same version as `cloakbrowser` while both share a generated core. Update them separately:
+This plugin is version **2.7.0**, the same version as `cloakbrowser` while both share a generated core. Update them separately:
 
 ```bash
 claude plugin marketplace update

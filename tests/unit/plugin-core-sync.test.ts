@@ -85,6 +85,7 @@ describe('shared plugin core', () => {
       'engine-registry.mjs',
       'engines/profiles.json',
       'lib/attach.mjs',
+      'lib/profile.mjs',
       'lib/provision.mjs',
       'lib/surface.mjs',
       'launch-camoufox-native.mjs',
