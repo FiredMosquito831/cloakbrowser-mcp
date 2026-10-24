@@ -15,6 +15,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const PACKAGE_PIN = 'mcp-camoufox==0.4.5';
 const BUILD_PIN = '156.0.1-beta.39';
@@ -62,7 +63,55 @@ function normalizeBuild(raw) {
   return withoutV === '' ? BUILD_PIN : withoutV;
 }
 
-function buildChildEnv(source) {
+// Camoufox's own OS names for the fingerprint persona. A profile whose claimed
+// OS matches the host is coherent (the GPU/UA/WebGL stack it fabricates is the
+// one this machine can actually render); a mismatched persona is what the
+// detector flags, so the host is the safe default and an explicit value wins.
+export const HOST_FINGERPRINT_OS = Object.freeze({
+  darwin: 'macos',
+  linux: 'linux',
+  win32: 'windows',
+});
+const FINGERPRINT_OS_VALUES = new Set(['windows', 'linux', 'macos']);
+
+// Resolve CAMOUFOX_FINGERPRINT_OS. An explicit valid value is kept (lowercased,
+// which is the app's accepted spelling). An unset value defaults to the host OS.
+// An invalid value falls back to the host default with a warning, never a crash;
+// on a platform Camoufox has no name for, an invalid value is left unset.
+export function resolveFingerprintOs(rawValue, platform) {
+  const host = Object.hasOwn(HOST_FINGERPRINT_OS, platform) ? HOST_FINGERPRINT_OS[platform] : null;
+  const explicit = typeof rawValue === 'string' ? rawValue.trim().toLowerCase() : '';
+  if (explicit !== '') {
+    if (FINGERPRINT_OS_VALUES.has(explicit)) {
+      return { value: explicit, source: 'explicit', warning: null };
+    }
+    const echoed = rawValue.trim().slice(0, 32);
+    if (host === null) {
+      return {
+        value: null,
+        source: 'invalid',
+        warning:
+          `CAMOUFOX_FINGERPRINT_OS "${echoed}" is not windows, linux or macos, and ` +
+          `platform "${platform}" has no Camoufox host default; leaving it unset.`,
+      };
+    }
+    return {
+      value: host,
+      source: 'host-default',
+      warning: `CAMOUFOX_FINGERPRINT_OS "${echoed}" is not windows, linux or macos; using the host default "${host}".`,
+    };
+  }
+  if (host === null) {
+    return {
+      value: null,
+      source: 'none',
+      warning: `No Camoufox fingerprint OS default for platform "${platform}"; leaving CAMOUFOX_FINGERPRINT_OS unset.`,
+    };
+  }
+  return { value: host, source: 'host-default', warning: null };
+}
+
+export function buildChildEnv(source, platform = process.platform) {
   const env = { ...source };
   for (const name of EMPTY_OPTIONAL_VARS) {
     const value = env[name];
@@ -97,6 +146,18 @@ function buildChildEnv(source) {
   env.CAMOUFOX_BROWSER_VERSION = normalizeBuild(
     source.CAMOUFOX_NATIVE_BROWSER_BUILD ?? source.CAMOUFOX_BROWSER_VERSION,
   );
+  // A random persona can claim an OS this host cannot coherently render; the
+  // 2026-10-24 detector run flagged exactly that (macOS persona on Windows) with
+  // hasInconsistentTimingResolution. Default to the host, keep an explicit value.
+  const fingerprint = resolveFingerprintOs(source.CAMOUFOX_FINGERPRINT_OS, platform);
+  if (fingerprint.warning !== null) {
+    log(fingerprint.warning);
+  }
+  if (fingerprint.value === null) {
+    delete env.CAMOUFOX_FINGERPRINT_OS;
+  } else {
+    env.CAMOUFOX_FINGERPRINT_OS = fingerprint.value;
+  }
   return env;
 }
 
@@ -171,7 +232,8 @@ function main() {
   const profile = env.CAMOUFOX_PROFILE ?? DEFAULT_PROFILE;
   log(
     `starting ${command} build=${env.CAMOUFOX_BROWSER_VERSION} profile=${profile} ` +
-      `headless=${env.CAMOUFOX_HEADLESS} data=${env.CAMOUFOX_DATA_DIR} daemon=off`,
+      `headless=${env.CAMOUFOX_HEADLESS} os=${env.CAMOUFOX_FINGERPRINT_OS ?? 'unset'} ` +
+      `data=${env.CAMOUFOX_DATA_DIR} daemon=off`,
   );
   const child = spawn(command, [], {
     stdio: 'inherit',
@@ -197,4 +259,9 @@ function main() {
   });
 }
 
-main();
+// Run only when invoked as the launcher, so the unit suite can import the pure
+// env helpers without starting a backend.
+const invokedPath = process.argv[1] === undefined ? null : path.resolve(process.argv[1]);
+if (invokedPath !== null && import.meta.url === pathToFileURL(invokedPath).href) {
+  main();
+}
