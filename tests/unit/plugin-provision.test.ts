@@ -47,7 +47,9 @@ interface ProvisionModule {
   PROVISION_SCHEMA_VERSION: number;
   PYTHON_VERSION: string;
   UV_ASSETS: Record<string, { asset: string; kind: string; sha256: string }>;
+  UV_MINIMUM_VERSION: string;
   UV_VERSION: string;
+  compareVersions(left: string, right: string): number | null;
   distInfoName(spec: string): string | null;
   ensureNpmRuntime(options: Record<string, unknown>): NpmResolution;
   ensurePython(options: Record<string, unknown>): PythonResolution;
@@ -55,6 +57,8 @@ interface ProvisionModule {
   ensureVenv(options: Record<string, unknown>): VenvResolution;
   extractUvArchive(kind: string, buffer: Buffer, destination: string, platform?: string): string;
   findOnPath(name: string, env: Record<string, string | undefined>, platform?: string): string | null;
+  isVersionAtLeast(version: string | null, minimum: string): boolean;
+  parseVersion(value: string): { major: number; minor: number; patch: number; prerelease: string[] } | null;
   readTarEntries(buffer: Buffer): Map<string, Buffer>;
   readZipEntries(buffer: Buffer): Map<string, Buffer>;
   resolveUvAsset(
@@ -260,11 +264,109 @@ describe('archive extraction', () => {
   });
 });
 
+describe('version parsing and comparison', () => {
+  it('parses a plain, a prerelease and a build version', () => {
+    expect(provision.parseVersion('0.11.21')).toEqual({
+      major: 0,
+      minor: 11,
+      patch: 21,
+      prerelease: [],
+    });
+    expect(provision.parseVersion('v0.13.5')).toEqual({
+      major: 0,
+      minor: 13,
+      patch: 5,
+      prerelease: [],
+    });
+    expect(provision.parseVersion('1.2.3-rc.1')).toEqual({
+      major: 1,
+      minor: 2,
+      patch: 3,
+      prerelease: ['rc', '1'],
+    });
+    expect(provision.parseVersion('1.2.3+build.9')).toEqual({
+      major: 1,
+      minor: 2,
+      patch: 3,
+      prerelease: [],
+    });
+  });
+
+  it('returns null for anything that is not a version', () => {
+    for (const value of ['', 'uv 0.13.5', '0.13', '0.13.5.1', '0.13.5-', 'x.y.z']) {
+      expect(provision.parseVersion(value)).toBeNull();
+    }
+    expect(provision.parseVersion(undefined as unknown as string)).toBeNull();
+  });
+
+  it('orders releases by major, minor and patch', () => {
+    expect(provision.compareVersions('0.11.21', '0.13.5')).toBe(-1);
+    expect(provision.compareVersions('0.13.5', '0.13.5')).toBe(0);
+    expect(provision.compareVersions('0.14.0', '0.13.5')).toBe(1);
+    expect(provision.compareVersions('1.0.0', '0.99.99')).toBe(1);
+    expect(provision.compareVersions('0.13.10', '0.13.9')).toBe(1);
+  });
+
+  it('sorts a prerelease before its release and ignores build metadata', () => {
+    expect(provision.compareVersions('0.13.5-rc.1', '0.13.5')).toBe(-1);
+    expect(provision.compareVersions('0.13.5', '0.13.5-rc.1')).toBe(1);
+    expect(provision.compareVersions('0.13.5-rc.1', '0.13.5-rc.2')).toBe(-1);
+    expect(provision.compareVersions('0.13.5-alpha', '0.13.5-beta')).toBe(-1);
+    expect(provision.compareVersions('0.13.5-1', '0.13.5-alpha')).toBe(-1);
+    expect(provision.compareVersions('0.13.5+build.7', '0.13.5')).toBe(0);
+  });
+
+  it('reports unparsable input instead of guessing', () => {
+    expect(provision.compareVersions('nightly', '0.13.5')).toBeNull();
+    expect(provision.compareVersions('0.13.5', '')).toBeNull();
+  });
+
+  it('accepts only a parsed version at or above the floor', () => {
+    expect(provision.UV_MINIMUM_VERSION).toBe(provision.UV_VERSION);
+    expect(provision.isVersionAtLeast('0.13.5', provision.UV_MINIMUM_VERSION)).toBe(true);
+    expect(provision.isVersionAtLeast('0.14.0', provision.UV_MINIMUM_VERSION)).toBe(true);
+    expect(provision.isVersionAtLeast('0.13.5-rc.1', provision.UV_MINIMUM_VERSION)).toBe(false);
+    expect(provision.isVersionAtLeast('0.11.21', provision.UV_MINIMUM_VERSION)).toBe(false);
+    expect(provision.isVersionAtLeast(null, provision.UV_MINIMUM_VERSION)).toBe(false);
+    expect(provision.isVersionAtLeast('nightly', provision.UV_MINIMUM_VERSION)).toBe(false);
+  });
+});
+
 describe('ensureUv precedence', () => {
   const versionRun = (calls: RunCall[]) => (command: string, args: string[], options: RunCall['options']) => {
     calls.push({ command, args, options });
     return { status: 0, stdout: 'uv 0.13.5 (abc 2026-10-21)', stderr: '' };
   };
+
+  function uvOutput(version: string): string {
+    return `uv ${version} (5aa65dd7a 2026-06-11 x86_64-pc-windows-msvc)`;
+  }
+
+  // Answers --version from a map keyed by command; an unlisted command fails, as
+  // a missing or broken probe would.
+  function versionByCommand(map: Record<string, string>, calls: RunCall[] = []) {
+    return (command: string, args: string[], options: RunCall['options']) => {
+      calls.push({ command, args, options });
+      const version = map[command];
+      return version === undefined
+        ? { status: 1, stdout: '', stderr: `failed to run ${command}` }
+        : { status: 0, stdout: uvOutput(version), stderr: '' };
+    };
+  }
+
+  function pathSetup(): { binDir: string; pathUv: string } {
+    const binDir = path.join(tempDir(), 'bin');
+    const pathUv = path.join(binDir, 'uv.exe');
+    createExecutable(pathUv);
+    return { binDir, pathUv };
+  }
+
+  function managedSetup(): { dataDir: string; managed: string } {
+    const dataDir = tempDir();
+    const managed = path.join(dataDir, 'tools', 'uv', provision.UV_VERSION, 'uv.exe');
+    createExecutable(managed);
+    return { dataDir, managed };
+  }
 
   it('uses UV_BIN before UV, PATH and the managed copy, without downloading', async () => {
     const calls: RunCall[] = [];
@@ -332,6 +434,174 @@ describe('ensureUv precedence', () => {
     });
     expect(resolution.source).toBe('path');
     expect(resolution.command).toBe(path.join(binDir, 'uv.exe'));
+  });
+
+  it('refuses an explicit uv older than the pinned version instead of replacing it', async () => {
+    const calls: RunCall[] = [];
+    const download = vi.fn(async () => Buffer.from('unused'));
+    await expect(
+      provision.ensureUv({
+        env: { UV_BIN: 'uv-bin-command', PATH: '' },
+        platform: 'win32',
+        arch: 'x64',
+        dataDir: tempDir(),
+        log: noopLog,
+        run: versionByCommand({ 'uv-bin-command': '0.11.21' }, calls),
+        download,
+      }),
+    ).rejects.toThrow(/UV_BIN points at uv 0\.11\.21 .*older than the minimum uv 0\.13\.5/);
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it('also refuses an explicit UV at exactly the old version on the reproducer machine', async () => {
+    const download = vi.fn(async () => Buffer.from('unused'));
+    await expect(
+      provision.ensureUv({
+        env: { UV: 'uv-command', PATH: '' },
+        platform: 'win32',
+        arch: 'x64',
+        dataDir: tempDir(),
+        log: noopLog,
+        run: versionByCommand({ 'uv-command': '0.11.21' }),
+        download,
+      }),
+    ).rejects.toThrow(/UV points at uv 0\.11\.21 .*unset UV to let the plugin provision its pinned copy/);
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it('accepts an explicit uv newer than the pinned version', async () => {
+    const resolution = await provision.ensureUv({
+      env: { UV_BIN: 'uv-bin-command', PATH: '' },
+      platform: 'win32',
+      arch: 'x64',
+      dataDir: tempDir(),
+      log: noopLog,
+      run: versionByCommand({ 'uv-bin-command': '0.14.0' }),
+      download: async () => Buffer.from('unused'),
+    });
+    expect(resolution).toMatchObject({ command: 'uv-bin-command', version: '0.14.0', source: 'env' });
+  });
+
+  it('ignores a PATH uv older than the pin and provisions the pinned copy', async () => {
+    const { binDir, pathUv } = pathSetup();
+    const dataDir = tempDir();
+    const download = vi.fn(async () => {
+      throw new Error('offline in this test');
+    });
+    const logs: string[] = [];
+    await expect(
+      provision.ensureUv({
+        env: { PATH: binDir, PATHEXT: '.EXE;.CMD' },
+        platform: 'win32',
+        arch: 'x64',
+        dataDir,
+        log: (line: string) => logs.push(line),
+        run: versionByCommand({ [pathUv]: '0.11.21' }),
+        download,
+      }),
+    ).rejects.toThrow(/Could not download uv 0\.13\.5/);
+    expect(download).toHaveBeenCalledTimes(1);
+    expect(logs.join('\n')).toMatch(
+      /the uv on PATH \(.*uv\.exe\) is 0\.11\.21, older than the pinned uv 0\.13\.5; provisioning the pinned copy instead/,
+    );
+    expect(() => statSync(path.join(dataDir, 'tools', 'uv', provision.UV_VERSION))).toThrow();
+  });
+
+  it('uses a PATH uv at or above the pin and never downloads', async () => {
+    const { binDir, pathUv } = pathSetup();
+    const download = vi.fn(async () => Buffer.from('unused'));
+    const resolution = await provision.ensureUv({
+      env: { PATH: binDir, PATHEXT: '.EXE;.CMD' },
+      platform: 'win32',
+      arch: 'x64',
+      dataDir: tempDir(),
+      log: noopLog,
+      run: versionByCommand({ [pathUv]: '0.14.0' }),
+      download,
+    });
+    expect(resolution).toMatchObject({ command: pathUv, version: '0.14.0', source: 'path' });
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the pinned copy when the PATH probe fails', async () => {
+    const { binDir } = pathSetup();
+    const download = vi.fn(async () => {
+      throw new Error('offline in this test');
+    });
+    const logs: string[] = [];
+    await expect(
+      provision.ensureUv({
+        env: { PATH: binDir, PATHEXT: '.EXE;.CMD' },
+        platform: 'win32',
+        arch: 'x64',
+        dataDir: tempDir(),
+        log: (line: string) => logs.push(line),
+        run: versionByCommand({}, []),
+        download,
+      }),
+    ).rejects.toThrow(/Could not download uv 0\.13\.5/);
+    expect(download).toHaveBeenCalledTimes(1);
+    expect(logs.join('\n')).toContain('did not answer --version; provisioning the pinned copy instead');
+  });
+
+  it('treats an unparsable uv --version as unusable and provisions the pinned copy', async () => {
+    const { binDir } = pathSetup();
+    const download = vi.fn(async () => {
+      throw new Error('offline in this test');
+    });
+    const logs: string[] = [];
+    await expect(
+      provision.ensureUv({
+        env: { PATH: binDir, PATHEXT: '.EXE;.CMD' },
+        platform: 'win32',
+        arch: 'x64',
+        dataDir: tempDir(),
+        log: (line: string) => logs.push(line),
+        run: () => ({ status: 0, stdout: 'uv nightly (abc)', stderr: '' }),
+        download,
+      }),
+    ).rejects.toThrow(/Could not download uv 0\.13\.5/);
+    expect(download).toHaveBeenCalledTimes(1);
+    expect(logs.join('\n')).toContain('did not answer --version');
+    expect(logs.join('\n')).not.toContain('from PATH');
+  });
+
+  it('reuses a valid managed copy without downloading when the PATH uv is old', async () => {
+    const { binDir, pathUv } = pathSetup();
+    const { dataDir, managed } = managedSetup();
+    const download = vi.fn(async () => Buffer.from('unused'));
+    const resolution = await provision.ensureUv({
+      env: { PATH: binDir, PATHEXT: '.EXE;.CMD' },
+      platform: 'win32',
+      arch: 'x64',
+      dataDir,
+      log: noopLog,
+      run: versionByCommand({ [pathUv]: '0.11.21', [managed]: '0.13.5' }),
+      download,
+    });
+    expect(resolution).toMatchObject({ command: managed, version: '0.13.5', source: 'managed' });
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it('replaces a managed copy that reports a version below the pin', async () => {
+    const { dataDir, managed } = managedSetup();
+    const download = vi.fn(async () => {
+      throw new Error('offline in this test');
+    });
+    const logs: string[] = [];
+    await expect(
+      provision.ensureUv({
+        env: { PATH: '' },
+        platform: 'win32',
+        arch: 'x64',
+        dataDir,
+        log: (line: string) => logs.push(line),
+        run: versionByCommand({ [managed]: '0.11.21' }),
+        download,
+      }),
+    ).rejects.toThrow(/Could not download uv 0\.13\.5/);
+    expect(download).toHaveBeenCalledTimes(1);
+    expect(logs.join('\n')).toContain(`is 0.11.21, older than ${provision.UV_MINIMUM_VERSION}; replacing it`);
   });
 
   it('reuses the managed copy with no download when it already runs', async () => {

@@ -31,6 +31,11 @@ import { gunzipSync, inflateRawSync } from 'node:zlib';
 
 export const PROVISION_SCHEMA_VERSION = 1;
 export const UV_VERSION = '0.13.5';
+// The pinned release is also the floor for any uv the plugin did not download:
+// uv 0.11.x cannot install the managed CPython 3.13.17 ("No download found for
+// request: cpython-3.13.17-windows-x86_64-none"), so an older uv is refused
+// when it is explicit and replaced when it comes from PATH.
+export const UV_MINIMUM_VERSION = UV_VERSION;
 export const PYTHON_VERSION = '3.13.17';
 export const UV_RELEASE_BASE = `https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/`;
 export const UV_ASSETS = Object.freeze({
@@ -305,6 +310,87 @@ function uvVersionOf(command, run) {
   return match === null ? null : match[1];
 }
 
+const VERSION_PATTERN = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$/;
+
+// Parse a semver string: an optional leading "v", an optional -prerelease and an
+// optional +build. Build metadata is ignored, as semver specifies; anything
+// malformed returns null instead of a guessed version.
+export function parseVersion(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const match = VERSION_PATTERN.exec(value.trim());
+  if (match === null) {
+    return null;
+  }
+  const prerelease = match[4] === undefined ? [] : match[4].split('.');
+  if (prerelease.some((identifier) => identifier === '')) {
+    return null;
+  }
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    prerelease,
+  };
+}
+
+function compareIdentifiers(left, right) {
+  const leftNumeric = /^\d+$/.test(left);
+  const rightNumeric = /^\d+$/.test(right);
+  if (leftNumeric && rightNumeric) {
+    const a = left.replace(/^0+(?=\d)/, '');
+    const b = right.replace(/^0+(?=\d)/, '');
+    if (a.length !== b.length) {
+      return a.length < b.length ? -1 : 1;
+    }
+    return a === b ? 0 : a < b ? -1 : 1;
+  }
+  if (leftNumeric !== rightNumeric) {
+    return leftNumeric ? -1 : 1;
+  }
+  return left === right ? 0 : left < right ? -1 : 1;
+}
+
+function comparePrerelease(left, right) {
+  if (left.length === 0 || right.length === 0) {
+    // A release sorts after all of its own prereleases.
+    return left.length === right.length ? 0 : left.length === 0 ? 1 : -1;
+  }
+  const shared = Math.min(left.length, right.length);
+  for (let index = 0; index < shared; index += 1) {
+    const result = compareIdentifiers(left[index], right[index]);
+    if (result !== 0) {
+      return result;
+    }
+  }
+  return left.length === right.length ? 0 : left.length < right.length ? -1 : 1;
+}
+
+// Semver precedence: -1 when left sorts first, 0 when equal, 1 when left sorts
+// last, and null when either side is not a version. A prerelease sorts before
+// its release (0.13.5-rc.1 < 0.13.5); build metadata is ignored.
+export function compareVersions(left, right) {
+  const a = parseVersion(left);
+  const b = parseVersion(right);
+  if (a === null || b === null) {
+    return null;
+  }
+  for (const part of ['major', 'minor', 'patch']) {
+    if (a[part] !== b[part]) {
+      return a[part] < b[part] ? -1 : 1;
+    }
+  }
+  return comparePrerelease(a.prerelease, b.prerelease);
+}
+
+// True only for a version that parses and is at or above the minimum: a probe
+// that failed or answered something unparsable never satisfies a floor.
+export function isVersionAtLeast(version, minimum) {
+  const result = compareVersions(version, minimum);
+  return result !== null && result >= 0;
+}
+
 export function findOnPath(name, env = process.env, platform = process.platform) {
   const raw = env.PATH ?? env.Path ?? '';
   const directories = raw
@@ -358,7 +444,10 @@ function explicitUv(env, platform) {
 
 // Resolve a usable uv in this order: an explicit UV_BIN/UV override, a working
 // uv on PATH, then the plugin-managed pinned copy. An explicit override is
-// authoritative: a broken value fails instead of silently falling back.
+// authoritative: a broken value fails instead of silently falling back, and so
+// does one older than the pinned uv because it cannot install the managed
+// Python. A PATH uv is only a suggestion: when it is missing, broken, older
+// than the pin or answers with an unparsable version, the pinned copy is used.
 export async function ensureUv(options = {}) {
   const {
     env = process.env,
@@ -384,6 +473,14 @@ export async function ensureUv(options = {}) {
           'Point it at a working uv executable, or unset it to let the plugin provision the pinned copy.',
       );
     }
+    if (!isVersionAtLeast(version, UV_MINIMUM_VERSION)) {
+      throw new Error(
+        `${explicit.variable} points at uv ${version} (${truncate(explicit.command)}), which is older than the ` +
+          `minimum uv ${UV_MINIMUM_VERSION}: "uv python install ${PYTHON_VERSION}" fails on it. ` +
+          `Update that uv to ${UV_MINIMUM_VERSION} or newer, or unset ${explicit.variable} to let the plugin ` +
+          'provision its pinned copy. Nothing was downloaded.',
+      );
+    }
     log(`using uv ${version} from ${explicit.variable} (${explicit.command})`);
     return { command: explicit.command, version, source: 'env', variable: explicit.variable };
   }
@@ -391,11 +488,18 @@ export async function ensureUv(options = {}) {
   const onPath = findOnPath('uv', env, platform);
   if (onPath !== null) {
     const version = uvVersionOf(onPath, run);
-    if (version !== null) {
+    if (version !== null && isVersionAtLeast(version, UV_MINIMUM_VERSION)) {
       log(`using uv ${version} from PATH (${onPath})`);
       return { command: onPath, version, source: 'path' };
     }
-    log(`the uv on PATH (${onPath}) did not answer --version; provisioning the pinned copy instead`);
+    if (version === null) {
+      log(`the uv on PATH (${onPath}) did not answer --version; provisioning the pinned copy instead`);
+    } else {
+      log(
+        `the uv on PATH (${onPath}) is ${version}, older than the pinned uv ${UV_VERSION}; ` +
+          'provisioning the pinned copy instead',
+      );
+    }
   }
 
   const asset = resolveUvAsset(platform, arch);
@@ -406,9 +510,12 @@ export async function ensureUv(options = {}) {
   const binary = path.join(versionDir, uvExecutableName(platform));
   if (isExecutableFile(binary, platform)) {
     const version = uvVersionOf(binary, run);
-    if (version !== null) {
+    if (version !== null && isVersionAtLeast(version, UV_MINIMUM_VERSION)) {
       log(`using the plugin-managed uv ${version} at ${binary}`);
       return { command: binary, version, source: 'managed', asset };
+    }
+    if (version !== null) {
+      log(`the plugin-managed uv at ${binary} is ${version}, older than ${UV_MINIMUM_VERSION}; replacing it`);
     }
   }
 
@@ -440,10 +547,11 @@ export async function ensureUv(options = {}) {
   mkdirSync(path.dirname(versionDir), { recursive: true });
   renameSync(temporary, versionDir);
   const version = uvVersionOf(binary, run);
-  if (version === null) {
+  if (version === null || !isVersionAtLeast(version, UV_MINIMUM_VERSION)) {
     rmSync(versionDir, { recursive: true, force: true });
     throw new Error(
-      `The pinned uv ${UV_VERSION} was installed at ${versionDir} but did not answer --version. ` +
+      `The pinned uv ${UV_VERSION} was installed at ${versionDir} but ` +
+        `${version === null ? 'did not answer --version' : `reported ${version} instead of ${UV_MINIMUM_VERSION} or newer`}. ` +
         'Nothing usable was left behind.',
     );
   }

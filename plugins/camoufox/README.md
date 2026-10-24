@@ -51,6 +51,7 @@ The engine is fixed to `camoufox` in `.mcp.json`; there is no `browser_engine` s
 
 - Node 22.13+ or 24+ for the broker. Nothing else is a manual prerequisite.
 - The launcher provisions everything under Claude Code's plugin data directory at the first MCP server start: a pinned checksum-verified `uv` 0.13.5, a uv-managed CPython 3.13.17, and a venv with `camoufox-playwright-mcp==0.1.5` plus its Camoufox dependency. Nothing is installed system-wide and no launcher starts a shell.
+- **A `uv` you provide must be 0.13.5 or newer.** The pinned `uv` is the one that installs the managed CPython 3.13.17; older versions fail with `No download found for request: cpython-3.13.17-windows-x86_64-none` and the launcher exits. A `uv` on `PATH` older than 0.13.5, or one that does not answer `--version`, is ignored with one log line and the pinned copy is provisioned instead. An explicit `UV`/`UV_BIN` older than 0.13.5 is refused with the version it reported, never silently replaced.
 - The pinned Camoufox build `v156.0.1-beta.39` is a **~1.3 GB download and ~2.4 GB on disk** in Camoufox's machine-wide cache (`%LOCALAPPDATA%\camoufox` on Windows). It is downloaded when absent. The browser starts on the first browser tool call, not at `initialize`.
 - A cold first start can take tens of seconds; if Claude Code's MCP startup timeout expires, restart Claude Code (`/reload-plugins`). The next start reuses what was provisioned and downloads nothing.
 - **Windows shim.** The pinned wrapper installs a signal watchdog through anyio, which Windows does not implement; without a fix the server exits before answering `initialize`. `camoufox_entry.py` replaces only that receiver with an empty one (the broker owns shutdown on every platform) and then runs the unmodified wrapper. On other platforms the shim is not installed.
@@ -60,7 +61,7 @@ Overrides are environment variables, not plugin settings:
 
 | Variable | Effect |
 |---|---|
-| `UV`, `UV_BIN` | Use this `uv` instead of `PATH` or the pinned copy. A broken value fails instead of falling back |
+| `UV`, `UV_BIN` | Use this `uv` instead of `PATH` or the pinned copy. It must be 0.13.5 or newer: a broken, older or unanswering value fails instead of falling back |
 | `UV_PYTHON`, `PYTHON` | Use this interpreter instead of the managed CPython. `UV_PYTHON` wins |
 | `CAMOUFOX_MCP_PACKAGE` | Override `camoufox-playwright-mcp==0.1.5`; the venv marker detects the change and rebuilds the venv |
 | `CAMOUFOX_BROWSER_BUILD` | Override the pinned browser build |
@@ -171,7 +172,7 @@ This is one recorded run on this Windows host, not a general stealth validation.
 
 ## Updates and versions
 
-This plugin is version **2.7.0**, the same version as `cloakbrowser` while both share a generated core. Update them separately:
+This plugin is version **2.7.1**, the same version as `cloakbrowser` while both share a generated core. Update them separately:
 
 ```bash
 claude plugin marketplace update
