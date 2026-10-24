@@ -242,7 +242,7 @@ describe('kameleo manifest', () => {
   });
 
   it('ships the settings, the env references and the generated engine option', () => {
-    expect(plugin.version).toBe('2.6.0');
+    expect(plugin.version).toMatch(/^\d+\.\d+\.\d+$/);
     expect(plugin.userConfig.kameleo_profile_id).toMatchObject({ type: 'string', default: '' });
     expect(plugin.userConfig.kameleo_profile_id.title).toBe('Kameleo profile ID');
     expect(plugin.userConfig.kameleo_profile_id.description).toContain(
@@ -548,7 +548,7 @@ describe('documentation', () => {
     expect(readme).toContain('UNVERIFIED');
     expect(readme).toContain('connect ECONNREFUSED 127.0.0.1:5050');
     expect(readme).toContain('| `kameleo` | `portable` | 74 | 26');
-    expect(readme).toContain('2.6.0');
+    expect(readme).toContain(plugin.version);
     for (const line of readme.split(/\r?\n/)) {
       if (line.toLowerCase().includes('kameleo') && line.includes('isBot: false')) {
         throw new Error(`README claims a Kameleo stealth result: ${line}`);

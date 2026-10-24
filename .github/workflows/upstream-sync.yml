@@ -1,0 +1,254 @@
+# Weekly sync of swimmwatch/cloakbrowser-mcp into this fork.
+#
+# The gate lives in this workflow because pull requests opened with GITHUB_TOKEN
+# do not trigger ci.yml. "Green" here means the gate below passed, never "CI is
+# green". The PR is left open unless the run was dispatched with allow_merge=true,
+# the gate passed and no sensitive path changed.
+name: Upstream Sync
+
+on:
+  schedule:
+    - cron: '41 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Plan and render the bodies without pushing a branch or opening anything
+        type: boolean
+        default: false
+      allow_merge:
+        description: Merge the sync PR when the in-workflow gate passes
+        type: boolean
+        default: false
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '24'
+  NPM_VERSION: '11.19.0'
+  UPSTREAM_URL: https://github.com/swimmwatch/cloakbrowser-mcp.git
+  SYNC_BRANCH: chore/upstream-sync
+  SYNC_ASSIGNEE: FiredMosquito831
+  CLAUDE_CODE_VERSION: '2.1.310'
+  CONFLICT_ISSUE_TITLE: Upstream sync conflict (swimmwatch/main)
+  PR_TITLE: 'chore(upstream): weekly sync from swimmwatch/main'
+
+jobs:
+  sync:
+    name: Sync swimmwatch/main
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Check out the fork
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Use the pinned npm
+        run: npm install --global npm@$NPM_VERSION
+
+      - name: Configure git credentials for the sync branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh auth setup-git
+
+      - name: Fetch upstream main
+        run: node scripts/upstream-sync/run.mjs fetch --url "$UPSTREAM_URL" --github-output
+
+      - name: Fetch the previous sync branch when it exists
+        run: |
+          if git ls-remote --exit-code --heads origin "$SYNC_BRANCH" >/dev/null 2>&1; then
+            git fetch --no-tags origin "refs/heads/$SYNC_BRANCH:refs/remotes/origin/$SYNC_BRANCH"
+          fi
+
+      - name: Plan the sync
+        id: plan
+        run: |
+          node scripts/upstream-sync/run.mjs plan \
+            --base origin/main \
+            --upstream upstream/main \
+            --previous-ref "origin/$SYNC_BRANCH" \
+            --out "$RUNNER_TEMP/upstream-sync-plan.json" \
+            --github-output
+
+      - name: Report a no-op week
+        if: ${{ steps.plan.outputs.requires_pr != 'true' }}
+        run: |
+          echo "::notice title=Upstream sync::Nothing to sync: origin/main already contains upstream/main and the pins are current."
+
+      - name: Render the dry-run preview
+        if: ${{ inputs.dry_run == true && steps.plan.outputs.requires_pr == 'true' }}
+        run: node scripts/upstream-sync/run.mjs preview --plan "$RUNNER_TEMP/upstream-sync-plan.json" --out-dir "$RUNNER_TEMP/upstream-sync-preview"
+
+      - name: Stop after the dry run
+        if: ${{ inputs.dry_run == true && steps.plan.outputs.requires_pr == 'true' }}
+        run: |
+          echo "::notice title=Upstream sync dry run::The plan and bodies are above; no branch was pushed and nothing was opened."
+
+      - name: Create the sync branch
+        if: ${{ inputs.dry_run != true && steps.plan.outputs.requires_pr == 'true' && steps.plan.outputs.history_rewritten != 'true' && steps.plan.outputs.workflow_files != 'true' }}
+        run: git checkout -B "$SYNC_BRANCH" origin/main
+
+      - name: Merge upstream main
+        id: merge
+        if: ${{ inputs.dry_run != true && steps.plan.outputs.requires_pr == 'true' && steps.plan.outputs.history_rewritten != 'true' && steps.plan.outputs.workflow_files != 'true' && steps.plan.outputs.behind != '0' }}
+        continue-on-error: true
+        run: git merge --no-ff --no-commit upstream/main
+
+      - name: Record a conflict, a rewritten history or a workflow-file block
+        id: conflict
+        if: ${{ inputs.dry_run != true && steps.plan.outputs.requires_pr == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OUTCOME: ${{ steps.merge.outcome }}
+          HISTORY_REWRITTEN: ${{ steps.plan.outputs.history_rewritten }}
+          WORKFLOW_FILES: ${{ steps.plan.outputs.workflow_files }}
+          ISSUE_TITLE: ${{ env.CONFLICT_ISSUE_TITLE }}
+          ISSUE_ASSIGNEE: ${{ env.SYNC_ASSIGNEE }}
+        run: |
+          if [ "$MERGE_OUTCOME" != "failure" ] && [ "$HISTORY_REWRITTEN" != "true" ] && [ "$WORKFLOW_FILES" != "true" ]; then
+            echo "conflict=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          reason="conflict"
+          if [ "$WORKFLOW_FILES" = "true" ]; then
+            reason="workflow"
+          fi
+          if [ "$HISTORY_REWRITTEN" = "true" ]; then
+            reason="history"
+          fi
+          echo '{"conflicts":[]}' > "$RUNNER_TEMP/upstream-sync-conflicts.json"
+          if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+            node scripts/upstream-sync/run.mjs conflicts --out "$RUNNER_TEMP/upstream-sync-conflicts.json" >/dev/null
+            git merge --abort
+          fi
+          node scripts/upstream-sync/run.mjs issue-body --plan "$RUNNER_TEMP/upstream-sync-plan.json" --conflicts "$RUNNER_TEMP/upstream-sync-conflicts.json" --reason "$reason" --out "$RUNNER_TEMP/upstream-sync-issue.md"
+          gh label create upstream-sync --force --color 1d76db --description "Weekly upstream sync automation"
+          gh label create conflict --force --color d93f0b --description "Merge conflict or history rewrite against upstream"
+          number="$(gh issue list --state open --search "Upstream sync conflict in:title" --json number,title --jq ".[] | select(.title == \"$ISSUE_TITLE\") | .number" | head -n 1)"
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body-file "$RUNNER_TEMP/upstream-sync-issue.md"
+          else
+            gh issue create --title "$ISSUE_TITLE" --body-file "$RUNNER_TEMP/upstream-sync-issue.md" --assignee "$ISSUE_ASSIGNEE" --label upstream-sync --label conflict
+          fi
+          echo "conflict=true" >> "$GITHUB_OUTPUT"
+          echo "::error title=Upstream sync stopped::The sync stopped without pushing a branch. See the assigned issue."
+
+      - name: Apply the pin decision
+        id: pins
+        if: ${{ inputs.dry_run != true && steps.plan.outputs.requires_pr == 'true' && steps.conflict.outputs.conflict != 'true' }}
+        run: node scripts/upstream-sync/run.mjs pins --write --report "$RUNNER_TEMP/upstream-sync-pin-report.json"
+
+      - name: Commit the sync
+        id: commit
+        if: ${{ inputs.dry_run != true && steps.plan.outputs.requires_pr == 'true' && steps.conflict.outputs.conflict != 'true' }}
+        env:
+          UPSTREAM_SHA: ${{ steps.plan.outputs.upstream_sha }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git rev-parse -q --verify MERGE_HEAD >/dev/null || ! git diff --cached --quiet; then
+            git commit -m "chore(upstream): sync swimmwatch/main $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              -m "Upstream-Sync-Head: $UPSTREAM_SHA" \
+              -m "by FiredMosquito831"
+            echo "committed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "committed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Upstream sync::The merge produced no tree change; nothing to commit."
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Install the pinned Claude Code CLI
+        if: ${{ inputs.dry_run != true && steps.commit.outputs.committed == 'true' }}
+        run: npm install --global @anthropic-ai/claude-code@$CLAUDE_CODE_VERSION
+
+      - name: Run the in-workflow gate
+        if: ${{ inputs.dry_run != true && steps.commit.outputs.committed == 'true' }}
+        run: node scripts/upstream-sync/run.mjs gate
+
+      - name: Push the sync branch
+        if: ${{ inputs.dry_run != true && steps.commit.outputs.committed == 'true' }}
+        run: |
+          git fetch --no-tags origin "refs/heads/$SYNC_BRANCH:refs/remotes/origin/$SYNC_BRANCH" || true
+          git push --force-with-lease origin "HEAD:refs/heads/$SYNC_BRANCH"
+
+      - name: Render the pull-request body
+        if: ${{ inputs.dry_run != true && steps.commit.outputs.committed == 'true' }}
+        env:
+          SENSITIVE: ${{ steps.plan.outputs.sensitive }}
+        run: |
+          node scripts/upstream-sync/run.mjs pr-body \
+            --plan "$RUNNER_TEMP/upstream-sync-plan.json" \
+            --report "$RUNNER_TEMP/upstream-sync-pin-report.json" \
+            --gate passed \
+            --sensitive "$SENSITIVE" \
+            --commit-sha "$(git rev-parse HEAD)" \
+            --out "$RUNNER_TEMP/upstream-sync-pr.md"
+
+      - name: Open or update the sync pull request
+        id: pr
+        if: ${{ inputs.dry_run != true && steps.commit.outputs.committed == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SYNC_ASSIGNEE: ${{ env.SYNC_ASSIGNEE }}
+          PR_TITLE: ${{ env.PR_TITLE }}
+        run: |
+          number="$(gh pr list --head "$SYNC_BRANCH" --state open --json number --jq '.[0].number')"
+          if [ -n "$number" ] && [ "$number" != "null" ]; then
+            gh pr edit "$number" --title "$PR_TITLE" --body-file "$RUNNER_TEMP/upstream-sync-pr.md"
+          else
+            gh pr create --base main --head "$SYNC_BRANCH" --title "$PR_TITLE" --body-file "$RUNNER_TEMP/upstream-sync-pr.md" --assignee "$SYNC_ASSIGNEE"
+          fi
+          number="$(gh pr list --head "$SYNC_BRANCH" --state open --json number --jq '.[0].number')"
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+          url="$(gh pr view "$number" --json url --jq '.url')"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Label a sensitive merge for review
+        if: ${{ steps.commit.outputs.committed == 'true' && steps.plan.outputs.sensitive == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          gh label create "upstream-sync: review required" --force --color b60205 --description "Upstream sync touching a path that executes on the runner"
+          gh pr edit "$PR_NUMBER" --add-label "upstream-sync: review required"
+
+      - name: Merge the sync pull request
+        if: ${{ inputs.allow_merge == true && inputs.dry_run != true && steps.commit.outputs.committed == 'true' && steps.plan.outputs.sensitive != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          gh pr merge "$PR_NUMBER" --squash
+          gh pr comment "$PR_NUMBER" --body "Squash-merged by the upstream-sync workflow after the in-workflow gate passed. This is not a CI result; see the PR body for the gate commands."
+
+      - name: Report the pull-request state
+        if: ${{ inputs.dry_run != true && steps.commit.outputs.committed == 'true' }}
+        env:
+          MERGE_REQUESTED: ${{ inputs.allow_merge }}
+          SENSITIVE: ${{ steps.plan.outputs.sensitive }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+        run: |
+          if [ "$SENSITIVE" = "true" ]; then
+            echo "::warning title=Upstream sync review::A sensitive path changed; the pull request stays open for review: $PR_URL"
+          elif [ "$MERGE_REQUESTED" != "true" ]; then
+            echo "::notice title=Upstream sync pull request::The gate passed and the pull request is left open for review: $PR_URL"
+          else
+            echo "::notice title=Upstream sync merged::The gate passed and the pull request was squash-merged: $PR_URL"
+          fi
