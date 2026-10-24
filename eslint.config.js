@@ -43,7 +43,7 @@ const configOptions2 = {
       // Auto-discover the closest tsconfig for each linted file. Avoids the
       // "file not in project" error for top-level config files.
       projectService: {
-        maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 46,
+        maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 70,
         allowDefaultProject: [
           'eslint.config.js',
           'vitest.config.ts',
@@ -52,6 +52,7 @@ const configOptions2 = {
           '*.mjs',
           'scripts/*.mjs',
           'scripts/lib/*.mjs',
+          'scripts/upstream-sync/*.mjs',
           'src/runtime/*.cjs',
           'tests/fixtures/*.mjs',
         ],
