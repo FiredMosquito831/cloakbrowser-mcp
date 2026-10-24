@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "cloak",
+  "label": "CloakBrowser (stealth Chromium)",
+  "transport": "launch",
+  "contract": "playwright-mcp",
+  "defaultToolProfile": "full",
+  "toolSupport": {
+    "*": "full"
+  },
+  "notes": "Default engine. CloakBrowser stealth-patched Chromium on Patchright 1.64.1. Exposes the full 72-tool Playwright MCP browser contract plus cloakbrowser_binary_info and cloakbrowser_bridge_info."
+}
