@@ -25,6 +25,15 @@ import {
   resolveLauncherName,
   resolveToolProfile,
 } from './engine-registry.mjs';
+import {
+  aliasSummary,
+  buildNativeSurface,
+  classifyExposedTool,
+  createAliasIndex,
+  isNativeContract,
+  loadContractSchemas,
+  resolveNativeCall,
+} from './lib/surface.mjs';
 
 const PLUGIN_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const ENGINES_DIR = path.join(PLUGIN_ROOT, 'engines');
@@ -112,6 +121,23 @@ const loaded = loadEngineConfiguration({
 });
 const engine = loaded.engine;
 const profiles = loaded.profiles;
+const native = isNativeContract(engine);
+let contractSchemas = null;
+let aliasIndex = null;
+let engineError = loaded.error;
+if (engineError === null && native) {
+  const contractResult = loadContractSchemas(path.join(PLUGIN_ROOT, engine.contractSchemas));
+  if (contractResult.error !== null) {
+    engineError = contractResult.error;
+  } else {
+    contractSchemas = contractResult.schemas;
+    aliasIndex = createAliasIndex(engine);
+    if (aliasIndex.error !== null) {
+      engineError = aliasIndex.error;
+      aliasIndex = null;
+    }
+  }
+}
 const profileSelection = resolveToolProfile(process.env.STEALTH_TOOL_PROFILE, engine, profiles);
 
 if (profileSelection.placeholder !== null) {
@@ -130,9 +156,14 @@ const state = {
   engineId: selected.id,
   engineSource: selected.source,
   engine,
-  engineError: loaded.error,
+  engineError,
   engineChoices: loaded.engineIds,
   profiles,
+  native,
+  aliasIndex,
+  contractSchemas,
+  nativeSurface: null,
+  nativeSurfaceError: null,
   toolProfile: profileSelection.profile,
   toolProfileSource: profileSelection.source,
   requestedToolProfile: profileSelection.requested,
@@ -148,11 +179,11 @@ const state = {
   toolsListed: false,
   lastExposedCount: null,
   lastToolsListWaitMs: null,
-  lastError: loaded.error,
+  lastError: engineError,
   stderrTail: '',
   shuttingDown: false,
   backend: {
-    state: loaded.error === null ? 'idle' : 'failed',
+    state: engineError === null ? 'idle' : 'failed',
     pid: null,
     exitCode: null,
     exitSignal: null,
@@ -164,7 +195,53 @@ const state = {
 };
 
 function supportFor(toolName) {
+  if (state.native) {
+    if (state.aliasIndex === null) {
+      return 'unknown';
+    }
+    return classifyExposedTool(state.aliasIndex, state.engine, toolName).support ?? 'unknown';
+  }
   return manifestSupport(state.engine, toolName);
+}
+
+// The profile name injected into every native call, except the tools the
+// manifest's profileArgument.except names. The setting is read from the
+// environment once per call so a host restart is the only way it changes.
+function nativeProfileValue() {
+  const spec = state.engine?.profileArgument;
+  if (spec === null || typeof spec !== 'object') {
+    return null;
+  }
+  const raw = typeof spec.env === 'string' ? process.env[spec.env] : undefined;
+  const value = typeof raw === 'string' ? raw.trim() : '';
+  if (value !== '') {
+    return value;
+  }
+  return typeof spec.default === 'string' && spec.default.trim() !== '' ? spec.default.trim() : null;
+}
+
+// A prefixed name is only known when the backend listed that native tool. Before
+// the first tools/list, the manifest's native-only classification is the proof.
+function unknownNativeToolReason(name) {
+  if (state.aliasIndex === null) {
+    return null;
+  }
+  const classification = classifyExposedTool(state.aliasIndex, state.engine, name);
+  if (classification.kind === 'unknown') {
+    return `Unknown tool "${name}" for the "${state.engineId}" engine. Call browser_capabilities to see the canonical and prefixed names this engine exposes.`;
+  }
+  if (classification.kind !== 'native-only') {
+    return null;
+  }
+  if (state.nativeSurface !== null) {
+    return state.nativeSurface.backendNatives.has(classification.native)
+      ? null
+      : `Unknown native tool "${classification.native}" for the "${state.engineId}" engine; the backend did not list it.`;
+  }
+  const rules = state.engine?.toolSupport;
+  return rules !== null && typeof rules === 'object' && Object.hasOwn(rules, classification.native)
+    ? null
+    : `Unknown native tool "${classification.native}" for the "${state.engineId}" engine; the manifest does not classify it.`;
 }
 
 // The effective profile is the active manifest's default unless the user set
@@ -228,6 +305,21 @@ function backendToolNames() {
 
 function toolCounts() {
   const names = backendToolNames();
+  if (state.native) {
+    // Canonical aliases replace their native names; the rest are prefixed. The
+    // counts describe the exposed surface, and are null until tools/list has
+    // classified the backend list.
+    const surface = state.nativeSurface;
+    if (surface === null) {
+      return { backend: names.length, browser: null, local: null };
+    }
+    const exposed = [...surface.exposedNames];
+    return {
+      backend: names.length,
+      browser: exposed.filter((name) => surface.canonicalNames.has(name)).length,
+      local: exposed.filter((name) => surface.prefixedNames.has(name)).length,
+    };
+  }
   const browserNames = names.filter((name) => name.startsWith('browser_'));
   return {
     backend: names.length,
@@ -237,6 +329,17 @@ function toolCounts() {
 }
 
 function supportedCounts() {
+  if (state.native) {
+    const surface = state.nativeSurface;
+    if (surface === null) {
+      return { all: 0, browser: 0 };
+    }
+    const exposed = [...surface.exposedNames];
+    return {
+      all: exposed.length,
+      browser: exposed.filter((name) => surface.canonicalNames.has(name)).length,
+    };
+  }
   const names = backendToolNames();
   const supported = names.filter((name) => profileAllowsTool(name));
   return {
@@ -276,13 +379,51 @@ function unavailableToolEntries() {
   return entries;
 }
 
+function nativeCapabilitiesExtras() {
+  if (!state.native) {
+    return {};
+  }
+  const surface = state.nativeSurface;
+  const spec = state.engine?.profileArgument;
+  return {
+    groupSwitchesApply: state.engine?.capabilities?.groupSwitchesApply === true,
+    profileArgument:
+      spec === null || typeof spec !== 'object'
+        ? null
+        : {
+            name: spec.name ?? null,
+            setting: spec.setting ?? null,
+            except: Array.isArray(spec.except) ? [...spec.except] : [],
+          },
+    canonicalToolCount:
+      surface === null ? (state.aliasIndex?.byCanonical.size ?? null) : surface.counts.canonical,
+    nativeOnlyToolCount: surface === null ? null : surface.counts.nativeOnly,
+    surfaceError: state.nativeSurfaceError,
+    toolAliases: aliasSummary(state.engine),
+  };
+}
+
 function capabilitiesPayload() {
   const counts = state.toolsListed ? toolCounts() : null;
   const supported = state.toolsListed ? supportedCounts() : null;
   const perToolSupport = {};
   if (state.toolsListed) {
-    for (const name of [...backendToolNames()].sort()) {
-      perToolSupport[name] = supportFor(name);
+    if (state.native) {
+      const surface = state.nativeSurface;
+      if (surface !== null) {
+        for (const [name, support] of surface.exposedSupport) {
+          if (surface.exposedNames.has(name)) {
+            perToolSupport[name] = support;
+          }
+        }
+      }
+      for (const entry of unavailableToolEntries()) {
+        perToolSupport[entry.name] = entry.support;
+      }
+    } else {
+      for (const name of [...backendToolNames()].sort()) {
+        perToolSupport[name] = supportFor(name);
+      }
     }
   }
   return {
@@ -308,19 +449,24 @@ function capabilitiesPayload() {
     perToolSupport,
     supportRules: state.engine?.toolSupport ?? null,
     disabledTools: [...state.disabled],
-    hiddenByManifest: [...state.hiddenByManifest],
-    hiddenByCollision: [...state.hiddenByCollision],
+    hiddenByManifest: state.native
+      ? (state.nativeSurface?.hiddenByManifest ?? [])
+      : [...state.hiddenByManifest],
+    hiddenByCollision: state.native
+      ? (state.nativeSurface?.hiddenByCollision ?? [])
+      : [...state.hiddenByCollision],
     requestedToolProfile: state.requestedToolProfile,
     toolProfileSource: state.toolProfileSource,
     engineDefaultToolProfile: state.engine?.defaultToolProfile ?? null,
     availableToolProfiles: state.profiles === null ? [] : availableProfileNames(state.profiles),
     portableToolNames: state.profiles === null ? [] : portableToolNames(state.profiles),
     perToolSupportNotes: state.engine?.toolSupportNotes ?? {},
-    hiddenByProfile: [...state.hiddenByProfile],
+    hiddenByProfile: state.native ? (state.nativeSurface?.hiddenByProfile ?? []) : [...state.hiddenByProfile],
     unavailableTools: unavailableToolEntries(),
     launch: resolveLauncherName(state.engine),
     requirements: manifestStringList('requirements'),
     ignoredSettings: manifestStringList('ignoredSettings'),
+    ...nativeCapabilitiesExtras(),
   };
 }
 
@@ -357,6 +503,12 @@ function statusPayload() {
     brokerVersion: BROKER_VERSION,
     howToChangeEngine: ENGINE_CHANGE_HELP,
     backendStderrTail: state.stderrTail.trim() === '' ? null : state.stderrTail.slice(-1500),
+    ...(state.native
+      ? {
+          surfaceBuilt: state.nativeSurface !== null,
+          surfaceError: state.nativeSurfaceError,
+        }
+      : {}),
   };
 }
 
@@ -546,6 +698,16 @@ function handleClientRequest(message, rawLine) {
       }
       return;
     }
+    if (state.native && typeof name === 'string') {
+      // Strict call routing for native contracts: a name the manifest does not
+      // expose is an error result, never a forward to a backend that cannot know
+      // it. Canonical aliases and correctly prefixed native names pass.
+      const unknownReason = unknownNativeToolReason(name);
+      if (unknownReason !== null) {
+        sendToolError(id, unknownReason);
+        return;
+      }
+    }
     if (typeof name === 'string' && state.engine !== null && state.profiles !== null) {
       const support = supportFor(name);
       if (support === 'none') {
@@ -597,6 +759,28 @@ function handleClientRequest(message, rawLine) {
     }
     sendError(id, -32603, `Cannot handle "${String(method)}": ${backendDescription()}.`);
     return;
+  }
+
+  if (isRequest && state.native && method === 'tools/call' && typeof name === 'string') {
+    // Translate the canonical name and its arguments into the native tool the
+    // manifest names. Exactly one native call per canonical call; the result is
+    // passed through untouched.
+    const resolution = resolveNativeCall({
+      manifest: state.engine,
+      contracts: state.contractSchemas,
+      surface: state.nativeSurface,
+      exposedName: name,
+      args: message.params?.arguments,
+      profileValue: nativeProfileValue(),
+    });
+    if (resolution.error !== null) {
+      sendToolError(id, resolution.error);
+      return;
+    }
+    rawLine = JSON.stringify({
+      ...message,
+      params: { ...message.params, name: resolution.native, arguments: resolution.arguments },
+    });
   }
 
   if (isRequest) {
@@ -655,6 +839,37 @@ function handleBackendMessage(message, rawLine) {
     state.lastToolsListWaitMs = waitMs;
     const rawTools = message.result.tools;
     recordBackendTools(rawTools, pending.cursor !== undefined);
+    if (state.native) {
+      // A native backend lists its own tools; the broker replaces that list
+      // with the manifest's surface. mcp-camoufox answers in one page, so a
+      // cursor must not make the surface repeat itself.
+      if (pending.cursor !== undefined && pending.cursor !== null && pending.cursor !== '') {
+        sendResult(id, { tools: [] });
+        return;
+      }
+      const surface = buildNativeSurface({
+        manifest: state.engine,
+        contracts: state.contractSchemas,
+        backendTools: state.backendTools,
+        toolProfile: state.toolProfile,
+        profiles: state.profiles,
+        disabled: state.disabled,
+      });
+      if (surface.error !== null) {
+        state.nativeSurface = null;
+        state.nativeSurfaceError = surface.error;
+        state.lastError = surface.error;
+        log(surface.error);
+        sendMetaOnlyList(id, null);
+        return;
+      }
+      state.nativeSurface = surface;
+      state.nativeSurfaceError = null;
+      const tools = [...surface.tools, ...metaToolList()];
+      state.lastExposedCount = tools.length;
+      sendResult(id, { ...message.result, tools });
+      return;
+    }
     const addMeta = pending.cursor === undefined || pending.cursor === null || pending.cursor === '';
     // Filter the page the backend just returned, not the accumulated cache;
     // otherwise a paginated second page would repeat the first page.

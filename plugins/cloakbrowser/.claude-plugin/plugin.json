@@ -1,7 +1,7 @@
 {
   "name": "cloakbrowser",
   "displayName": "CloakBrowser",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "CloakBrowser stealth Chromium through the Playwright MCP tool contract, via cloakbrowser-mcp.",
   "author": {
     "name": "FiredMosquito831"
@@ -19,16 +19,28 @@
     "browser_engine": {
       "type": "string",
       "title": "Browser engine",
-      "description": "cloak uses the patched CloakBrowser Chromium. playwright uses the stock Playwright Chromium and gives up the stealth patches. camoufox uses the Camoufox stealth Firefox and needs Python 3.12+ with uv installed. The engine is read when the MCP server starts; changing it restarts the server and reloads the tool list.",
-      "options": ["camoufox", "cloak", "playwright"],
+      "description": "cloak uses the patched CloakBrowser Chromium. playwright uses the stock Playwright Chromium and gives up the stealth patches. camoufox uses the Camoufox stealth Firefox and needs Python 3.12+ with uv installed. camoufox-native uses the user-installed mcp-camoufox package (its own 27-tool contract, portable by default; install it yourself, the plugin does not bundle it). The engine is read when the MCP server starts; changing it restarts the server and reloads the tool list.",
+      "options": ["camoufox-native", "camoufox", "cloak", "playwright"],
       "default": "cloak"
     },
     "tool_profile": {
       "type": "string",
       "title": "Tool profile",
-      "description": "Which tools the selected engine exposes. default follows the engine manifest: full for cloak and playwright (the current 76-tool surface); portable for camoufox (a shared 24-tool core). portable hides engine-specific and extra tools; full exposes everything the engine supports. The seven tool groups and disabled_tools still apply. Restart Claude Code after changing it.",
+      "description": "Which tools the selected engine exposes. default follows the engine manifest: full for cloak and playwright (the current 76-tool surface); portable for camoufox and camoufox-native (a shared 24-tool core). portable hides engine-specific and extra tools; full exposes everything the engine supports. The seven tool groups and disabled_tools still apply. Restart Claude Code after changing it.",
       "options": ["default", "portable", "full"],
       "default": "default"
+    },
+    "camoufox_profile": {
+      "type": "string",
+      "title": "Camoufox native profile",
+      "description": "Profile name for the camoufox-native engine. One name per account. Letters, digits, '.', '_' and '-' only, starting with a letter or digit, up to 64 characters. Cookies and logins are kept under this name; a second Claude Code session using the same name is refused by the engine.",
+      "default": "default"
+    },
+    "camoufox_data_dir": {
+      "type": "string",
+      "title": "Camoufox native data directory",
+      "description": "Where the camoufox-native engine keeps its profiles and logs. Leave empty for Claude Code's plugin data directory (profiles/camoufox-native). Each profile is a 'profiles/<name>' folder inside it. Use one directory per set of accounts.",
+      "default": ""
     },
     "tools_vision": {
       "type": "boolean",
