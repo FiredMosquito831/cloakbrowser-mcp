@@ -25,11 +25,15 @@ const EMPTY_OPTIONAL_VARS = [
 
 const DEFAULT_PACKAGE = 'cloakbrowser-mcp@1.15.1';
 
-const TOOLS_PROFILES = {
-  minimal: '',
-  standard: 'vision,pdf,devtools',
-  full: 'vision,pdf,devtools,storage,network,testing,config',
-};
+const TOOL_GROUPS = [
+  ['vision', 'CLOAK_TOOL_GROUP_VISION'],
+  ['pdf', 'CLOAK_TOOL_GROUP_PDF'],
+  ['devtools', 'CLOAK_TOOL_GROUP_DEVTOOLS'],
+  ['storage', 'CLOAK_TOOL_GROUP_STORAGE'],
+  ['network', 'CLOAK_TOOL_GROUP_NETWORK'],
+  ['testing', 'CLOAK_TOOL_GROUP_TESTING'],
+  ['config', 'CLOAK_TOOL_GROUP_CONFIG'],
+];
 
 function buildChildEnv(source) {
   const env = { ...source };
@@ -70,21 +74,17 @@ function applyDefaultProfile(env) {
   env.PLAYWRIGHT_MCP_USER_DATA_DIR = profile;
 }
 
-function applyToolsProfile(env) {
-  const requested = (env.CLOAK_TOOLS_PROFILE ?? 'full').trim().toLowerCase();
-  if (requested === 'custom') {
-    return;
-  }
-  const caps = TOOLS_PROFILES[requested];
-  if (caps === undefined) {
-    process.stderr.write(`[cloakbrowser] unknown tool profile "${requested}"; using full\n`);
-    env.PLAYWRIGHT_MCP_CAPS = TOOLS_PROFILES.full;
-    return;
-  }
-  if (caps === '') {
+function groupEnabled(env, name) {
+  const value = (env[name] ?? 'true').trim().toLowerCase();
+  return !['false', '0', 'no', 'off'].includes(value);
+}
+
+function applyToolGroups(env) {
+  const caps = TOOL_GROUPS.filter(([, name]) => groupEnabled(env, name)).map(([group]) => group);
+  if (caps.length === 0) {
     delete env.PLAYWRIGHT_MCP_CAPS;
   } else {
-    env.PLAYWRIGHT_MCP_CAPS = caps;
+    env.PLAYWRIGHT_MCP_CAPS = caps.join(',');
   }
 }
 
@@ -193,7 +193,7 @@ function ensureRuntime(env, spec) {
 function main() {
   const env = buildChildEnv(process.env);
   applyDefaultProfile(env);
-  applyToolsProfile(env);
+  applyToolGroups(env);
   const packageSpec = resolvePackage(env);
   const isWindows = process.platform === 'win32';
 

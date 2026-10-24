@@ -1,7 +1,7 @@
 {
   "name": "cloakbrowser",
   "displayName": "CloakBrowser",
-  "version": "1.16.0",
+  "version": "1.17.0",
   "description": "CloakBrowser stealth Chromium through the Playwright MCP tool contract, via cloakbrowser-mcp.",
   "author": {
     "name": "FiredMosquito831"
@@ -23,18 +23,47 @@
       "options": ["cloak", "playwright"],
       "default": "cloak"
     },
-    "caps": {
-      "type": "string",
-      "title": "Custom capability list",
-      "description": "Only used when the tool profile is custom. Comma-separated groups: vision, pdf, devtools, storage, network, testing, config.",
-      "default": "vision,pdf,devtools,storage,network,testing,config"
+    "tools_vision": {
+      "type": "boolean",
+      "title": "Mouse primitives (vision)",
+      "description": "Six coordinate mouse tools: click, move, drag, down, up and wheel. Off removes them.",
+      "default": true
     },
-    "tools_profile": {
-      "type": "string",
-      "title": "Tool profile",
-      "description": "minimal exposes the 25 stock Playwright MCP browser tools, standard adds vision, pdf and devtools (45), full exposes all 72, custom uses the capability list below.",
-      "options": ["minimal", "standard", "full", "custom"],
-      "default": "full"
+    "tools_pdf": {
+      "type": "boolean",
+      "title": "PDF export",
+      "description": "browser_pdf_save. Off removes PDF export.",
+      "default": true
+    },
+    "tools_devtools": {
+      "type": "boolean",
+      "title": "Tracing, video and highlights",
+      "description": "Thirteen devtools tools: tracing, video, recording, annotations and element highlights. Off removes them.",
+      "default": true
+    },
+    "tools_storage": {
+      "type": "boolean",
+      "title": "Cookies and web storage",
+      "description": "Seventeen storage tools: cookies, localStorage, sessionStorage and storage state. Off removes them.",
+      "default": true
+    },
+    "tools_network": {
+      "type": "boolean",
+      "title": "Network routing",
+      "description": "Four network tools: route, unroute, route list and network state. Off removes request interception.",
+      "default": true
+    },
+    "tools_testing": {
+      "type": "boolean",
+      "title": "Assertions and locator generation",
+      "description": "Five testing tools: generate_locator and the four verify_* assertions. Off removes them.",
+      "default": true
+    },
+    "tools_config": {
+      "type": "boolean",
+      "title": "Configuration read",
+      "description": "browser_get_config. Off removes the configuration introspection tool.",
+      "default": true
     },
     "disabled_tools": {
       "type": "string",
