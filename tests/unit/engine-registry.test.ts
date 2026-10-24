@@ -23,6 +23,15 @@ interface Manifest {
     statusKeys?: { endpoint?: string; profileId?: string };
   };
   capabilities?: { groupSwitchesApply?: boolean; cdpAttach?: boolean };
+  systemDependencies?: {
+    id?: string;
+    label?: string;
+    required?: boolean;
+    downloadUrl?: string;
+    installerName?: string;
+    installHint?: string;
+    licenceNote?: string;
+  }[];
   ignoredSettings?: string[];
   toolSupport: Record<string, string>;
   toolSupportNotes?: Record<string, string>;
@@ -98,6 +107,15 @@ interface RegistryModule {
   resolveLauncherName(manifest: Manifest | null): string;
   validateLauncherName(value: unknown): string | null;
   scanEngines(enginesDir: string, profileNames: string[], launcherDir?: string): ScanResult;
+  systemDependencies(manifest: Manifest | null): {
+    id: string;
+    label: string;
+    required: boolean;
+    downloadUrl: string | null;
+    installerName: string | null;
+    installHint: string;
+    licenceNote: string | null;
+  }[];
   validateManifest(
     manifest: unknown,
     expectedId: string,
@@ -609,6 +627,114 @@ describe('requiredEnv, runtime and capability facts', () => {
     );
     const valid = { ...manifestWith({ id: 'alpha' }), capabilities: { cdpAttach: true } };
     expect(registry.validateManifest(valid, 'alpha', profileNames)).toBeNull();
+  });
+});
+
+describe('systemDependencies', () => {
+  const entry = {
+    id: 'example-app',
+    label: 'Example app',
+    required: true,
+    downloadUrl: 'https://example.com/downloads',
+    installerName: 'Example.Installer.exe',
+    installHint: 'Download it, run the installer, start the app and create a profile.',
+    licenceNote: 'Proprietary; vendor-reported free tier.',
+  };
+
+  it('validates the shipped Kameleo declaration and normalizes it', () => {
+    expect(registry.validateManifest(kameleo, 'kameleo', profileNames, pluginRoot)).toBeNull();
+    const declarations = registry.systemDependencies(kameleo);
+    expect(declarations).toHaveLength(1);
+    expect(declarations[0]).toEqual({
+      id: 'kameleo',
+      label: 'Kameleo desktop app',
+      required: true,
+      downloadUrl: 'https://kameleo.io/downloads',
+      installerName: 'Kameleo.Installer.exe',
+      installHint: declarations[0].installHint,
+      licenceNote: declarations[0].licenceNote,
+    });
+    expect(declarations[0].installHint).toContain('never downloads, installs or starts Kameleo');
+    expect(declarations[0].licenceNote).toContain('free tier with no account needed');
+  });
+
+  it.each([cloak, playwright, camoufox, camoufoxNative])('adds nothing for the $id engine', (manifest) => {
+    expect(registry.systemDependencies(manifest)).toEqual([]);
+    expect(manifest.systemDependencies).toBeUndefined();
+  });
+
+  it('defaults required to true and omits missing optional fields as null', () => {
+    const minimal = {
+      ...manifestWith({ id: 'alpha' }),
+      systemDependencies: [{ id: 'x', label: 'X', installHint: 'Do it.' }],
+    };
+    expect(registry.validateManifest(minimal, 'alpha', profileNames)).toBeNull();
+    expect(registry.systemDependencies(minimal as Manifest)).toEqual([
+      {
+        id: 'x',
+        label: 'X',
+        required: true,
+        downloadUrl: null,
+        installerName: null,
+        installHint: 'Do it.',
+        licenceNote: null,
+      },
+    ]);
+    const optional = {
+      ...manifestWith({ id: 'alpha' }),
+      systemDependencies: [{ ...entry, required: false }],
+    };
+    expect(registry.systemDependencies(optional as Manifest)[0].required).toBe(false);
+  });
+
+  it.each([
+    ['not an array', {}, { systemDependencies: 'app' }, 'systemDependencies must be an array'],
+    ['a non-object entry', {}, { systemDependencies: ['app'] }, 'systemDependencies[0] must be an object'],
+    [
+      'an unknown field',
+      {},
+      { systemDependencies: [{ ...entry, installCommand: 'winget install app' }] },
+      'unsupported field "installCommand"',
+    ],
+    [
+      'a missing id',
+      {},
+      { systemDependencies: [{ ...entry, id: '' }] },
+      'systemDependencies[0].id is missing',
+    ],
+    [
+      'a missing label',
+      {},
+      { systemDependencies: [{ ...entry, label: '' }] },
+      'systemDependencies[0].label is missing',
+    ],
+    [
+      'a missing install hint',
+      {},
+      { systemDependencies: [{ ...entry, installHint: '' }] },
+      'systemDependencies[0].installHint is missing',
+    ],
+    [
+      'a non-boolean required flag',
+      {},
+      { systemDependencies: [{ ...entry, required: 'yes' }] },
+      'systemDependencies[0].required must be a boolean',
+    ],
+    [
+      'a non-https download URL',
+      {},
+      { systemDependencies: [{ ...entry, downloadUrl: 'http://example.com' }] },
+      'systemDependencies[0].downloadUrl must be an https:// URL',
+    ],
+    [
+      'a duplicate id',
+      {},
+      { systemDependencies: [entry, { ...entry, label: 'Second' }] },
+      'systemDependencies declares "example-app" more than once',
+    ],
+  ])('rejects %s', (_label, _unused, overrides, expected) => {
+    const manifest = { ...manifestWith({ id: 'alpha' }), ...overrides } as unknown;
+    expect(registry.validateManifest(manifest, 'alpha', profileNames)).toContain(expected);
   });
 });
 

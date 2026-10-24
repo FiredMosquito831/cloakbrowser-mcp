@@ -37,6 +37,7 @@ an engine means adding a manifest, not editing broker code.
 | `requiredEnv` | no | Array of `{ "env": "...", "reason": "..." }`. The broker checks each variable before spawning. An empty value or an unresolved `${user_config.*}` placeholder is a configuration error: `initialize` carries `reason`, `tools/list` is meta-only, and no backend starts. `reason` is the complete actionable sentence |
 | `runtime` | no | Object describing an attached/remote runtime: `endpointEnv`, `profileEnv`, `defaultEndpoint` (must contain `{profileId}`), `errorHint` (may contain `{endpoint}`), `statusKeys` (`endpoint`/`profileId` → field names). The broker uses it for the extra `browser_engine_status` fields and to append `errorHint` to an `isError` tool result until the first successful tool call. Omit it for a normal launch engine; nothing is added |
 | `capabilities` | no | Object with only `groupSwitchesApply` and `cdpAttach` (booleans). The broker copies these into `browser_capabilities` for the engine that declares them |
+| `systemDependencies` | no | Array of external software the engine needs but the plugin never installs (see below). Reported generically in `browser_capabilities`; omitted engines gain no key |
 | `ignoredSettings` | no | Array of non-empty strings naming plugin settings the engine cannot honour (reported by `browser_capabilities`) |
 | `notes` | yes | String summarising the backend and its limitations |
 
@@ -183,6 +184,55 @@ failure without knowing the engine:
 - The endpoint rules themselves live in the launcher (loopback host, `ws(s)`,
   no userinfo); the broker only reports the effective value.
 
+## System dependencies (`systemDependencies`)
+
+A manifest may declare external software it needs but must never install, for
+example a commercial desktop application with its own licence. The block is
+display-only: the broker never downloads an installer, never runs one, never
+starts a GUI and never uses a package manager.
+
+```json
+{
+  "systemDependencies": [
+    {
+      "id": "example-app",
+      "label": "Example app",
+      "required": true,
+      "downloadUrl": "https://example.com/downloads",
+      "installerName": "Example.Installer.exe",
+      "installHint": "Download it from https://example.com/downloads, run Example.Installer.exe, start the app, create a profile and put its ID in the engine setting.",
+      "licenceNote": "Proprietary and separately licensed by its vendor."
+    }
+  ]
+}
+```
+
+| Field | Required | Value |
+|---|---|---|
+| `id` | yes | Unique non-empty id within the manifest |
+| `label` | yes | Human-readable name used in the status hint |
+| `required` | no | Boolean, default `true`. Only required entries contribute to the missing-dependency hint |
+| `downloadUrl` | no | `https://` URL of the vendor's download page |
+| `installerName` | no | The file name the user runs, for example `Kameleo.Installer.exe` |
+| `installHint` | yes | Complete actionable sentence (download, install, start, configure) |
+| `licenceNote` | no | Licence facts, marked vendor-reported where applicable |
+
+`browser_capabilities.systemDependencies` lists each entry with its declared
+fields plus a `status`:
+
+- `unknown` — the app may or may not be present. The broker cannot inspect a GUI
+  application without running something, so it never claims it is installed.
+- `missing` — evidence of absence: a `requiredEnv`/manifest configuration error,
+  a backend start or exit failure, or a failed tool call that the manifest's
+  `runtime.errorHint` explains.
+
+When a required dependency is `missing`, the same hint is appended to
+`browser_engine_status.lastError` and to the synthesized `initialize`
+instructions. Engines without a `systemDependencies` block gain no key and no
+text; their payloads are unchanged. The status is informational only: the engine
+still starts and its own errors still surface, so the user can install the app
+and retry without changing the plugin.
+
 ## Tool profiles
 
 Profiles are per engine and shared across engines:
@@ -205,6 +255,25 @@ Profiles are per engine and shared across engines:
   backend genuinely lacks them: each gap must be `none` with a
   `toolSupportNotes` reason and is listed in `browser_capabilities.unavailableTools`.
 
+## Provisioning contract
+
+Every launcher provisions its own local dependencies into
+`${CLAUDE_PLUGIN_DATA}` at the first MCP server start; nothing is installed
+system-wide and no shell is started. `lib/provision.mjs` is the shared,
+engine-agnostic implementation:
+
+| Helper | What it does |
+|---|---|
+| `ensureUv` | Uses an explicit `UV`/`UV_BIN`, then a working `uv` on `PATH`, then the plugin-managed pinned `uv` under `tools/uv/<version>` (downloaded from the official GitHub release, SHA-256 verified, extracted with pure Node). Fails closed on an unknown platform or a checksum mismatch |
+| `ensurePython` | Uses `UV_PYTHON`, then `PYTHON`, then `uv python install` of the pinned CPython under `tools/python` with `--no-bin --no-registry`. No system Python is required |
+| `ensureVenv` | Creates or refreshes `venvs/<name>` with `uv venv` + `uv pip install` of the manifest's pinned packages. A `.provision.json` marker records the uv version, Python version, package pins and a hash; a matching marker plus intact package metadata means reuse |
+| `ensureNpmRuntime` | The npm runtime shared by the Chromium launchers (`runtime/`); pins, `package.json` bytes, npm arguments, clean-reinstall rule and marker bytes are unchanged from 1.x |
+
+An engine that needs another runtime adds a launcher that calls these helpers;
+it does not add engine-specific code to the broker. Overrides (`UV`, `UV_BIN`,
+`UV_PYTHON`, `PYTHON`, and the engine's own package/command variables) are
+environment variables, not plugin settings.
+
 ## Adding an engine
 
 1. Add `engines/<id>.json` with every field above. Keep the id equal to the
@@ -217,12 +286,15 @@ Profiles are per engine and shared across engines:
    `contractSchemas`, `nativePrefix`, `profileArgument` and `toolAliases` as
    above. A backend that attaches to a browser someone else owns declares
    `requiredEnv` for the values without which it can never work and a `runtime`
-   block for its endpoint and error hint; `engines/kameleo.json` with
-   `launch-kameleo.mjs` is the worked attach example. The Camoufox engine in
+   block for its endpoint and error hint; if it also needs external software the
+   plugin must not install, declare `systemDependencies`. `engines/kameleo.json`
+   with `launch-kameleo.mjs` is the worked attach example (and the worked
+   `systemDependencies` example). The Camoufox engine in
    `engines/camoufox.json` is the worked example for a contract engine;
    `engines/camoufox-native.json` is the worked example for a native one. All
    launchers are adapters only: no engine id, setting name or tool name appears
-   in `broker.mjs`, `lib/surface.mjs` or `lib/attach.mjs`.
+   in `broker.mjs`, `lib/surface.mjs` or `lib/attach.mjs`, and every launcher
+   provisions through `lib/provision.mjs`.
 3. Regenerate the plugin's engine enum from the manifests:
 
    ```

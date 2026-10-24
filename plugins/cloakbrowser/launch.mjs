@@ -1,14 +1,9 @@
 #!/usr/bin/env node
-import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-
-// Bridge 1.15.1 rejects cloakbrowser 0.6.4 when humanize is enabled; 0.6.3 is
-// the newest wrapper its compatibility check accepts. Remove this pin after the
-// bridge adds 0.6.4 to its allowlist.
-const ENGINE_WRAPPER_PIN = '0.6.3';
-const DRIVER_PIN = 'patchright@1.64.1';
+import { ensureNpmRuntime, resolveNpmPackage } from './lib/provision.mjs';
 
 const EMPTY_OPTIONAL_VARS = [
   'PLAYWRIGHT_MCP_USER_DATA_DIR',
@@ -22,8 +17,6 @@ const EMPTY_OPTIONAL_VARS = [
   'CLOAKBROWSER_CACHE_DIR',
   'CLOAKBROWSER_BINARY_PATH',
 ];
-
-const DEFAULT_PACKAGE = 'cloakbrowser-mcp@1.15.1';
 
 const TOOL_GROUPS = [
   ['vision', 'CLOAK_TOOL_GROUP_VISION'],
@@ -47,16 +40,7 @@ function buildChildEnv(source) {
 }
 
 function resolvePackage(source) {
-  const value = source.CLOAK_PLAYWRIGHT_MCP_PACKAGE;
-  return value !== undefined && value.trim() !== '' ? value.trim() : DEFAULT_PACKAGE;
-}
-
-function parsePackageSpec(spec) {
-  const at = spec.lastIndexOf('@');
-  if (at <= 0) {
-    return { name: spec, version: 'latest' };
-  }
-  return { name: spec.slice(0, at), version: spec.slice(at + 1) };
+  return resolveNpmPackage(source);
 }
 
 function dataDir(env) {
@@ -88,106 +72,31 @@ function applyToolGroups(env) {
   }
 }
 
-function runtimeDir(env) {
-  return path.join(dataDir(env), 'runtime');
-}
-
 function cliPath(dir, name) {
   return path.join(dir, 'node_modules', name, 'dist', 'cli.js');
 }
 
-function readPackage(file) {
-  try {
-    const data = JSON.parse(readFileSync(file, 'utf8'));
-    return { name: data.name, version: data.version };
-  } catch {
-    return null;
-  }
-}
-
-function runtimeHealthy(dir, marker, desired, cli) {
-  if (!existsSync(cli) || !existsSync(marker)) {
-    return false;
-  }
-  try {
-    const current = JSON.parse(readFileSync(marker, 'utf8'));
-    if (
-      current.package !== desired.package ||
-      current.engine !== desired.engine ||
-      current.driver !== desired.driver
-    ) {
-      return false;
-    }
-  } catch {
-    return false;
-  }
-  const core = readPackage(path.join(dir, 'node_modules', 'playwright-core', 'package.json'));
-  const nested = readPackage(
-    path.join(dir, 'node_modules', '@playwright', 'mcp', 'node_modules', 'playwright', 'package.json'),
-  );
-  const topLevel = readPackage(path.join(dir, 'node_modules', 'playwright', 'package.json'));
-  const playwrightPackage = nested ?? topLevel;
-  const engine = readPackage(path.join(dir, 'node_modules', 'cloakbrowser', 'package.json'));
-  return (
-    core?.name === 'patchright-core' &&
-    playwrightPackage?.name === 'patchright' &&
-    engine?.version === ENGINE_WRAPPER_PIN
-  );
-}
-
+// The install/identity logic lives in lib/provision.mjs and is shared with
+// launch-kameleo.mjs. The pins, package.json bytes, npm arguments, clean
+// reinstall and marker bytes are unchanged from 1.x.
 function ensureRuntime(env, spec) {
-  const { name, version } = parsePackageSpec(spec);
-  const dir = runtimeDir(env);
-  const marker = path.join(dir, '.installed.json');
-  const desired = {
-    package: spec,
-    engine: ENGINE_WRAPPER_PIN,
-    driver: DRIVER_PIN,
-  };
-  const cli = cliPath(dir, name);
-
-  if (runtimeHealthy(dir, marker, desired, cli)) {
-    return cli;
-  }
-
-  // A previous install may be a mixed tree (stock playwright-core with a
-  // nested patchright). npm will not fix that in place, so start clean.
-  rmSync(path.join(dir, 'node_modules'), { recursive: true, force: true });
-  rmSync(path.join(dir, 'package-lock.json'), { force: true });
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(
-    path.join(dir, 'package.json'),
-    JSON.stringify(
-      {
-        private: true,
-        dependencies: { [name]: version },
-        overrides: {
-          cloakbrowser: ENGINE_WRAPPER_PIN,
-          playwright: `npm:patchright@${DRIVER_PIN.split('@')[1]}`,
-          'playwright-core': `npm:patchright-core@${DRIVER_PIN.split('@')[1]}`,
-        },
-      },
-      null,
-      2,
-    ) + '\n',
-  );
-
-  const isWindows = process.platform === 'win32';
-  const install = spawnSync(
-    isWindows ? 'npm.cmd' : 'npm',
-    ['install', '--omit=dev', '--no-audit', '--no-fund'],
-    {
-      cwd: dir,
-      stdio: ['ignore', 'ignore', 'inherit'],
-      shell: isWindows,
+  const runtime = ensureNpmRuntime({
+    env,
+    dataDir: dataDir(env),
+    spec,
+    locate: (dir, name) => {
+      const candidate = cliPath(dir, name);
+      return existsSync(candidate) ? candidate : null;
     },
-  );
-  if (install.status !== 0) {
-    throw new Error(`npm install failed for ${spec} in ${dir} (exit ${install.status})`);
-  }
+  });
+  // launch.mjs has always spawned the conventional CLI path even when the
+  // install did not create it (the child then reports the failure); keep that.
+  return runtime.cli ?? cliPath(runtime.dir, parseName(spec));
+}
 
-  writeFileSync(marker, JSON.stringify(desired) + '\n');
-  return cli;
+function parseName(spec) {
+  const at = spec.lastIndexOf('@');
+  return at <= 0 ? spec : spec.slice(0, at);
 }
 
 function main() {

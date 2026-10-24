@@ -16,19 +16,13 @@
 // missing prerequisite is one actionable line and exit 1, so the broker's
 // meta-only recovery path can answer the client instead of hanging the
 // handshake.
-import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { buildEndpoint, validateEndpointSetting } from './lib/attach.mjs';
-
-// Kept in sync with launch.mjs. A unit test reads both files and fails if these
-// three identities drift; the runtime is shared, so a drift would make one
-// launcher reinstall the tree the other just validated.
-const ENGINE_WRAPPER_PIN = '0.6.3';
-const DRIVER_PIN = 'patchright@1.64.1';
-const DEFAULT_PACKAGE = 'cloakbrowser-mcp@1.15.1';
+import { ensureNpmRuntime, resolveNpmPackage } from './lib/provision.mjs';
 
 const LOG_PREFIX = '[kameleo]';
 const PROFILE_ENV = 'KAMELEO_PROFILE_ID';
@@ -86,25 +80,7 @@ function runtimeDir(env) {
 }
 
 function resolvePackage(env) {
-  const value = env.CLOAK_PLAYWRIGHT_MCP_PACKAGE;
-  return value !== undefined && value.trim() !== '' ? value.trim() : DEFAULT_PACKAGE;
-}
-
-function parsePackageSpec(spec) {
-  const at = spec.lastIndexOf('@');
-  if (at <= 0) {
-    return { name: spec, version: 'latest' };
-  }
-  return { name: spec.slice(0, at), version: spec.slice(at + 1) };
-}
-
-function readPackage(file) {
-  try {
-    const data = JSON.parse(readFileSync(file, 'utf8'));
-    return { name: data.name, version: data.version };
-  } catch {
-    return null;
-  }
+  return resolveNpmPackage(env);
 }
 
 function groupEnabled(env, name) {
@@ -186,95 +162,20 @@ export function locateMcpCli(dir, packageName) {
   return null;
 }
 
-function runtimeHealthy(dir, marker, desired, packageName) {
-  if (!existsSync(marker) || locateMcpCli(dir, packageName) === null) {
-    return false;
-  }
-  try {
-    const current = JSON.parse(readFileSync(marker, 'utf8'));
-    if (
-      current.package !== desired.package ||
-      current.engine !== desired.engine ||
-      current.driver !== desired.driver
-    ) {
-      return false;
-    }
-  } catch {
-    return false;
-  }
-  const core = readPackage(path.join(dir, 'node_modules', 'playwright-core', 'package.json'));
-  const nested = readPackage(
-    path.join(dir, 'node_modules', '@playwright', 'mcp', 'node_modules', 'playwright', 'package.json'),
-  );
-  const topLevel = readPackage(path.join(dir, 'node_modules', 'playwright', 'package.json'));
-  const playwrightPackage = nested ?? topLevel;
-  const engine = readPackage(path.join(dir, 'node_modules', 'cloakbrowser', 'package.json'));
-  return (
-    core?.name === 'patchright-core' &&
-    playwrightPackage?.name === 'patchright' &&
-    engine?.version === ENGINE_WRAPPER_PIN
-  );
-}
-
+// Same identities and the same clean-install rule as launch.mjs; both call the
+// shared provisioner. Kameleo validates the @playwright/mcp entry point after
+// an install and names that exact failure, as it always has.
 function ensureRuntime(env, spec) {
-  const { name, version } = parsePackageSpec(spec);
-  const dir = runtimeDir(env);
-  const marker = path.join(dir, '.installed.json');
-  const desired = {
-    package: spec,
-    engine: ENGINE_WRAPPER_PIN,
-    driver: DRIVER_PIN,
-  };
-  if (runtimeHealthy(dir, marker, desired, name)) {
-    return locateMcpCli(dir, name);
-  }
-
-  // Same identities and the same clean-install rule as launch.mjs: a mixed tree
-  // (stock playwright-core with a nested patchright) cannot be repaired in
-  // place, so start clean.
-  rmSync(path.join(dir, 'node_modules'), { recursive: true, force: true });
-  rmSync(path.join(dir, 'package-lock.json'), { force: true });
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(
-    path.join(dir, 'package.json'),
-    JSON.stringify(
-      {
-        private: true,
-        dependencies: { [name]: version },
-        overrides: {
-          cloakbrowser: ENGINE_WRAPPER_PIN,
-          playwright: `npm:patchright@${DRIVER_PIN.split('@')[1]}`,
-          'playwright-core': `npm:patchright-core@${DRIVER_PIN.split('@')[1]}`,
-        },
-      },
-      null,
-      2,
-    ) + '\n',
-  );
-
-  const isWindows = process.platform === 'win32';
-  const install = spawnSync(
-    isWindows ? 'npm.cmd' : 'npm',
-    ['install', '--omit=dev', '--no-audit', '--no-fund'],
-    {
-      cwd: dir,
-      stdio: ['ignore', 'ignore', 'inherit'],
-      shell: isWindows,
-    },
-  );
-  if (install.status !== 0) {
-    throw new Error(`npm install failed for ${spec} in ${dir} (exit ${install.status})`);
-  }
-
-  writeFileSync(marker, JSON.stringify(desired) + '\n');
-  const cli = locateMcpCli(dir, name);
-  if (cli === null) {
-    throw new Error(
+  const runtime = ensureNpmRuntime({
+    env,
+    dataDir: pluginDataDir(env),
+    spec,
+    locate: locateMcpCli,
+    missingAfterInstallError: (dir) =>
       `The plugin runtime in ${dir} does not contain @playwright/mcp/cli.js after installing ${spec}. ` +
-        'Remove that runtime directory and restart Claude Code, or switch the engine to cloak once to reprovision it.',
-    );
-  }
-  return cli;
+      'Remove that runtime directory and restart Claude Code, or switch the engine to cloak once to reprovision it.',
+  });
+  return runtime.cli;
 }
 
 function main() {

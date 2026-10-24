@@ -182,14 +182,16 @@ describe('camoufox-native manifest', () => {
     expect(manifest.profileArgument.except).not.toContain('navigate');
   });
 
-  it('declares the prerequisites, the install command and the user-installed licence', () => {
+  it('declares the auto-provisioned dependencies, the fallback and the licence', () => {
     const requirements = (manifest.requirements ?? []).join(' ');
-    expect(requirements).toContain('Python 3.12+');
+    expect(requirements).toContain('uv (pinned 0.13.5)');
+    expect(requirements).toContain('Plugin-managed CPython 3.13.17');
     expect(requirements).toContain('mcp-camoufox==0.4.5');
     expect(requirements).toContain('uv tool install mcp-camoufox==0.4.5');
     expect(requirements).toContain('FSL-1.1-MIT');
     expect(requirements).toContain('156.0.1-beta.39');
-    expect(requirements).toContain('does not bundle');
+    expect(requirements).toContain('never bundles or redistributes');
+    expect(requirements).toContain('CAMOUFOX_NATIVE_COMMAND');
   });
 
   it('names the settings the native engine cannot honour', () => {
@@ -208,7 +210,7 @@ describe('camoufox-native manifest', () => {
   });
 
   it('ships the two new settings and the generated engine option', () => {
-    expect(plugin.version).toBe('2.4.0');
+    expect(plugin.version).toBe('2.5.0');
     expect(plugin.userConfig.camoufox_profile).toMatchObject({ type: 'string', default: 'default' });
     expect(plugin.userConfig.camoufox_data_dir).toMatchObject({ type: 'string', default: '' });
     expect(plugin.userConfig.browser_engine.options).toEqual([
@@ -221,12 +223,14 @@ describe('camoufox-native manifest', () => {
     expect(plugin.userConfig.browser_engine.description).toContain('camoufox-native');
   });
 
-  it('installs nothing itself and pins the daemon off in the launcher', () => {
-    expect(launcher).toContain('uv tool install');
-    expect(launcher).toContain('pipx install');
+  it('provisions the package itself and pins the daemon off in the launcher', () => {
+    expect(launcher).toContain('ensureUv');
+    expect(launcher).toContain('ensurePython');
+    expect(launcher).toContain('ensureVenv');
+    expect(launcher).toContain("name: 'camoufox-native'");
+    expect(launcher).toContain('CAMOUFOX_NATIVE_COMMAND');
     expect(launcher).toContain("env.CAMOUFOX_DAEMON = 'false'");
     expect(launcher).toContain('mcp-camoufox.exe');
-    expect(launcher).not.toContain('uv pip install');
     expect(launcher).not.toContain('CamoufoxFetcher');
     expect(launcher).not.toContain('spawnSync');
     expect(launcher).toContain('PROFILE_PATTERN');

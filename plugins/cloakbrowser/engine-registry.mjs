@@ -490,6 +490,81 @@ function validateCapabilities(manifest) {
   return null;
 }
 
+// Optional external software the engine needs but the plugin never installs
+// (a commercial desktop app, for example). The section is display-only: the
+// broker reports it in browser_capabilities and never downloads or runs an
+// installer. Every field is validated so a typo cannot silently vanish.
+function validateSystemDependencies(manifest) {
+  if (manifest.systemDependencies === undefined) {
+    return null;
+  }
+  if (!Array.isArray(manifest.systemDependencies)) {
+    return 'systemDependencies must be an array';
+  }
+  const allowed = new Set([
+    'id',
+    'label',
+    'required',
+    'downloadUrl',
+    'installerName',
+    'installHint',
+    'licenceNote',
+  ]);
+  const seen = new Set();
+  for (const [index, entry] of manifest.systemDependencies.entries()) {
+    const label = `systemDependencies[${index}]`;
+    if (!isPlainObject(entry)) {
+      return `${label} must be an object`;
+    }
+    for (const key of Object.keys(entry)) {
+      if (!allowed.has(key)) {
+        return `${label} has an unsupported field "${key}"`;
+      }
+    }
+    if (!nonEmptyString(entry.id)) {
+      return `${label}.id is missing`;
+    }
+    if (seen.has(entry.id)) {
+      return `systemDependencies declares "${entry.id}" more than once`;
+    }
+    seen.add(entry.id);
+    if (!nonEmptyString(entry.label)) {
+      return `${label}.label is missing`;
+    }
+    if (entry.required !== undefined && typeof entry.required !== 'boolean') {
+      return `${label}.required must be a boolean`;
+    }
+    if (!nonEmptyString(entry.installHint)) {
+      return `${label}.installHint is missing`;
+    }
+    for (const field of ['downloadUrl', 'installerName', 'licenceNote']) {
+      const value = entry[field];
+      if (value !== undefined && !nonEmptyString(value)) {
+        return `${label}.${field} must be a non-empty string`;
+      }
+    }
+    if (entry.downloadUrl !== undefined && !/^https:\/\//.test(entry.downloadUrl)) {
+      return `${label}.downloadUrl must be an https:// URL`;
+    }
+  }
+  return null;
+}
+
+// Normalized view of the system dependencies a manifest declares. The broker
+// reports these generically; an engine that declares none gains no new key.
+export function systemDependencies(manifest) {
+  const entries = Array.isArray(manifest?.systemDependencies) ? manifest.systemDependencies : [];
+  return entries.map((entry) => ({
+    id: entry.id,
+    label: entry.label,
+    required: entry.required !== false,
+    downloadUrl: nonEmptyString(entry.downloadUrl) ? entry.downloadUrl : null,
+    installerName: nonEmptyString(entry.installerName) ? entry.installerName : null,
+    installHint: entry.installHint,
+    licenceNote: nonEmptyString(entry.licenceNote) ? entry.licenceNote : null,
+  }));
+}
+
 // The first required environment variable the process does not supply, as the
 // manifest's own actionable sentence. Null when every requirement is satisfied
 // or the manifest declares none.
@@ -605,7 +680,12 @@ export function validateManifest(manifest, expectedId, profileNames, launcherDir
       }
     }
   }
-  for (const validation of [validateRequiredEnv, validateRuntime, validateCapabilities]) {
+  for (const validation of [
+    validateRequiredEnv,
+    validateRuntime,
+    validateCapabilities,
+    validateSystemDependencies,
+  ]) {
     const error = validation(manifest);
     if (error !== null) {
       return error;
