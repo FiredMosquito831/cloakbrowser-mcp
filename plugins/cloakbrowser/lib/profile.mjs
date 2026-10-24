@@ -1,12 +1,15 @@
-// Per-account profile resolution for the CloakBrowser broker.
+// Profile resolution and session safety for the CloakBrowser broker.
 //
 // A profile name selects one persistent browser profile under the plugin data
 // directory: profiles/<engine>/<name> for a named account, profiles/default for
 // the Chromium engines' legacy default, and profiles/<engine>/default for every
 // other engine's own default. `profile_dir` stays the explicit path override and
-// wins whenever it is set. The functions here are pure apart from
-// readAccountProxy, which is given a file path, so the unit suite can exercise
-// every rule without starting a backend.
+// wins whenever it is set. profile_isolation=workspace adds one profile per
+// project folder (profiles/<engine>/ws-<sha256(cwd)[:7]>) and a numbered-sibling
+// fallback; the lock helpers read the bridge's own lock file so the broker can
+// refuse a start that would fail. The functions here are explicitly parameterised
+// (no path is read from a global setting) and read only the files named by their
+// arguments, so the unit suite can exercise every rule without a backend.
 //
 // The account name is joined into a path, so it is validated before any join:
 // letters, digits, ".", "_" and "-", starting with a letter or digit, at most 64
