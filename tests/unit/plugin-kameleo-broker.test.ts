@@ -172,6 +172,12 @@ function createRuntime(stubTools: string[] = STUB_TOOLS): string {
     path.join(modules, '@playwright', 'mcp', 'cli.js'),
     STUB_SOURCE.replace('__TOOLS__', JSON.stringify(stubTools)),
   );
+  // launch.mjs (cloak/playwright) spawns this conventional path instead.
+  mkdirSync(path.join(modules, 'cloakbrowser-mcp', 'dist'), { recursive: true });
+  writeFileSync(
+    path.join(modules, 'cloakbrowser-mcp', 'dist', 'cli.js'),
+    STUB_SOURCE.replace('__TOOLS__', JSON.stringify(stubTools)),
+  );
   return root;
 }
 
@@ -180,12 +186,13 @@ function startBroker(options: {
   profileId: string;
   toolProfile: string;
   endpoint?: string;
+  engine?: string;
 }): BrokerSession {
   const child = spawn(process.execPath, [brokerPath], {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: {
       ...process.env,
-      STEALTH_ENGINE: 'kameleo',
+      STEALTH_ENGINE: options.engine ?? 'kameleo',
       STEALTH_TOOL_PROFILE: options.toolProfile,
       KAMELEO_PROFILE_ID: options.profileId,
       KAMELEO_ENDPOINT: options.endpoint ?? '',
@@ -277,7 +284,8 @@ describe('kameleo broker configuration errors', () => {
     });
     const payload = structuredContent(status);
     expect(payload.backendState).toBe('failed');
-    expect(payload.lastError).toBe(MISSING_PROFILE_REASON);
+    expect(String(payload.lastError).startsWith(MISSING_PROFILE_REASON)).toBe(true);
+    expect(String(payload.lastError)).toContain('Kameleo desktop app is required.');
     expect(payload.engineError).toBe(MISSING_PROFILE_REASON);
     expect(payload.backendPid).toBeNull();
     const capabilities = await session.request('tools/call', {
@@ -289,6 +297,19 @@ describe('kameleo broker configuration errors', () => {
     expect(caps.engineError).toBe(MISSING_PROFILE_REASON);
     expect(caps.groupSwitchesApply).toBe(true);
     expect(caps.cdpAttach).toBe(true);
+    const dependencies = caps.systemDependencies as Record<string, unknown>[];
+    expect(dependencies).toHaveLength(1);
+    expect(dependencies[0]).toMatchObject({
+      id: 'kameleo',
+      label: 'Kameleo desktop app',
+      required: true,
+      status: 'missing',
+      downloadUrl: 'https://kameleo.io/downloads',
+      installerName: 'Kameleo.Installer.exe',
+    });
+    expect(String(dependencies[0].installHint)).toContain('never downloads, installs or starts Kameleo');
+    expect(String(dependencies[0].licenceNote)).toContain('free tier with no account needed');
+    expect(String(dependencies[0].licenceNote)).toContain('not tested here');
   });
 
   it('answers initialize with the launcher rule when the endpoint setting is invalid', async () => {
@@ -350,6 +371,19 @@ describe('kameleo broker with a lazy backend', () => {
     expect(names).toContain('browser_capabilities');
     expect(names).toContain('browser_engine_status');
 
+    const beforeStatus = await session.request('tools/call', {
+      name: 'browser_engine_status',
+      arguments: {},
+    });
+    expect(structuredContent(beforeStatus).lastError).toBeNull();
+    const beforeCaps = structuredContent(
+      await session.request('tools/call', { name: 'browser_capabilities', arguments: {} }),
+    );
+    const beforeDeps = beforeCaps.systemDependencies as Record<string, unknown>[];
+    expect(beforeDeps).toHaveLength(1);
+    expect(beforeDeps[0].status).toBe('unknown');
+    expect(beforeDeps[0].installHint).toBeTruthy();
+
     const first = await session.request('tools/call', {
       name: 'browser_navigate',
       arguments: { url: 'http://127.0.0.1:9/' },
@@ -364,6 +398,11 @@ describe('kameleo broker with a lazy backend', () => {
       arguments: {},
     });
     expect(success.result?.isError).toBe(false);
+    const afterSuccessCaps = structuredContent(
+      await session.request('tools/call', { name: 'browser_capabilities', arguments: {} }),
+    );
+    const afterSuccessDeps = afterSuccessCaps.systemDependencies as Record<string, unknown>[];
+    expect(afterSuccessDeps[0].status).toBe('unknown');
 
     const afterSuccess = await session.request('tools/call', {
       name: 'browser_navigate',
@@ -382,6 +421,7 @@ describe('kameleo broker with a lazy backend', () => {
     expect(statusPayload.backendState).toBe('running');
     expect(statusPayload.kameleoEndpoint).toBe('ws://127.0.0.1:5050/playwright/test-profile');
     expect(statusPayload.kameleoProfileId).toBe('test-profile');
+    expect(String(statusPayload.lastError)).toContain('Kameleo desktop app is required.');
 
     const capabilities = await session.request('tools/call', {
       name: 'browser_capabilities',
@@ -392,6 +432,9 @@ describe('kameleo broker with a lazy backend', () => {
     expect(caps.exposedToolCount).toBe(PORTABLE_TOOLS.length + 2);
     expect(caps.groupSwitchesApply).toBe(true);
     expect(caps.cdpAttach).toBe(true);
+    const dependencies = caps.systemDependencies as Record<string, unknown>[];
+    expect(dependencies).toHaveLength(1);
+    expect(dependencies[0].status).toBe('missing');
   });
 
   it('exposes the full stub surface plus the two meta-tools', async () => {
@@ -415,5 +458,35 @@ describe('kameleo broker with a lazy backend', () => {
     expect(names).toContain('browser_annotate');
     expect(names).toContain('browser_capabilities');
     expect(names).toContain('browser_engine_status');
+  });
+});
+
+describe('system dependency reporting stays additive', () => {
+  it('adds no systemDependencies key or hint for an engine that declares none', async () => {
+    const dataDir = createRuntime();
+    const session = startBroker({
+      dataDir,
+      profileId: '',
+      toolProfile: 'full',
+      engine: 'cloak',
+    }) as BrokerSession & {
+      request: (method: string, params?: Record<string, unknown>) => Promise<JsonRpcResponse>;
+    };
+    await session.request('initialize', {
+      protocolVersion: '2025-06-18',
+      capabilities: {},
+      clientInfo: { name: 'test', version: '1' },
+    });
+    const caps = structuredContent(
+      await session.request('tools/call', { name: 'browser_capabilities', arguments: {} }),
+    );
+    expect(caps.engine).toBe('cloak');
+    expect(Object.hasOwn(caps, 'systemDependencies')).toBe(false);
+    expect(caps.engineError).toBeNull();
+    const status = structuredContent(
+      await session.request('tools/call', { name: 'browser_engine_status', arguments: {} }),
+    );
+    expect(status.engine).toBe('cloak');
+    expect(status.lastError).toBeNull();
   });
 });

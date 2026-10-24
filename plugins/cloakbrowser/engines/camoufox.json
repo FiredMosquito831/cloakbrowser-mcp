@@ -9,10 +9,10 @@
     "launcher": "launch-camoufox.mjs"
   },
   "requirements": [
-    "Python 3.12+",
-    "uv",
-    "Camoufox build v156.0.1-beta.39 (one-time ~1.3 GB download, ~2.4 GB on disk)",
-    "camoufox-playwright-mcp==0.1.5"
+    "uv (pinned 0.13.5): an explicit UV/UV_BIN or a working uv on PATH is used, otherwise the pinned release is downloaded into the plugin data directory and SHA-256 verified",
+    "Plugin-managed CPython 3.13.17 (installed by uv under the plugin data directory; UV_PYTHON or PYTHON override)",
+    "camoufox-playwright-mcp==0.1.5 (installed into <plugin data>/venvs/camoufox on first start; CAMOUFOX_MCP_PACKAGE override)",
+    "Camoufox build v156.0.1-beta.39 (one-time ~1.3 GB download, ~2.4 GB on disk)"
   ],
   "toolSupport": {
     "*": "full",
@@ -39,5 +39,5 @@
     "licence_key",
     "engine_version"
   ],
-  "notes": "Stealth Firefox via camoufox-playwright-mcp 0.1.5. 68 of the 72 canonical browser tools; portable by default. Needs Python 3.12+ and uv; no CDP."
+  "notes": "Stealth Firefox via camoufox-playwright-mcp 0.1.5. 68 of the 72 canonical browser tools; portable by default. Needs no system Python or uv: the launcher provisions a pinned uv, a managed Python and a venv under the plugin data directory on first start. No CDP."
 }

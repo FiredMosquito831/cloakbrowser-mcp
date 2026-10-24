@@ -25,6 +25,7 @@ import {
   profileAllows,
   resolveLauncherName,
   resolveToolProfile,
+  systemDependencies,
 } from './engine-registry.mjs';
 import { enrichToolError, runtimeErrorHint, runtimeStatusFields } from './lib/attach.mjs';
 import {
@@ -205,6 +206,10 @@ const state = {
   lastError: engineError,
   stderrTail: '',
   toolCallSucceeded: false,
+  // Set when the backend reports a failure that a manifest-declared system
+  // dependency can explain. Only engines that declare dependencies read it, so
+  // every other engine's payloads stay byte-identical.
+  systemDependencyMissing: false,
   shuttingDown: false,
   backend: {
     state: engineError === null ? 'idle' : 'failed',
@@ -427,7 +432,38 @@ function nativeCapabilitiesExtras() {
   };
 }
 
+// External software declared by the active manifest (for example a commercial
+// desktop app). The broker reports it, never installs it: status is "unknown"
+// until evidence says it is absent ("missing") — a configuration error, a
+// backend start/exit failure, or a failed call the manifest's runtime hint
+// explains. An engine that declares none gains no key at all.
+function systemDependencyUnavailable() {
+  return (
+    state.systemDependencyMissing ||
+    state.engineError !== null ||
+    state.backend.state === 'failed' ||
+    state.backend.state === 'exited'
+  );
+}
+
+function systemDependencyReport() {
+  const unavailable = systemDependencyUnavailable();
+  return systemDependencies(state.engine).map((entry) => ({
+    ...entry,
+    status: unavailable ? 'missing' : 'unknown',
+  }));
+}
+
+function systemDependencyHint() {
+  const missing = systemDependencyReport().filter((entry) => entry.required && entry.status === 'missing');
+  if (missing.length === 0) {
+    return null;
+  }
+  return missing.map((entry) => `${entry.label} is required. ${entry.installHint}`).join(' ');
+}
+
 function capabilitiesPayload() {
+  const systemDeps = systemDependencyReport();
   const counts = state.toolsListed ? toolCounts() : null;
   const supported = state.toolsListed ? supportedCounts() : null;
   const perToolSupport = {};
@@ -497,6 +533,7 @@ function capabilitiesPayload() {
     launch: resolveLauncherName(state.engine),
     requirements: manifestStringList('requirements'),
     ignoredSettings: manifestStringList('ignoredSettings'),
+    ...(systemDeps.length === 0 ? {} : { systemDependencies: systemDeps }),
     ...nativeCapabilitiesExtras(),
   };
 }
@@ -504,6 +541,15 @@ function capabilitiesPayload() {
 function statusPayload() {
   const counts = state.toolsListed ? toolCounts() : null;
   const now = Date.now();
+  const dependencyHint = systemDependencyHint();
+  const lastError =
+    dependencyHint === null
+      ? state.lastError
+      : state.lastError === null
+        ? dependencyHint
+        : state.lastError.includes(dependencyHint)
+          ? state.lastError
+          : `${state.lastError} ${dependencyHint}`;
   const startupMs =
     state.spawnedAt === null || state.initializeAnsweredAt === null
       ? null
@@ -522,7 +568,7 @@ function statusPayload() {
     backendPid: state.backend.pid,
     backendVersion: state.serverInfo?.version ?? null,
     backendServerName: state.serverInfo?.name ?? null,
-    lastError: state.lastError,
+    lastError,
     startupMs,
     waitMs,
     toolsListWaitMs: state.lastToolsListWaitMs,
@@ -626,9 +672,11 @@ function sendMetaOnlyList(id, cursor) {
 function synthesizeInitialize(id, reason) {
   state.initializeAnswered = true;
   state.initializeAnsweredAt = state.initializeAnsweredAt ?? Date.now();
+  const dependencyHint = systemDependencyHint();
   const instructions =
     `The ${state.engineId} backend is unavailable: ${reason} ` +
-    'Call browser_engine_status for details. Only broker meta-tools are exposed until Claude Code restarts the MCP server.';
+    'Call browser_engine_status for details. Only broker meta-tools are exposed until Claude Code restarts the MCP server.' +
+    (dependencyHint === null ? '' : ` ${dependencyHint}`);
   sendResult(id, {
     protocolVersion: state.requestedProtocolVersion ?? '2025-06-18',
     capabilities: { tools: {} },
@@ -858,6 +906,13 @@ function handleBackendMessage(message, rawLine) {
   // hint keep the raw line byte-for-byte.
   if (pending?.method === 'tools/call' && message.error === undefined) {
     if (message.result?.isError === true) {
+      // Evidence that the manifest's system dependency is absent: the
+      // manifest's own runtime hint explains the failure. Only engines that
+      // declare dependencies read this flag, and any later success clears it.
+      if (runtimeHint !== null && systemDependencies(state.engine).length > 0) {
+        state.systemDependencyMissing = true;
+        state.lastError = state.lastError === null ? runtimeHint : state.lastError;
+      }
       if (runtimeHint !== null && !state.toolCallSucceeded) {
         const enriched = enrichToolError(message.result, runtimeHint);
         if (enriched !== null) {
@@ -867,6 +922,10 @@ function handleBackendMessage(message, rawLine) {
       }
     } else {
       state.toolCallSucceeded = true;
+      // A successful call is evidence the backend (and any app it attaches to)
+      // is present; the dependency status returns to "unknown", never
+      // "installed". Only engines that declare dependencies read this flag.
+      state.systemDependencyMissing = false;
     }
   }
 

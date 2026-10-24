@@ -2,18 +2,22 @@
 // Launcher adapter for the Camoufox engine.
 //
 // The broker starts this file for every engine whose manifest names it. It
-// provisions a vendored venv under the plugin data directory with `uv`, installs
-// the pinned Python wrapper plus its Camoufox dependency, ensures the pinned
-// Camoufox browser build exists, then spawns the wrapper's stdio entry point.
+// provisions everything it needs under the plugin data directory on the first
+// start: a pinned checksum-verified `uv`, a uv-managed Python, and a venv with
+// the pinned Python wrapper (plus its Camoufox dependency). It then ensures the
+// pinned Camoufox browser build exists and spawns the wrapper's stdio entry
+// point. An explicit UV/UV_BIN, UV_PYTHON or PYTHON override wins.
 //
 // Rules: stdout is the MCP protocol only; every log line goes to stderr. Missing
 // prerequisites are named in one actionable line and exit 1 so the broker's
 // meta-only recovery path can answer the client instead of hanging the handshake.
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ensurePython, ensureUv, ensureVenv } from './lib/provision.mjs';
 
 const PLUGIN_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PACKAGE_PIN = 'camoufox-playwright-mcp==0.1.5';
@@ -21,7 +25,6 @@ const BUILD_PIN = 'v156.0.1-beta.39';
 const BOOTSTRAP = 'camoufox_bootstrap.py';
 const ENTRY = 'camoufox_entry.py';
 const LOG_PREFIX = '[camoufox]';
-const MINIMUM_PYTHON = [3, 12];
 
 const EMPTY_OPTIONAL_VARS = [
   'PLAYWRIGHT_MCP_USER_DATA_DIR',
@@ -95,177 +98,34 @@ function applyDefaultProfile(env) {
   env.PLAYWRIGHT_MCP_USER_DATA_DIR = profile;
 }
 
-function runVersionCommand(command, args) {
-  return spawnSync(command, args, {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    encoding: 'utf8',
-    windowsHide: true,
-  });
-}
-
-function parsePythonVersion(result) {
-  if (result === null || result.status !== 0) {
-    return null;
-  }
-  const text = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
-  const match = /Python\s+(\d+)\.(\d+)\.(\d+)/.exec(text);
-  if (match === null) {
-    return null;
-  }
-  return { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]) };
-}
-
-// Never install or download Python: find an interpreter the user already has and
-// name the requirement when there is none.
-function findPython() {
-  for (const candidate of ['python', 'python3']) {
-    const result = runVersionCommand(candidate, ['--version']);
-    const version = parsePythonVersion(result);
-    if (version === null) {
-      continue;
-    }
-    if (
-      version.major > MINIMUM_PYTHON[0] ||
-      (version.major === MINIMUM_PYTHON[0] && version.minor >= MINIMUM_PYTHON[1])
-    ) {
-      return { command: candidate, version };
-    }
-    return { command: candidate, version, tooOld: true };
-  }
-  return null;
-}
-
-function requirePrerequisites() {
-  const python = findPython();
-  if (python === null) {
-    fail(
-      'Python 3.12+ is required but no "python" interpreter was found. ' +
-        'Install Python 3.12 or newer and restart Claude Code.',
-    );
-  }
-  if (python.tooOld === true) {
-    const { major, minor, patch } = python.version;
-    fail(
-      `Python 3.12+ is required; found ${major}.${minor}.${patch}. ` +
-        'Install Python 3.12 or newer and restart Claude Code.',
-    );
-  }
-  const uv = runVersionCommand('uv', ['--version']);
-  if (uv === null || uv.status !== 0) {
-    fail(
-      'uv is required but was not found on PATH. Install uv from ' +
-        'https://docs.astral.sh/uv/getting-started/installation/ and restart Claude Code.',
-    );
-  }
-  return python;
-}
-
-function runtimeRoot(env) {
-  return path.join(dataDir(env), 'runtime-camoufox');
-}
-
-function venvPaths(env) {
-  const root = runtimeRoot(env);
-  const venv = path.join(root, '.venv');
-  const isWindows = process.platform === 'win32';
-  return {
-    root,
-    venv,
-    python: path.join(venv, isWindows ? 'Scripts' : 'bin', isWindows ? 'python.exe' : 'python'),
-    marker: path.join(root, '.installed.json'),
-  };
-}
-
-function packageVersion(spec) {
-  const at = spec.indexOf('==');
-  return at === -1 ? spec : spec.slice(at + 2);
-}
-
-function sitePackageDirs(paths) {
-  // Windows venvs use Lib/site-packages; POSIX venvs use lib/pythonX.Y/site-packages.
-  const base = path.join(paths.venv, process.platform === 'win32' ? 'Lib' : 'lib');
-  const directories = [];
-  for (const entry of readdirSyncSafe(base)) {
-    const directory = path.join(base, entry);
-    if (entry === 'site-packages' || entry.startsWith('python')) {
-      directories.push(entry.startsWith('python') ? path.join(directory, 'site-packages') : directory);
-    }
-  }
-  directories.push(base);
-  return directories.filter((directory) => existsSync(directory));
-}
-
-function wrapperInstalled(paths, spec) {
-  const expected = `camoufox_playwright_mcp-${packageVersion(spec)}.dist-info`;
-  return sitePackageDirs(paths).some((directory) => readdirSyncSafe(directory).includes(expected));
-}
-
-function readdirSyncSafe(directory) {
-  try {
-    return readdirSync(directory);
-  } catch {
-    return [];
-  }
-}
-
-function readMarker(marker) {
-  try {
-    return JSON.parse(readFileSync(marker, 'utf8'));
-  } catch {
-    return null;
-  }
-}
-
-function runtimeHealthy(paths, spec, build, pythonLabel) {
-  if (!existsSync(paths.python)) {
-    return false;
-  }
-  const marker = readMarker(paths.marker);
-  if (marker === null || marker.package !== spec || marker.build !== build || marker.python !== pythonLabel) {
-    return false;
-  }
-  return wrapperInstalled(paths, spec);
-}
-
-function stderrTail(text) {
-  return typeof text === 'string' ? text.trim().slice(-400) : '';
+// A change to the manifest, the wrapper pin or the build pin must rebuild the
+// venv, so all three feed the marker hash.
+function contractHash(spec, build) {
+  const manifest = readFileSync(path.join(PLUGIN_ROOT, 'engines', 'camoufox.json'), 'utf8');
+  return createHash('sha256')
+    .update(manifest)
+    .update('\n')
+    .update(spec)
+    .update('\n')
+    .update(build)
+    .digest('hex');
 }
 
 function ensureRuntime(env, spec, build) {
-  const python = requirePrerequisites();
-  const pythonLabel = `${python.version.major}.${python.version.minor}.${python.version.patch}`;
-  const paths = venvPaths(env);
-
-  if (!runtimeHealthy(paths, spec, build, pythonLabel)) {
-    // A stale or partial venv is rebuilt from scratch; the marker is written last.
-    rmSync(paths.marker, { force: true });
-    mkdirSync(paths.root, { recursive: true });
-    log(`provisioning the vendored venv at ${paths.venv} (one-time)`);
-    const venv = spawnSync(
-      'uv',
-      ['venv', '--python', python.command, '--no-python-downloads', '--clear', '--force', paths.venv],
-      { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', windowsHide: true },
-    );
-    if (venv === null || venv.status !== 0) {
-      fail(`uv venv failed: ${stderrTail(venv?.stderr)}`);
-    }
-    const install = spawnSync('uv', ['pip', 'install', '--python', paths.python, spec], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      encoding: 'utf8',
-      windowsHide: true,
+  const data = dataDir(env);
+  return ensureUv({ env, dataDir: data, log }).then((uv) => {
+    const python = ensurePython({ env, dataDir: data, uv, log });
+    return ensureVenv({
+      env,
+      dataDir: data,
+      uv,
+      python,
+      name: 'camoufox',
+      packages: [spec],
+      extra: { build, manifest: contractHash(spec, build) },
+      log,
     });
-    if (install === null || install.status !== 0) {
-      fail(`uv pip install failed for ${spec}: ${stderrTail(install?.stderr)}`);
-    }
-    if (!wrapperInstalled(paths, spec)) {
-      fail(`the installed venv does not contain ${spec}; refusing to start a mismatched runtime.`);
-    }
-    writeFileSync(
-      paths.marker,
-      `${JSON.stringify({ package: spec, build, python: pythonLabel }, null, 2)}\n`,
-    );
-  }
-  return paths;
+  });
 }
 
 function ensureBuild(env, paths, build) {
@@ -291,7 +151,8 @@ function resolveBinary(env, paths, build) {
     windowsHide: true,
   });
   if (result === null || result.status !== 0) {
-    fail(`cannot locate the Camoufox build ${build}: ${stderrTail(result?.stderr)}`);
+    const tail = typeof result?.stderr === 'string' ? result.stderr.trim().slice(-400) : '';
+    fail(`cannot locate the Camoufox build ${build}: ${tail}`);
   }
   const lines = `${result.stdout ?? ''}`
     .split(/\r?\n/)
@@ -304,12 +165,12 @@ function resolveBinary(env, paths, build) {
   return binary;
 }
 
-function main() {
+async function main() {
   const env = buildChildEnv(process.env);
   const spec = resolveOverride(env, 'CAMOUFOX_MCP_PACKAGE', PACKAGE_PIN);
   const build = resolveOverride(env, 'CAMOUFOX_BROWSER_BUILD', BUILD_PIN);
 
-  const paths = ensureRuntime(env, spec, build);
+  const paths = await ensureRuntime(env, spec, build);
   ensureBuild(env, paths, build);
   const binary = resolveBinary(env, paths, build);
 
@@ -340,4 +201,6 @@ function main() {
   });
 }
 
-main();
+main().catch((error) => {
+  fail(error instanceof Error ? error.message : String(error));
+});

@@ -128,11 +128,14 @@ describe('camoufox engine manifest', () => {
     }
   });
 
-  it('declares the prerequisites the launcher enforces', () => {
-    expect(manifest.requirements).toContain('Python 3.12+');
-    expect(manifest.requirements).toContain('uv');
-    expect(manifest.requirements?.join(' ')).toContain('camoufox-playwright-mcp==0.1.5');
-    expect(manifest.requirements?.join(' ')).toContain('v156.0.1-beta.39');
+  it('declares the dependencies the launcher auto-provisions', () => {
+    const requirements = (manifest.requirements ?? []).join(' ');
+    expect(requirements).toContain('uv (pinned 0.13.5)');
+    expect(requirements).toContain('Plugin-managed CPython 3.13.17');
+    expect(requirements).toContain('camoufox-playwright-mcp==0.1.5');
+    expect(requirements).toContain('v156.0.1-beta.39');
+    expect(requirements).toContain('SHA-256');
+    expect(requirements).toContain('UV_PYTHON or PYTHON override');
   });
 
   it('names the settings the Camoufox engine cannot honour', () => {

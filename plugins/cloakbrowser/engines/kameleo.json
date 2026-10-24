@@ -9,15 +9,27 @@
     "launcher": "launch-kameleo.mjs"
   },
   "requirements": [
-    "Kameleo desktop app installed and running",
-    "An activated Kameleo licence",
+    "Kameleo desktop app installed and running (vendor download page: https://kameleo.io/downloads; installer Kameleo.Installer.exe; vendor requirement Windows 10 or newer). The plugin never downloads, installs or starts it",
+    "An activated Kameleo licence (the vendor's download page advertises a free tier with no account needed; vendor-reported, not tested here)",
     "A Chromium (Chroma) profile; Junglefox (Firefox) cannot attach over CDP",
-    "A profile ID in kameleo_profile_id. The plugin never starts the Kameleo app; Kameleo starts the profile itself when the endpoint is opened."
+    "A profile ID in kameleo_profile_id. The plugin never starts the Kameleo app; Kameleo starts the profile itself when the endpoint is opened.",
+    "Node with npm: the pinned @playwright/mcp runtime is provisioned into the plugin data directory on first start"
   ],
   "requiredEnv": [
     {
       "env": "KAMELEO_PROFILE_ID",
       "reason": "The kameleo engine needs a profile ID. Set \"Kameleo profile ID\" (kameleo_profile_id) in the cloakbrowser plugin configuration and restart Claude Code."
+    }
+  ],
+  "systemDependencies": [
+    {
+      "id": "kameleo",
+      "label": "Kameleo desktop app",
+      "required": true,
+      "downloadUrl": "https://kameleo.io/downloads",
+      "installerName": "Kameleo.Installer.exe",
+      "installHint": "Download Kameleo from https://kameleo.io/downloads, run Kameleo.Installer.exe (about 150 MB; vendor requirement Windows 10 or newer), start Kameleo, create a Chromium (Chroma) profile, and set its ID in kameleo_profile_id. The plugin never downloads, installs or starts Kameleo.",
+      "licenceNote": "Kameleo is proprietary and separately licensed by its vendor. Vendor-reported on 2026-10-24: the download page offers a free tier with no account needed; this was not tested here."
     }
   ],
   "runtime": {

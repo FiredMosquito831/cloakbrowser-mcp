@@ -21,6 +21,15 @@ interface Manifest {
     statusKeys?: { endpoint?: string; profileId?: string };
   };
   capabilities?: { groupSwitchesApply?: boolean; cdpAttach?: boolean };
+  systemDependencies?: {
+    id?: string;
+    label?: string;
+    required?: boolean;
+    downloadUrl?: string;
+    installerName?: string;
+    installHint?: string;
+    licenceNote?: string;
+  }[];
   ignoredSettings?: string[];
   toolSupport: Record<string, string>;
   toolSupportNotes?: Record<string, string>;
@@ -88,6 +97,13 @@ interface LauncherModule {
   resolveLaunchConfig(source: Record<string, string | undefined>): LaunchConfig;
 }
 
+interface ProvisionModule {
+  DEFAULT_NPM_PACKAGE: string;
+  NPM_DRIVER_PIN: string;
+  NPM_ENGINE_WRAPPER_PIN: string;
+  ensureNpmRuntime(options: Record<string, unknown>): unknown;
+}
+
 const registry = (await import(
   new URL('../../plugins/cloakbrowser/engine-registry.mjs', import.meta.url).href
 )) as unknown as RegistryModule;
@@ -97,6 +113,9 @@ const attach = (await import(
 const launcher = (await import(
   new URL('../../plugins/cloakbrowser/launch-kameleo.mjs', import.meta.url).href
 )) as unknown as LauncherModule;
+const provision = (await import(
+  new URL('../../plugins/cloakbrowser/lib/provision.mjs', import.meta.url).href
+)) as unknown as ProvisionModule;
 
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 const pluginRoot = path.join(repoRoot, 'plugins', 'cloakbrowser');
@@ -208,13 +227,22 @@ describe('kameleo manifest', () => {
     expect(requirements).toContain('Chroma');
     expect(requirements).toContain('Junglefox');
     expect(requirements).toContain('kameleo_profile_id');
+    expect(requirements).toContain('https://kameleo.io/downloads');
+    expect(requirements).toContain('Kameleo.Installer.exe');
+    expect(manifest.systemDependencies).toHaveLength(1);
+    expect(manifest.systemDependencies?.[0]).toMatchObject({
+      id: 'kameleo',
+      required: true,
+      downloadUrl: 'https://kameleo.io/downloads',
+      installerName: 'Kameleo.Installer.exe',
+    });
     expect(manifest.notes).toContain('UNVERIFIED');
     expect(manifest.notes).toContain('Junglefox');
     expect(manifest.notes).toContain('74');
   });
 
   it('ships the settings, the env references and the generated engine option', () => {
-    expect(plugin.version).toBe('2.4.0');
+    expect(plugin.version).toBe('2.5.0');
     expect(plugin.userConfig.kameleo_profile_id).toMatchObject({ type: 'string', default: '' });
     expect(plugin.userConfig.kameleo_profile_id.title).toBe('Kameleo profile ID');
     expect(plugin.userConfig.kameleo_profile_id.description).toContain(
@@ -415,7 +443,7 @@ describe('launcher environment', () => {
     expect(launcherSource).not.toContain('patchright mcp');
     expect(launcherSource).not.toContain('PLAYWRIGHT_MCP_USER_DATA_DIR =');
     expect(launcherSource).not.toContain('applyDefaultProfile');
-    expect(launcherSource).toContain('CLOAK_PLAYWRIGHT_MCP_PACKAGE');
+    expect(launcherSource).toContain('resolveNpmPackage');
   });
 
   it('keeps the launcher endpoint template and env names equal to the manifest runtime', () => {
@@ -424,14 +452,16 @@ describe('launcher environment', () => {
     expect(launcherSource).toContain(`'${manifest.runtime?.profileEnv}'`);
   });
 
-  it('keeps the shared runtime identities equal to launch.mjs', () => {
-    const readConstant = (source: string, name: string): string | null => {
-      const match = new RegExp(`const ${name} = '([^']+)'`).exec(source);
-      return match === null ? null : match[1];
-    };
-    for (const name of ['ENGINE_WRAPPER_PIN', 'DRIVER_PIN', 'DEFAULT_PACKAGE']) {
-      expect(readConstant(launcherSource, name)).not.toBeNull();
-      expect(readConstant(launcherSource, name)).toBe(readConstant(cloakLauncherSource, name));
+  it('keeps the shared runtime identities in one module used by both launchers', () => {
+    expect(provision.NPM_ENGINE_WRAPPER_PIN).toBe('0.6.3');
+    expect(provision.NPM_DRIVER_PIN).toBe('patchright@1.64.1');
+    expect(provision.DEFAULT_NPM_PACKAGE).toBe('cloakbrowser-mcp@1.15.1');
+    expect(launcherSource).toContain('ensureNpmRuntime');
+    expect(cloakLauncherSource).toContain('ensureNpmRuntime');
+    for (const source of [launcherSource, cloakLauncherSource]) {
+      expect(source).not.toContain("const ENGINE_WRAPPER_PIN = '");
+      expect(source).not.toContain("const DRIVER_PIN = '");
+      expect(source).not.toContain("const DEFAULT_PACKAGE = '");
     }
   });
 });
@@ -518,7 +548,7 @@ describe('documentation', () => {
     expect(readme).toContain('UNVERIFIED');
     expect(readme).toContain('connect ECONNREFUSED 127.0.0.1:5050');
     expect(readme).toContain('| `kameleo` | `portable` | 74 | 26');
-    expect(readme).toContain('2.4.0');
+    expect(readme).toContain('2.5.0');
     for (const line of readme.split(/\r?\n/)) {
       if (line.toLowerCase().includes('kameleo') && line.includes('isBot: false')) {
         throw new Error(`README claims a Kameleo stealth result: ${line}`);

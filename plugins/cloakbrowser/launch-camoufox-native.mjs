@@ -1,26 +1,33 @@
 #!/usr/bin/env node
 // Launcher adapter for the Camoufox native engine (mcp-camoufox).
 //
-// The package is a user-installed dependency: this plugin does not bundle,
-// download or redistribute it (its licence is FSL-1.1-MIT). The launcher finds
-// the console script the user installed, validates the profile name with the
-// app's own rule, pins the daemon off and the Camoufox browser build, drops
-// empty optional values, then spawns the app with inherited stdio.
+// The package is fetched from PyPI at the first start and installed into a
+// plugin-managed venv under ${CLAUDE_PLUGIN_DATA}; the plugin never bundles or
+// redistributes it (its licence is FSL-1.1-MIT). An explicit
+// CAMOUFOX_NATIVE_COMMAND wins, and a usable executable already on PATH (for
+// example from `uv tool install`) is the fallback when provisioning fails.
+//
+// The launcher validates the profile name with the app's own rule, pins the
+// daemon off and the Camoufox browser build, drops empty optional values, then
+// spawns the app with inherited stdio.
 //
 // Rules: stdout is the MCP protocol only; every log line goes to stderr. A
 // missing prerequisite is one actionable line and exit 1, so the broker's
 // meta-only recovery path can answer the client instead of hanging the
 // handshake.
 import { spawn } from 'node:child_process';
-import { existsSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
+import { ensurePython, ensureUv, ensureVenv, venvExecutablePath } from './lib/provision.mjs';
 
 const PACKAGE_PIN = 'mcp-camoufox==0.4.5';
 const BUILD_PIN = '156.0.1-beta.39';
 const LOG_PREFIX = '[camoufox-native]';
 const DEFAULT_PROFILE = 'default';
+const PLUGIN_ROOT = path.dirname(fileURLToPath(import.meta.url));
 // mcp-camoufox's own rule (profile_name.py): 1-64 characters, first character
 // alphanumeric, then letters, digits, '.', '_' or '-'. A slash is impossible.
 const PROFILE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -55,6 +62,11 @@ function pluginDataDir(env) {
   return env.CLAUDE_PLUGIN_DATA !== undefined && env.CLAUDE_PLUGIN_DATA.trim() !== ''
     ? env.CLAUDE_PLUGIN_DATA.trim()
     : path.join(homedir(), '.camoufox-native-mcp-plugin');
+}
+
+function resolveOverride(env, name, fallback) {
+  const value = env[name];
+  return value !== undefined && value.trim() !== '' ? value.trim() : fallback;
 }
 
 function normalizeBuild(raw) {
@@ -174,7 +186,7 @@ function isFile(candidate) {
 }
 
 function searchDirectories(env) {
-  const directories = (env.PATH ?? '')
+  const directories = (env.PATH ?? env.Path ?? '')
     .split(path.delimiter)
     .map((entry) => entry.trim())
     .filter((entry) => entry !== '');
@@ -187,19 +199,9 @@ function searchDirectories(env) {
   return [...new Set(directories)];
 }
 
-// The app is looked up, never installed. A .cmd/.bat shim is refused because a
-// shell string is not an executable and the plugin starts no shell.
-function locateCommand(env) {
-  const override = env.CAMOUFOX_NATIVE_COMMAND?.trim();
-  if (override !== undefined && override !== '') {
-    if (!isFile(override)) {
-      fail(
-        `CAMOUFOX_NATIVE_COMMAND points at "${override}", which is not an existing file. ` +
-          'Point it at the mcp-camoufox executable, or unset it and put the executable on PATH.',
-      );
-    }
-    return override;
-  }
+// A .cmd/.bat shim is refused because a shell string is not an executable and
+// the plugin starts no shell.
+function locateOnPath(env) {
   for (const directory of searchDirectories(env)) {
     for (const name of executableNames()) {
       const candidate = path.join(directory, name);
@@ -211,24 +213,86 @@ function locateCommand(env) {
   return null;
 }
 
-function installHelp(env) {
-  const spec =
-    env.CAMOUFOX_NATIVE_PACKAGE !== undefined && env.CAMOUFOX_NATIVE_PACKAGE.trim() !== ''
-      ? env.CAMOUFOX_NATIVE_PACKAGE.trim()
-      : PACKAGE_PIN;
+function explicitCommand(env) {
+  const override = env.CAMOUFOX_NATIVE_COMMAND?.trim();
+  if (override === undefined || override === '') {
+    return null;
+  }
+  if (!isFile(override)) {
+    fail(
+      `CAMOUFOX_NATIVE_COMMAND points at "${override}", which is not an existing file. ` +
+        'Point it at the mcp-camoufox executable, or unset it to let the plugin provision it.',
+    );
+  }
+  return override;
+}
+
+function manifestHash() {
+  try {
+    return createHash('sha256')
+      .update(readFileSync(path.join(PLUGIN_ROOT, 'engines', 'camoufox-native.json'), 'utf8'))
+      .digest('hex');
+  } catch {
+    return null;
+  }
+}
+
+// Fetch mcp-camoufox from PyPI into <plugin data>/venvs/camoufox-native with the
+// shared uv/Python/venv provisioner. The package is installed from the index,
+// never bundled with the plugin.
+async function provisionCommand(env, spec) {
+  const data = pluginDataDir(env);
+  const uv = await ensureUv({ env, dataDir: data, log });
+  const python = ensurePython({ env, dataDir: data, uv, log });
+  const venv = ensureVenv({
+    env,
+    dataDir: data,
+    uv,
+    python,
+    name: 'camoufox-native',
+    packages: [spec],
+    extra: { build: BUILD_PIN, manifest: manifestHash() },
+    log,
+  });
+  const command = venvExecutablePath(venv.venv, 'mcp-camoufox', process.platform);
+  if (!isFile(command)) {
+    throw new Error(
+      `the provisioned venv ${venv.venv} does not contain the mcp-camoufox console script. ` +
+        'Remove that venv and restart Claude Code to reprovision it.',
+    );
+  }
+  log(`provisioned ${spec} from PyPI into ${venv.venv}`);
+  return command;
+}
+
+function provisioningHelp(env, spec, error) {
   return (
-    `mcp-camoufox is not installed (looked for ${executableNames().join(' or ')} on PATH and in ~/.local/bin). ` +
-    `Install it yourself with "uv tool install ${spec}" or "pipx install ${spec}", then restart Claude Code. ` +
-    'The plugin does not bundle or download this package; its licence is FSL-1.1-MIT.'
+    `mcp-camoufox could not be provisioned (${error.message}) and no mcp-camoufox executable was found ` +
+    `on PATH or in ~/.local/bin. Set CAMOUFOX_NATIVE_COMMAND to the executable, or install it yourself ` +
+    `with "uv tool install ${spec}" (or "pipx install ${spec}"), then restart Claude Code. ` +
+    'The plugin fetches this package from PyPI at first start; it never bundles or redistributes it ' +
+    '(licence FSL-1.1-MIT).'
   );
 }
 
-function main() {
+async function main() {
   const env = buildChildEnv(process.env);
-  const command = locateCommand(env);
+  const spec = resolveOverride(env, 'CAMOUFOX_NATIVE_PACKAGE', PACKAGE_PIN);
+
+  let command = explicitCommand(env);
   if (command === null) {
-    fail(installHelp(env));
+    try {
+      command = await provisionCommand(env, spec);
+    } catch (error) {
+      log(`could not provision ${spec}: ${error.message}`);
+      command = locateOnPath(env);
+      if (command === null) {
+        fail(provisioningHelp(env, spec, error));
+      }
+      log(`falling back to the user-installed ${command}`);
+    }
   }
+
   const profile = env.CAMOUFOX_PROFILE ?? DEFAULT_PROFILE;
   log(
     `starting ${command} build=${env.CAMOUFOX_BROWSER_VERSION} profile=${profile} ` +
@@ -263,5 +327,7 @@ function main() {
 // env helpers without starting a backend.
 const invokedPath = process.argv[1] === undefined ? null : path.resolve(process.argv[1]);
 if (invokedPath !== null && import.meta.url === pathToFileURL(invokedPath).href) {
-  main();
+  main().catch((error) => {
+    fail(error instanceof Error ? error.message : String(error));
+  });
 }
