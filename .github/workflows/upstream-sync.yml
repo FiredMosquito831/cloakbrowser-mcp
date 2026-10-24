@@ -42,6 +42,8 @@ jobs:
     name: Sync swimmwatch/main
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
     permissions:
       contents: write
       pull-requests: write
