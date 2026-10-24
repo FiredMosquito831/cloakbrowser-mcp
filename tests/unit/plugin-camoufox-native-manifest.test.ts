@@ -208,13 +208,14 @@ describe('camoufox-native manifest', () => {
   });
 
   it('ships the two new settings and the generated engine option', () => {
-    expect(plugin.version).toBe('2.3.0');
+    expect(plugin.version).toBe('2.4.0');
     expect(plugin.userConfig.camoufox_profile).toMatchObject({ type: 'string', default: 'default' });
     expect(plugin.userConfig.camoufox_data_dir).toMatchObject({ type: 'string', default: '' });
     expect(plugin.userConfig.browser_engine.options).toEqual([
       'camoufox-native',
       'camoufox',
       'cloak',
+      'kameleo',
       'playwright',
     ]);
     expect(plugin.userConfig.browser_engine.description).toContain('camoufox-native');

@@ -13,6 +13,8 @@
       "CAMOUFOX_PROFILE": "${user_config.camoufox_profile}",
       "CAMOUFOX_DATA_DIR": "${user_config.camoufox_data_dir}",
       "CAMOUFOX_DAEMON": "false",
+      "KAMELEO_PROFILE_ID": "${user_config.kameleo_profile_id}",
+      "KAMELEO_ENDPOINT": "${user_config.kameleo_endpoint}",
       "CLOAK_TOOL_GROUP_VISION": "${user_config.tools_vision}",
       "CLOAK_TOOL_GROUP_PDF": "${user_config.tools_pdf}",
       "CLOAK_TOOL_GROUP_DEVTOOLS": "${user_config.tools_devtools}",

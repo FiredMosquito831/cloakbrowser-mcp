@@ -43,6 +43,19 @@ function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+// A configured value that can be used as it stands. An empty value and an
+// unresolved ${user_config.*} placeholder mean "the host did not supply it".
+function usableEnvValue(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (trimmed === '' || trimmed.includes('${')) {
+    return null;
+  }
+  return trimmed;
+}
+
 // Validate the shared profile document. "full" is a rule (everything the
 // manifest supports), "portable" is the one explicit allowlist shared by every
 // engine, so a new engine cannot drift from the rest.
@@ -204,23 +217,6 @@ function validateNativeManifest(manifest, pluginRoot) {
   if (profile.except !== undefined) {
     if (!Array.isArray(profile.except) || profile.except.some((entry) => !nonEmptyString(entry))) {
       return 'profileArgument.except must be an array of non-empty strings';
-    }
-  }
-
-  if (manifest.capabilities !== undefined) {
-    if (!isPlainObject(manifest.capabilities)) {
-      return 'capabilities must be an object';
-    }
-    for (const key of Object.keys(manifest.capabilities)) {
-      if (key !== 'groupSwitchesApply') {
-        return `capabilities has an unsupported field "${key}"`;
-      }
-    }
-    if (
-      manifest.capabilities.groupSwitchesApply !== undefined &&
-      typeof manifest.capabilities.groupSwitchesApply !== 'boolean'
-    ) {
-      return 'capabilities.groupSwitchesApply must be a boolean';
     }
   }
 
@@ -387,6 +383,132 @@ function validateNativeManifest(manifest, pluginRoot) {
   return null;
 }
 
+// Optional machine-checkable environment requirements. `requirements` is
+// display-only prose; `requiredEnv` names the environment variables without
+// which the engine can never work, so the broker can fail at initialize instead
+// of spawning a backend that cannot answer. Generic: any engine may declare it.
+function validateRequiredEnv(manifest) {
+  if (manifest.requiredEnv === undefined) {
+    return null;
+  }
+  if (!Array.isArray(manifest.requiredEnv)) {
+    return 'requiredEnv must be an array';
+  }
+  const seen = new Set();
+  for (const [index, entry] of manifest.requiredEnv.entries()) {
+    const label = `requiredEnv[${index}]`;
+    if (!isPlainObject(entry)) {
+      return `${label} must be an object`;
+    }
+    for (const key of Object.keys(entry)) {
+      if (key !== 'env' && key !== 'reason') {
+        return `${label} has an unsupported field "${key}"`;
+      }
+    }
+    if (!nonEmptyString(entry.env)) {
+      return `${label}.env is missing`;
+    }
+    if (!nonEmptyString(entry.reason)) {
+      return `${label}.reason is missing`;
+    }
+    if (seen.has(entry.env)) {
+      return `requiredEnv declares "${entry.env}" more than once`;
+    }
+    seen.add(entry.env);
+  }
+  return null;
+}
+
+// Optional data the broker uses to describe a remote/attached runtime in
+// browser_engine_status and to enrich a backend error with an actionable hint.
+// The broker itself stays engine-agnostic: every name and sentence lives here.
+function validateRuntime(manifest) {
+  if (manifest.runtime === undefined) {
+    return null;
+  }
+  if (!isPlainObject(manifest.runtime)) {
+    return 'runtime must be an object';
+  }
+  const allowed = new Set(['defaultEndpoint', 'endpointEnv', 'errorHint', 'profileEnv', 'statusKeys']);
+  for (const key of Object.keys(manifest.runtime)) {
+    if (!allowed.has(key)) {
+      return `runtime has an unsupported field "${key}"`;
+    }
+  }
+  for (const field of ['defaultEndpoint', 'endpointEnv', 'errorHint', 'profileEnv']) {
+    const value = manifest.runtime[field];
+    if (value !== undefined && !nonEmptyString(value)) {
+      return `runtime.${field} must be a non-empty string`;
+    }
+  }
+  if (manifest.runtime.defaultEndpoint !== undefined) {
+    if (!manifest.runtime.defaultEndpoint.includes('{profileId}')) {
+      return 'runtime.defaultEndpoint must contain the "{profileId}" placeholder';
+    }
+    if (!nonEmptyString(manifest.runtime.profileEnv)) {
+      return 'runtime.profileEnv is required when runtime.defaultEndpoint is set';
+    }
+  }
+  if (manifest.runtime.statusKeys !== undefined) {
+    if (!isPlainObject(manifest.runtime.statusKeys)) {
+      return 'runtime.statusKeys must be an object';
+    }
+    for (const key of Object.keys(manifest.runtime.statusKeys)) {
+      if (key !== 'endpoint' && key !== 'profileId') {
+        return `runtime.statusKeys has an unsupported field "${key}"`;
+      }
+    }
+    for (const [field, value] of Object.entries(manifest.runtime.statusKeys)) {
+      if (!nonEmptyString(value)) {
+        return `runtime.statusKeys.${field} must be a non-empty string`;
+      }
+    }
+  }
+  return null;
+}
+
+// Optional capability facts. Only the names the broker understands are allowed,
+// so a typo cannot silently disappear from browser_capabilities.
+function validateCapabilities(manifest) {
+  if (manifest.capabilities === undefined) {
+    return null;
+  }
+  if (!isPlainObject(manifest.capabilities)) {
+    return 'capabilities must be an object';
+  }
+  for (const key of Object.keys(manifest.capabilities)) {
+    if (key !== 'groupSwitchesApply' && key !== 'cdpAttach') {
+      return `capabilities has an unsupported field "${key}"`;
+    }
+  }
+  for (const field of ['groupSwitchesApply', 'cdpAttach']) {
+    const value = manifest.capabilities[field];
+    if (value !== undefined && typeof value !== 'boolean') {
+      return `capabilities.${field} must be a boolean`;
+    }
+  }
+  return null;
+}
+
+// The first required environment variable the process does not supply, as the
+// manifest's own actionable sentence. Null when every requirement is satisfied
+// or the manifest declares none.
+export function firstMissingRequiredEnv(manifest, env) {
+  const requirements = Array.isArray(manifest?.requiredEnv) ? manifest.requiredEnv : [];
+  for (const requirement of requirements) {
+    if (!isPlainObject(requirement) || !nonEmptyString(requirement.env)) {
+      continue;
+    }
+    if (usableEnvValue(env?.[requirement.env]) !== null) {
+      continue;
+    }
+    return nonEmptyString(requirement.reason)
+      ? requirement.reason
+      : `Required environment variable ${requirement.env} is not set.`;
+  }
+  return null;
+}
+
 // Validate one engine manifest. expectedId comes from the file name, so a
 // manifest cannot advertise an id different from the file that defines it.
 // launcherDir is optional: when given, the named launcher must exist there.
@@ -481,6 +603,12 @@ export function validateManifest(manifest, expectedId, profileNames, launcherDir
       if (!nonEmptyString(entry)) {
         return `${field} must contain only non-empty strings`;
       }
+    }
+  }
+  for (const validation of [validateRequiredEnv, validateRuntime, validateCapabilities]) {
+    const error = validation(manifest);
+    if (error !== null) {
+      return error;
     }
   }
   if (manifest.contract === NATIVE_CONTRACT) {

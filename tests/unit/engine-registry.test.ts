@@ -14,6 +14,15 @@ interface Manifest {
   defaultToolProfile: string;
   launch?: { launcher?: string };
   requirements?: string[];
+  requiredEnv?: { env: string; reason: string }[];
+  runtime?: {
+    defaultEndpoint?: string;
+    endpointEnv?: string;
+    errorHint?: string;
+    profileEnv?: string;
+    statusKeys?: { endpoint?: string; profileId?: string };
+  };
+  capabilities?: { groupSwitchesApply?: boolean; cdpAttach?: boolean };
   ignoredSettings?: string[];
   toolSupport: Record<string, string>;
   toolSupportNotes?: Record<string, string>;
@@ -66,6 +75,7 @@ interface RegistryModule {
   availableProfileNames(profiles: ProfilesDocument): string[];
   engineChangeHelp(engineIds: string[]): string;
   findPortableGaps(manifest: Manifest, profiles: ProfilesDocument): string[];
+  firstMissingRequiredEnv(manifest: Manifest | null, env: Record<string, string | undefined>): string | null;
   loadEngineConfiguration(options: {
     enginesDir: string;
     profilesFile: string;
@@ -145,6 +155,7 @@ const camoufox = JSON.parse(readFileSync(path.join(enginesDir, 'camoufox.json'),
 const camoufoxNative = JSON.parse(
   readFileSync(path.join(enginesDir, 'camoufox-native.json'), 'utf8'),
 ) as Manifest;
+const kameleo = JSON.parse(readFileSync(path.join(enginesDir, 'kameleo.json'), 'utf8')) as Manifest;
 
 const tempRoots: string[] = [];
 
@@ -241,17 +252,18 @@ describe('shared profiles.json', () => {
 describe('engine manifests', () => {
   it('discovers every shipped engine in deterministic file-name order', () => {
     const scan = registry.scanEngines(enginesDir, profileNames);
-    expect(scan.ids).toEqual(['camoufox-native', 'camoufox', 'cloak', 'playwright']);
+    expect(scan.ids).toEqual(['camoufox-native', 'camoufox', 'cloak', 'kameleo', 'playwright']);
     expect(scan.warnings).toEqual([]);
     expect(scan.entries.map((entry) => entry.id)).toEqual([
       'camoufox-native',
       'camoufox',
       'cloak',
+      'kameleo',
       'playwright',
     ]);
   });
 
-  it.each([cloak, playwright, camoufox, camoufoxNative])(
+  it.each([cloak, playwright, camoufox, camoufoxNative, kameleo])(
     'validates $id and keeps its id equal to the file name',
     (manifest) => {
       expect(registry.validateManifest(manifest, manifest.id, profileNames)).toBeNull();
@@ -263,11 +275,13 @@ describe('engine manifests', () => {
     expect(playwright.defaultToolProfile).toBe('full');
   });
 
-  it('keeps portable as the default profile for the Camoufox engine', () => {
+  it('keeps portable as the default profile for the Camoufox and Kameleo engines', () => {
     expect(camoufox.defaultToolProfile).toBe('portable');
+    expect(camoufoxNative.defaultToolProfile).toBe('portable');
+    expect(kameleo.defaultToolProfile).toBe('portable');
   });
 
-  it.each([cloak, playwright, camoufox, camoufoxNative])(
+  it.each([cloak, playwright, camoufox, camoufoxNative, kameleo])(
     'uses only allowed support values ($id)',
     (manifest) => {
       const allowed = new Set(['full', 'partial', 'none', 'unknown']);
@@ -281,7 +295,7 @@ describe('engine manifests', () => {
     },
   );
 
-  it.each([cloak, playwright, camoufox])('exposes every portable tool ($id)', (manifest) => {
+  it.each([cloak, playwright, camoufox, kameleo])('exposes every portable tool ($id)', (manifest) => {
     expect(registry.findPortableGaps(manifest, profiles)).toEqual([]);
     for (const toolName of PORTABLE_TOOLS) {
       expect(registry.manifestSupport(manifest, toolName)).not.toBe('none');
@@ -477,9 +491,16 @@ describe('manifest launcher, requirements and ignored settings', () => {
   });
 
   it('accepts the shipped engines against the real plugin root', () => {
-    for (const manifest of [cloak, playwright, camoufox, camoufoxNative]) {
+    for (const manifest of [cloak, playwright, camoufox, camoufoxNative, kameleo]) {
       expect(registry.validateManifest(manifest, manifest.id, profileNames, pluginRoot)).toBeNull();
     }
+  });
+
+  it('resolves the Kameleo launcher and keeps the attach facts in its manifest', () => {
+    expect(registry.resolveLauncherName(kameleo)).toBe('launch-kameleo.mjs');
+    expect(kameleo.transport).toBe('launch');
+    expect(kameleo.contract).toBe('playwright-mcp');
+    expect(kameleo.capabilities).toEqual({ groupSwitchesApply: true, cdpAttach: true });
   });
 
   it.each([
@@ -494,6 +515,100 @@ describe('manifest launcher, requirements and ignored settings', () => {
   ])('rejects %s', (_label, overrides, expected) => {
     const manifest = { ...manifestWith({ id: 'alpha' }), ...overrides } as unknown;
     expect(registry.validateManifest(manifest, 'alpha', profileNames)).toContain(expected);
+  });
+});
+
+describe('requiredEnv, runtime and capability facts', () => {
+  it('reports the Kameleo profile requirement with the manifest sentence', () => {
+    expect(kameleo.requiredEnv).toEqual([
+      {
+        env: 'KAMELEO_PROFILE_ID',
+        reason:
+          'The kameleo engine needs a profile ID. Set "Kameleo profile ID" (kameleo_profile_id) ' +
+          'in the cloakbrowser plugin configuration and restart Claude Code.',
+      },
+    ]);
+    expect(registry.firstMissingRequiredEnv(kameleo, {})).toContain('needs a profile ID');
+    expect(registry.firstMissingRequiredEnv(kameleo, { KAMELEO_PROFILE_ID: '' })).toContain(
+      'kameleo_profile_id',
+    );
+    expect(
+      registry.firstMissingRequiredEnv(kameleo, {
+        KAMELEO_PROFILE_ID: '${user_config.kameleo_profile_id}',
+      }),
+    ).toContain('needs a profile ID');
+    expect(registry.firstMissingRequiredEnv(kameleo, { KAMELEO_PROFILE_ID: '   ' })).toContain(
+      'needs a profile ID',
+    );
+    expect(registry.firstMissingRequiredEnv(kameleo, { KAMELEO_PROFILE_ID: 'abc123' })).toBeNull();
+  });
+
+  it('adds no requirement to an engine that declares none', () => {
+    expect(registry.firstMissingRequiredEnv(cloak, {})).toBeNull();
+    expect(registry.firstMissingRequiredEnv(camoufoxNative, {})).toBeNull();
+    expect(registry.firstMissingRequiredEnv(null, {})).toBeNull();
+  });
+
+  it.each([
+    ['requiredEnv not an array', { requiredEnv: 'KAMELEO_PROFILE_ID' }, 'requiredEnv must be an array'],
+    ['a missing env name', { requiredEnv: [{ reason: 'x' }] }, 'requiredEnv[0].env is missing'],
+    [
+      'a missing reason',
+      { requiredEnv: [{ env: 'KAMELEO_PROFILE_ID' }] },
+      'requiredEnv[0].reason is missing',
+    ],
+    [
+      'an unknown field',
+      { requiredEnv: [{ env: 'A', reason: 'x', defaultValue: 'y' }] },
+      'unsupported field "defaultValue"',
+    ],
+    [
+      'a duplicate variable',
+      {
+        requiredEnv: [
+          { env: 'A', reason: 'x' },
+          { env: 'A', reason: 'y' },
+        ],
+      },
+      'more than once',
+    ],
+  ])('rejects %s in requiredEnv', (_label, overrides, expected) => {
+    const manifest = { ...manifestWith({ id: 'alpha' }), ...overrides } as unknown;
+    expect(registry.validateManifest(manifest, 'alpha', profileNames)).toContain(expected);
+  });
+
+  it.each([
+    [
+      'a default endpoint without the placeholder',
+      { defaultEndpoint: 'ws://127.0.0.1:5050', profileEnv: 'A' },
+      'must contain the "{profileId}" placeholder',
+    ],
+    [
+      'a default endpoint without a profileEnv',
+      { defaultEndpoint: 'ws://127.0.0.1:5050/{profileId}' },
+      'runtime.profileEnv is required',
+    ],
+    ['an unknown runtime field', { setting: 'x' }, 'unsupported field "setting"'],
+    ['an unknown status key', { statusKeys: { endpoint: 'e', port: 'p' } }, 'unsupported field "port"'],
+    [
+      'an empty status key',
+      { statusKeys: { endpoint: '' } },
+      'runtime.statusKeys.endpoint must be a non-empty string',
+    ],
+  ])('rejects %s in runtime', (_label, runtime, expected) => {
+    const manifest = { ...manifestWith({ id: 'alpha' }), runtime } as unknown;
+    expect(registry.validateManifest(manifest, 'alpha', profileNames)).toContain(expected);
+  });
+
+  it('rejects an unknown or non-boolean capability fact', () => {
+    const unknown = { ...manifestWith({ id: 'alpha' }), capabilities: { cdpAttach: true, ports: 2 } };
+    expect(registry.validateManifest(unknown, 'alpha', profileNames)).toContain('unsupported field "ports"');
+    const nonBoolean = { ...manifestWith({ id: 'alpha' }), capabilities: { cdpAttach: 'yes' } };
+    expect(registry.validateManifest(nonBoolean, 'alpha', profileNames)).toContain(
+      'capabilities.cdpAttach must be a boolean',
+    );
+    const valid = { ...manifestWith({ id: 'alpha' }), capabilities: { cdpAttach: true } };
+    expect(registry.validateManifest(valid, 'alpha', profileNames)).toBeNull();
   });
 });
 
@@ -609,6 +724,7 @@ describe('generated browser_engine options', () => {
       'camoufox-native',
       'camoufox',
       'cloak',
+      'kameleo',
       'playwright',
     ]);
 

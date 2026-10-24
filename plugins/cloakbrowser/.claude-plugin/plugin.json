@@ -1,7 +1,7 @@
 {
   "name": "cloakbrowser",
   "displayName": "CloakBrowser",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "CloakBrowser stealth Chromium through the Playwright MCP tool contract, via cloakbrowser-mcp.",
   "author": {
     "name": "FiredMosquito831"
@@ -19,14 +19,14 @@
     "browser_engine": {
       "type": "string",
       "title": "Browser engine",
-      "description": "cloak uses the patched CloakBrowser Chromium. playwright uses the stock Playwright Chromium and gives up the stealth patches. camoufox uses the Camoufox stealth Firefox and needs Python 3.12+ with uv installed. camoufox-native uses the user-installed mcp-camoufox package (its own 27-tool contract, portable by default; install it yourself, the plugin does not bundle it). The engine is read when the MCP server starts; changing it restarts the server and reloads the tool list.",
-      "options": ["camoufox-native", "camoufox", "cloak", "playwright"],
+      "description": "cloak uses the patched CloakBrowser Chromium. playwright uses the stock Playwright Chromium and gives up the stealth patches. camoufox uses the Camoufox stealth Firefox and needs Python 3.12+ with uv installed. camoufox-native uses the user-installed mcp-camoufox package (its own 27-tool contract, portable by default; install it yourself, the plugin does not bundle it). kameleo attaches to a running Kameleo Chroma profile over CDP and needs the Kameleo app with an active licence and a profile ID; Junglefox profiles cannot be attached, and stealth over attach is unverified. The engine is read when the MCP server starts; changing it restarts the server and reloads the tool list.",
+      "options": ["camoufox-native", "camoufox", "cloak", "kameleo", "playwright"],
       "default": "cloak"
     },
     "tool_profile": {
       "type": "string",
       "title": "Tool profile",
-      "description": "Which tools the selected engine exposes. default follows the engine manifest: full for cloak and playwright (the current 76-tool surface); portable for camoufox and camoufox-native (a shared 24-tool core). portable hides engine-specific and extra tools; full exposes everything the engine supports. The seven tool groups and disabled_tools still apply. Restart Claude Code after changing it.",
+      "description": "Which tools the selected engine exposes. default follows the engine manifest: full for cloak and playwright (the current 76-tool surface); portable for camoufox, camoufox-native and kameleo (a shared 24-tool core). portable hides engine-specific and extra tools; full exposes everything the engine supports. The seven tool groups and disabled_tools still apply. Restart Claude Code after changing it.",
       "options": ["default", "portable", "full"],
       "default": "default"
     },
@@ -40,6 +40,18 @@
       "type": "string",
       "title": "Camoufox native data directory",
       "description": "Where the camoufox-native engine keeps its profiles and logs. Leave empty for Claude Code's plugin data directory (profiles/camoufox-native). Each profile is a 'profiles/<name>' folder inside it. Use one directory per set of accounts.",
+      "default": ""
+    },
+    "kameleo_profile_id": {
+      "type": "string",
+      "title": "Kameleo profile ID",
+      "description": "Profile ID to attach to. Required when the browser engine is kameleo. Open Kameleo, create or start the profile, and copy its ID from the profile row. The plugin never starts the Kameleo app; it connects to Kameleo's local API, which starts the profile. Chromium (Chroma) profiles only: a Junglefox profile cannot be attached over CDP.",
+      "default": ""
+    },
+    "kameleo_endpoint": {
+      "type": "string",
+      "title": "Kameleo CDP endpoint (optional)",
+      "description": "Full WebSocket CDP endpoint for the Kameleo profile. Leave empty to use ws://127.0.0.1:5050/playwright/<profile ID>. Only ws:// or wss:// on a loopback host is accepted; a non-loopback endpoint is rejected.",
       "default": ""
     },
     "tools_vision": {
