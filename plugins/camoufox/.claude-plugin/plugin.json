@@ -1,0 +1,99 @@
+{
+  "name": "camoufox",
+  "displayName": "Camoufox",
+  "version": "2.6.0",
+  "description": "Camoufox stealth Firefox through the Playwright MCP tool contract. Provisions a pinned uv, a managed Python and the engine venv automatically; the pinned Camoufox browser build downloads on first use. Portable profile by default; no CDP.",
+  "author": {
+    "name": "FiredMosquito831"
+  },
+  "homepage": "https://github.com/FiredMosquito831/cloakbrowser-mcp",
+  "license": "MIT",
+  "keywords": ["browser", "mcp", "playwright", "stealth", "camoufox", "firefox"],
+  "userConfig": {
+    "headless": {
+      "type": "boolean",
+      "title": "Headless",
+      "description": "Run the browser without a window. Headed mode is measurably less detectable, so leave this off unless you need a server with no display.",
+      "default": false
+    },
+    "tool_profile": {
+      "type": "string",
+      "title": "Tool profile",
+      "description": "Which tools the Camoufox engine exposes. default follows the engine manifest (portable for camoufox): portable is the shared 24-tool browser core, full is everything this engine supports. The seven tool groups and disabled_tools still apply. Restart Claude Code after changing it.",
+      "options": ["default", "portable", "full"],
+      "default": "default"
+    },
+    "tools_vision": {
+      "type": "boolean",
+      "title": "Mouse primitives (vision)",
+      "description": "Six coordinate mouse tools: click, move, drag, down, up and wheel. Off removes them.",
+      "default": true
+    },
+    "tools_pdf": {
+      "type": "boolean",
+      "title": "PDF export",
+      "description": "browser_pdf_save. This engine cannot produce PDFs (Firefox), so the tool is not exposed; the switch is kept so the same configuration works across engines.",
+      "default": true
+    },
+    "tools_devtools": {
+      "type": "boolean",
+      "title": "Tracing, video and highlights",
+      "description": "Devtools tools: tracing, video, recording, annotations and element highlights. Off removes them.",
+      "default": true
+    },
+    "tools_storage": {
+      "type": "boolean",
+      "title": "Cookies and web storage",
+      "description": "Storage tools: cookies, localStorage, sessionStorage and storage state. Off removes them.",
+      "default": true
+    },
+    "tools_network": {
+      "type": "boolean",
+      "title": "Network routing",
+      "description": "Four network tools: route, unroute, route list and network state. Off removes request interception.",
+      "default": true
+    },
+    "tools_testing": {
+      "type": "boolean",
+      "title": "Assertions and locator generation",
+      "description": "Five testing tools: generate_locator and the four verify_* assertions. Off removes them.",
+      "default": true
+    },
+    "tools_config": {
+      "type": "boolean",
+      "title": "Configuration read",
+      "description": "browser_get_config. Off removes the configuration introspection tool.",
+      "default": true
+    },
+    "disabled_tools": {
+      "type": "string",
+      "title": "Disabled tools",
+      "description": "Comma-separated tool names to hide from the agent and reject when called, for example browser_start_video,browser_take_screenshot. Leave empty to expose the selected profile unchanged.",
+      "default": ""
+    },
+    "profile_dir": {
+      "type": "string",
+      "title": "Persistent profile directory",
+      "description": "Directory that keeps cookies, logins and the fingerprint seed. It is created if it does not exist. Leave empty to use this plugin's own persistent profile in Claude Code's plugin data directory (profiles/camoufox/default). Use one directory per account.",
+      "default": ""
+    },
+    "proxy_server": {
+      "type": "string",
+      "title": "Proxy server",
+      "description": "Sticky proxy URL, for example http://user:pass@host:port. Leave empty for a direct connection.",
+      "default": ""
+    },
+    "proxy_bypass": {
+      "type": "string",
+      "title": "Proxy bypass list",
+      "description": "Comma-separated hosts that should not use the proxy. Leave empty to proxy everything.",
+      "default": ""
+    },
+    "output_dir": {
+      "type": "string",
+      "title": "Artifacts directory",
+      "description": "Where Playwright MCP writes screenshots, traces and session files. It is created if it does not exist. Leave empty for the default.",
+      "default": ""
+    }
+  }
+}

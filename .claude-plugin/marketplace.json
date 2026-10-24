@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "cloakbrowser-mcp",
-  "description": "Claude Code marketplace for CloakBrowser: stealth Chromium driven through the Playwright MCP tool contract.",
+  "description": "Claude Code marketplace for stealth browser MCP servers: CloakBrowser (universal broker) and Camoufox (per-engine plugin), each through the Playwright MCP tool contract.",
   "owner": {
     "name": "FiredMosquito831"
   },
@@ -15,6 +15,16 @@
       "category": "automation",
       "keywords": ["browser", "mcp", "playwright", "stealth", "cloakbrowser", "automation"],
       "source": "./plugins/cloakbrowser"
+    },
+    {
+      "name": "camoufox",
+      "description": "Camoufox stealth Firefox through the Playwright MCP tool contract: 67 of the 72 browser_* tools, portable profile by default, no CDP. Provisions its own Python runtime automatically.",
+      "author": {
+        "name": "FiredMosquito831"
+      },
+      "category": "automation",
+      "keywords": ["browser", "mcp", "playwright", "stealth", "camoufox", "firefox", "automation"],
+      "source": "./plugins/camoufox"
     }
   ]
 }

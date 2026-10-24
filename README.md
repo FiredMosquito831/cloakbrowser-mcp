@@ -109,6 +109,21 @@ codex mcp add cloakbrowser -- npx -y cloakbrowser-mcp@latest
 claude mcp add --transport stdio cloakbrowser -- npx -y cloakbrowser-mcp@latest
 ```
 
+The same repository is a Claude Code plugin marketplace named `cloakbrowser-mcp`:
+
+```bash
+/plugin marketplace add FiredMosquito831/cloakbrowser-mcp
+/plugin install cloakbrowser@cloakbrowser-mcp   # universal broker, default
+/plugin install camoufox@cloakbrowser-mcp       # fixed Camoufox engine
+```
+
+| Plugin | Engine | What it adds |
+|---|---|---|
+| `cloakbrowser` | selectable: `cloak` (default), `playwright`, `camoufox`, `camoufox-native`, `kameleo` | the 76-tool CloakBrowser surface, a manifest-driven broker, and every engine setting |
+| `camoufox` | fixed `camoufox` (stealth Firefox) | only the settings that engine honours; 26 tools at the portable profile, 69 at full; provisions its own Python runtime |
+
+Install one path per engine. Plugin settings are per plugin and are not carried across; a Kameleo per-engine plugin is not shipped. See `plugins/cloakbrowser/README.md` and `plugins/camoufox/README.md`.
+
 ### GitHub Copilot In VS Code
 
 ```json

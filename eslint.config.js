@@ -17,6 +17,10 @@ const configOptions = {
     'coverage/**',
     'artifacts/**',
     'plugins/**',
+    // The canonical copies of the plugin runtime assets are byte-identical to
+    // the shipped copies under plugins/** (which this config already ignores).
+    // Linting them would demand code changes that break that equality contract.
+    'shared/core/**',
     'node_modules/**',
     '.agents/skills/brag/**',
     '.agents/skills/humanizer/**',
@@ -39,7 +43,7 @@ const configOptions2 = {
       // Auto-discover the closest tsconfig for each linted file. Avoids the
       // "file not in project" error for top-level config files.
       projectService: {
-        maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 45,
+        maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 46,
         allowDefaultProject: [
           'eslint.config.js',
           'vitest.config.ts',
