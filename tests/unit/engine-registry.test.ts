@@ -88,7 +88,12 @@ interface RegistryModule {
   resolveLauncherName(manifest: Manifest | null): string;
   validateLauncherName(value: unknown): string | null;
   scanEngines(enginesDir: string, profileNames: string[], launcherDir?: string): ScanResult;
-  validateManifest(manifest: unknown, expectedId: string, profileNames: string[]): string | null;
+  validateManifest(
+    manifest: unknown,
+    expectedId: string,
+    profileNames: string[],
+    launcherDir?: string,
+  ): string | null;
   validateProfiles(document: unknown): string | null;
 }
 
@@ -137,7 +142,6 @@ const profileNames = registry.availableProfileNames(profiles);
 const cloak = JSON.parse(readFileSync(path.join(enginesDir, 'cloak.json'), 'utf8')) as Manifest;
 const playwright = JSON.parse(readFileSync(path.join(enginesDir, 'playwright.json'), 'utf8')) as Manifest;
 const camoufox = JSON.parse(readFileSync(path.join(enginesDir, 'camoufox.json'), 'utf8')) as Manifest;
-const chromiumManifests = [cloak, playwright];
 
 const tempRoots: string[] = [];
 
@@ -453,7 +457,11 @@ describe('manifest launcher, requirements and ignored settings', () => {
     ['requirements not an array', { requirements: 'Python 3.12+' }, 'requirements must be an array'],
     ['an empty requirement', { requirements: [''] }, 'requirements must contain only non-empty strings'],
     ['ignoredSettings not an array', { ignoredSettings: 'humanize' }, 'ignoredSettings must be an array'],
-    ['an empty ignored setting', { ignoredSettings: [''] }, 'ignoredSettings must contain only non-empty strings'],
+    [
+      'an empty ignored setting',
+      { ignoredSettings: [''] },
+      'ignoredSettings must contain only non-empty strings',
+    ],
   ])('rejects %s', (_label, overrides, expected) => {
     const manifest = { ...manifestWith({ id: 'alpha' }), ...overrides } as unknown;
     expect(registry.validateManifest(manifest, 'alpha', profileNames)).toContain(expected);

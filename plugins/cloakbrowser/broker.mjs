@@ -269,8 +269,7 @@ function unavailableToolEntries() {
     entries.push({
       name,
       support: 'none',
-      reason:
-        typeof note === 'string' && note.trim() !== '' ? note : 'Not supported by this engine.',
+      reason: typeof note === 'string' && note.trim() !== '' ? note : 'Not supported by this engine.',
     });
   }
   entries.sort((left, right) => left.name.localeCompare(right.name));

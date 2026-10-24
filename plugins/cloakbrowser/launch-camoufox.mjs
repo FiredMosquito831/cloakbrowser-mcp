@@ -124,7 +124,10 @@ function findPython() {
     if (version === null) {
       continue;
     }
-    if (version.major > MINIMUM_PYTHON[0] || (version.major === MINIMUM_PYTHON[0] && version.minor >= MINIMUM_PYTHON[1])) {
+    if (
+      version.major > MINIMUM_PYTHON[0] ||
+      (version.major === MINIMUM_PYTHON[0] && version.minor >= MINIMUM_PYTHON[1])
+    ) {
       return { command: candidate, version };
     }
     return { command: candidate, version, tooOld: true };
@@ -218,12 +221,7 @@ function runtimeHealthy(paths, spec, build, pythonLabel) {
     return false;
   }
   const marker = readMarker(paths.marker);
-  if (
-    marker === null ||
-    marker.package !== spec ||
-    marker.build !== build ||
-    marker.python !== pythonLabel
-  ) {
+  if (marker === null || marker.package !== spec || marker.build !== build || marker.python !== pythonLabel) {
     return false;
   }
   return wrapperInstalled(paths, spec);
