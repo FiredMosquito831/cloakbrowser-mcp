@@ -1,7 +1,7 @@
 {
   "name": "cloakbrowser",
   "displayName": "CloakBrowser",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "CloakBrowser stealth Chromium through the Playwright MCP tool contract, via cloakbrowser-mcp.",
   "author": {
     "name": "FiredMosquito831"
@@ -22,6 +22,13 @@
       "description": "cloak uses the patched CloakBrowser Chromium. playwright uses the stock Playwright Chromium and gives up the stealth patches.",
       "options": ["cloak", "playwright"],
       "default": "cloak"
+    },
+    "tool_profile": {
+      "type": "string",
+      "title": "Tool profile",
+      "description": "Which tools the selected engine exposes. default follows the engine manifest: full for the engines shipped today (the current 76-tool surface); portable for engines added later (a shared 24-tool core). portable hides engine-specific and extra tools; full exposes everything the engine supports. The seven tool groups and disabled_tools still apply. Restart Claude Code after changing it.",
+      "options": ["default", "portable", "full"],
+      "default": "default"
     },
     "tools_vision": {
       "type": "boolean",

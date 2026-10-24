@@ -4,6 +4,7 @@
     "args": ["${CLAUDE_PLUGIN_ROOT}/broker.mjs"],
     "env": {
       "STEALTH_ENGINE": "${user_config.browser_engine}",
+      "STEALTH_TOOL_PROFILE": "${user_config.tool_profile}",
       "CLOAK_PLAYWRIGHT_MCP_PACKAGE": "cloakbrowser-mcp@1.15.1",
       "CLOAK_TOOL_GROUP_VISION": "${user_config.tools_vision}",
       "CLOAK_TOOL_GROUP_PDF": "${user_config.tools_pdf}",

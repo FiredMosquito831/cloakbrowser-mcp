@@ -76,6 +76,8 @@
     "docs:seo:validate": "node scripts/validate-docs-seo.mjs",
     "version:apply": "node scripts/apply-release-version.mjs",
     "server:validate": "node scripts/validate-server-json.mjs",
+    "engines:options:check": "node plugins/cloakbrowser/scripts/generate-engine-options.mjs --check",
+    "engines:options:write": "node plugins/cloakbrowser/scripts/generate-engine-options.mjs --write",
     "registry:check": "node scripts/check-github-mcp-registry.mjs",
     "registry:check:strict": "node scripts/check-github-mcp-registry.mjs --strict",
     "audit:prod": "npm audit --omit=dev --audit-level=high",
@@ -96,7 +98,7 @@
     "test:report:open": "node scripts/test-report.mjs open",
     "test:report:merge": "node scripts/test-report.mjs merge",
     "test:report:probe": "node scripts/test-report.mjs probe",
-    "check:static": "npm run typecheck && npm run lint && npm run format:check && npm run docs:compatibility:check && npm run docs:translations:check && npm run server:validate",
+    "check:static": "npm run typecheck && npm run lint && npm run format:check && npm run docs:compatibility:check && npm run docs:translations:check && npm run server:validate && npm run engines:options:check",
     "package:pack": "npm run build && npm run server:validate && node scripts/verify-npm-package.mjs --pack-only",
     "docs:build:site": ".venv-docs/bin/mkdocs build --strict"
   },
