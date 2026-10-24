@@ -17,6 +17,10 @@ const configOptions = {
     'coverage/**',
     'artifacts/**',
     'plugins/**',
+    // The canonical copies of the plugin runtime assets are byte-identical to
+    // the shipped copies under plugins/** (which this config already ignores).
+    // Linting them would demand code changes that break that equality contract.
+    'shared/core/**',
     'node_modules/**',
     '.agents/skills/brag/**',
     '.agents/skills/humanizer/**',

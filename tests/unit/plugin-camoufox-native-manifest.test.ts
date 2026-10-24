@@ -210,7 +210,7 @@ describe('camoufox-native manifest', () => {
   });
 
   it('ships the two new settings and the generated engine option', () => {
-    expect(plugin.version).toBe('2.5.0');
+    expect(plugin.version).toBe('2.6.0');
     expect(plugin.userConfig.camoufox_profile).toMatchObject({ type: 'string', default: 'default' });
     expect(plugin.userConfig.camoufox_data_dir).toMatchObject({ type: 'string', default: '' });
     expect(plugin.userConfig.browser_engine.options).toEqual([

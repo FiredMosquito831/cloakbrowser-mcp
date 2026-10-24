@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "id": "camoufox",
+  "label": "Camoufox (stealth Firefox)",
+  "transport": "launch",
+  "contract": "playwright-mcp",
+  "defaultToolProfile": "portable",
+  "launch": {
+    "launcher": "launch-camoufox.mjs"
+  },
+  "requirements": [
+    "uv (pinned 0.13.5): an explicit UV/UV_BIN or a working uv on PATH is used, otherwise the pinned release is downloaded into the plugin data directory and SHA-256 verified",
+    "Plugin-managed CPython 3.13.17 (installed by uv under the plugin data directory; UV_PYTHON or PYTHON override)",
+    "camoufox-playwright-mcp==0.1.5 (installed into <plugin data>/venvs/camoufox on first start; CAMOUFOX_MCP_PACKAGE override)",
+    "Camoufox build v156.0.1-beta.39 (one-time ~1.3 GB download, ~2.4 GB on disk)"
+  ],
+  "toolSupport": {
+    "*": "full",
+    "browser_annotate": "none",
+    "browser_emulate_media": "none",
+    "browser_start_recording": "none",
+    "browser_stop_recording": "none",
+    "browser_pdf_save": "none",
+    "browser_run_code_unsafe": "partial"
+  },
+  "toolSupportNotes": {
+    "browser_annotate": "Not implemented by camoufox-playwright-mcp 0.1.5; it omits the upstream Node dashboard daemon.",
+    "browser_emulate_media": "Not implemented by camoufox-playwright-mcp 0.1.5; absent from its tool registry.",
+    "browser_start_recording": "Not implemented by camoufox-playwright-mcp 0.1.5; absent from its tool registry.",
+    "browser_stop_recording": "Not implemented by camoufox-playwright-mcp 0.1.5; absent from its tool registry.",
+    "browser_pdf_save": "Listed by the backend but unusable on Firefox: PDF output is only supported by headless Chromium.",
+    "browser_run_code_unsafe": "Executes asynchronous Python Playwright code, not JavaScript; a prompt written for the JS tool will fail."
+  },
+  "ignoredSettings": [
+    "humanize",
+    "human_preset",
+    "release_channel",
+    "geoip_proxy_match",
+    "licence_key",
+    "engine_version"
+  ],
+  "notes": "Stealth Firefox via camoufox-playwright-mcp 0.1.5. 68 of the 72 canonical browser tools; portable by default. Needs no system Python or uv: the launcher provisions a pinned uv, a managed Python and a venv under the plugin data directory on first start. No CDP."
+}

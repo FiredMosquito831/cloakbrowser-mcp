@@ -43,6 +43,14 @@ printf '%s' '{"profile_dir":"/home/you/.cloakbrowser-profiles/linkedin"}' | \
 
 Non-sensitive values are stored under `pluginConfigs` in your user settings; the licence key goes to the operating system credential store. Restart Claude Code after a change so the MCP server restarts with the new environment.
 
+## Per-engine plugin
+
+This plugin is the universal broker: one MCP server whose **Browser engine** setting selects `cloak` (default), `playwright`, `camoufox`, `camoufox-native` or `kameleo`. It stays the default, and every prompt, permission rule or saved transcript written against `mcp__plugin_cloakbrowser_cloakbrowser__*` keeps working.
+
+The marketplace also ships **`camoufox`**, a separate plugin fixed to the Camoufox contract engine (`STEALTH_ENGINE=camoufox`, server key `camoufox`, tool names `mcp__plugin_camoufox_camoufox__*`). Choose it for a single-engine install that declares only the settings the Camoufox engine honours; its plugin configuration is separate and is not carried over from this plugin. Do **not** install both plugins for the same engine: each starts its own broker, runtime and profile. A Kameleo per-engine plugin is **not** shipped; Kameleo remains an engine of this universal broker, with its live behaviour unverified.
+
+Both plugins share a generated core. Edit `shared/core/` and run `node scripts/sync-plugin-core.mjs --write` from the repository root; never edit a plugin copy directly.
+
 ## Requirements
 
 - Node 22.13+ or 24+ (the plugin and the npm runtime).
@@ -231,7 +239,7 @@ Sign in to Google or any site manually, in the headed window, with the persisten
 
 ## Version and updates
 
-The plugin is version 2.5.0. It pins `cloakbrowser-mcp@1.15.1`, runs it on `patchright@1.64.1`, and pins the engine wrapper to `0.6.3`. The Camoufox engine pins `camoufox-playwright-mcp==0.1.5`, the managed `uv` `0.13.5`, CPython `3.13.17` and browser build `v156.0.1-beta.39`. The Camoufox native engine provisions `mcp-camoufox==0.4.5` from PyPI with the same uv/Python pins and browser build `156.0.1-beta.39` in `.mcp.json` (`CAMOUFOX_NATIVE_PACKAGE`, `CAMOUFOX_NATIVE_BROWSER_BUILD`). The Kameleo engine has no package pin of its own: it reuses the `cloakbrowser-mcp@1.15.1` runtime and starts its pinned `@playwright/mcp` CLI with `--cdp-endpoint`. The uv version, its per-platform SHA-256 values and the Python pin live in `lib/provision.mjs`; the package pins live in `.mcp.json` or the launcher. The plugin version moves independently of the MCP pins.
+The plugin is version 2.6.0. It pins `cloakbrowser-mcp@1.15.1`, runs it on `patchright@1.64.1`, and pins the engine wrapper to `0.6.3`. The Camoufox engine pins `camoufox-playwright-mcp==0.1.5`, the managed `uv` `0.13.5`, CPython `3.13.17` and browser build `v156.0.1-beta.39`. The Camoufox native engine provisions `mcp-camoufox==0.4.5` from PyPI with the same uv/Python pins and browser build `156.0.1-beta.39` in `.mcp.json` (`CAMOUFOX_NATIVE_PACKAGE`, `CAMOUFOX_NATIVE_BROWSER_BUILD`). The Kameleo engine has no package pin of its own: it reuses the `cloakbrowser-mcp@1.15.1` runtime and starts its pinned `@playwright/mcp` CLI with `--cdp-endpoint`. The uv version, its per-platform SHA-256 values and the Python pin live in `lib/provision.mjs`; the package pins live in `.mcp.json` or the launcher. The plugin version moves independently of the MCP pins.
 
 ## Tool groups and per-tool control
 
