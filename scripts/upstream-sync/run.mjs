@@ -54,7 +54,7 @@ const USAGE = [
   '  dry-run      fetch upstream by URL, plan, decide and render, without pushing',
   '',
   'options: --root, --url, --remote, --branch, --base, --upstream, --previous-ref,',
-  '         --check, --offline, --json, --out, --report, --plan, --conflicts, --gate,',
+  '         --check, --write, --offline, --json, --out, --report, --plan, --conflicts, --gate,',
   '         --reason, --sensitive, --merge-requested, --commit-sha, --out-dir, --date,',
   '         --github-output',
 ].join('\n');
@@ -68,6 +68,7 @@ const OPTIONS = {
   upstream: { type: 'string' },
   'previous-ref': { type: 'string' },
   check: { type: 'boolean', default: false },
+  write: { type: 'boolean', default: false },
   offline: { type: 'boolean', default: false },
   json: { type: 'boolean', default: false },
   out: { type: 'string' },
