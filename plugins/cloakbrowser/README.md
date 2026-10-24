@@ -2,7 +2,7 @@
 
 Claude Code plugin that gives the agent the Playwright MCP tool contract (72 `browser_*` tools: snapshots with element refs, clicks, forms, tabs, console, network, tracing, video) running on CloakBrowser, a stealth-patched Chromium.
 
-A local broker selects the engine from the plugin settings. With the default `cloak` engine the plugin exposes **76 tools**: the 72 backend browser tools, two local diagnostics (`cloakbrowser_binary_info`, `cloakbrowser_bridge_info`) and two broker meta-tools (`browser_capabilities`, `browser_engine_status`).
+A local broker selects the engine and tool profile from the plugin settings. With the default `cloak` engine and the default `full` profile the plugin exposes **76 tools**: the 72 backend browser tools, two local diagnostics (`cloakbrowser_binary_info`, `cloakbrowser_bridge_info`) and two broker meta-tools (`browser_capabilities`, `browser_engine_status`). The `portable` profile exposes **26 tools**: one shared 24-tool browser core plus the two meta-tools; backend-specific and extra tools, including the two local diagnostics, are hidden.
 
 The broker starts `launch.mjs`, which launches `cloakbrowser-mcp`; that package starts the official `@playwright/mcp` server and points it at the selected browser. Tool names and schemas are Microsoft's; parity is structural, not reimplemented.
 
@@ -60,6 +60,7 @@ Values live in Claude Code's plugin configuration, not in this repository. Non-s
 |---|---|---|
 | Headless | `false` | Headed is measurably less detectable. Turn on only for a display-less server |
 | Browser engine | `cloak` | `cloak` runs the patched CloakBrowser Chromium. `playwright` falls back to stock Chromium and loses the stealth patches. The broker reads this when the MCP server starts; restart Claude Code after changing it |
+| Tool profile | `default` | `default` follows the selected engine's manifest: `full` for the engines shipped today, `portable` for engines added later. `portable` exposes the shared 24-tool browser core; `full` exposes everything the engine supports. The seven tool groups and `disabled_tools` still apply. Restart Claude Code after changing it |
 | Tool groups | all on | Seven checkboxes: vision, pdf, devtools, storage, network, testing, config. Turn one off to remove that group |
 | Disabled tools | empty | Comma-separated tool names hidden from `tools/list` and rejected on call |
 | Humanised input | `true` | Human-like mouse paths, keystroke timing and scrolling |
@@ -76,21 +77,36 @@ The launcher drops empty optional values before starting the server, so leaving 
 
 ## Engines and the broker
 
-`broker.mjs` is the single MCP server Claude Code starts. It reads the **Browser engine** setting, loads the matching manifest from `engines/`, starts `launch.mjs` for that engine and relays JSON-RPC in both directions. The engine value is an enum in the plugin configuration, never a command or a path.
+`broker.mjs` is the single MCP server Claude Code starts. It reads the **Browser engine** setting, discovers every `engines/*.json` manifest, validates it, loads the selected one, starts `launch.mjs` for that engine and relays JSON-RPC in both directions. The engine value is an enum in the plugin configuration, never a command or a path. The enum (`browser_engine.options`) is generated from the manifests; adding an engine does not edit the broker. See `engines/README.md` for the add-an-engine recipe.
 
 | Engine | Manifest | Backend | Notes |
 |---|---|---|---|
 | `cloak` (default) | `engines/cloak.json` | CloakBrowser Chromium on Patchright | Stealth patches; the 1.x browser behaviour is unchanged |
 | `playwright` | `engines/playwright.json` | Stock Playwright Chromium | Same Playwright MCP contract, no stealth patches |
 
-Both manifests use the `full` tool profile and mark every backend tool as `full` support. The broker adds two meta-tools that are always present and cannot collide with backend tools:
+### Tool profiles
+
+Every manifest declares a default profile and per-tool support (`full`, `partial`, `none`, `unknown`). The **Tool profile** setting (`default`, `portable`, `full`) overrides the manifest default; `default` means "use the manifest's choice". `full` exposes everything the manifest does not mark `none`. `portable` exposes one shared 24-tool browser core, defined once in `engines/profiles.json`:
+
+`browser_navigate`, `browser_navigate_back`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_press_key`, `browser_hover`, `browser_drag`, `browser_select_option`, `browser_file_upload`, `browser_handle_dialog`, `browser_take_screenshot`, `browser_evaluate`, `browser_wait_for`, `browser_tabs`, `browser_console_messages`, `browser_network_requests`, `browser_network_request`, `browser_cookie_list`, `browser_cookie_get`, `browser_cookie_set`, `browser_cookie_delete`, `browser_cookie_clear`, `browser_close`.
+
+Under `portable` the two local diagnostics (`cloakbrowser_binary_info`, `cloakbrowser_bridge_info`) are hidden; the two broker meta-tools stay.
+
+| Engine | Default | `full` | `portable` |
+|---|---|---:|---:|
+| `cloak` | `full` | 76 | 26 |
+| `playwright` | `full` | 76 | 26 |
+
+The profile is applied before `disabled_tools`; the seven group switches still shape the backend list first. With `tools_storage=false` cloak exposes 59 at `full` and 21 at `portable`; with `tools_pdf=false` it exposes 75 at `full` and 26 at `portable`.
+
+The broker adds two meta-tools that are always present and cannot collide with backend tools:
 
 | Meta-tool | What it reports |
 |---|---|
-| `browser_capabilities` | Selected engine, label, contract, tool profile (`full`), backend tool count, per-tool support and how to change engines |
-| `browser_engine_status` | Selected engine, backend state, backend version, startup and `tools/list` timing, last error |
+| `browser_capabilities` | Selected engine, label, contract, effective `toolProfile` and its source, per-tool support and notes, the portable list, what the profile and manifest hid, and how to change engines |
+| `browser_engine_status` | Selected engine, effective tool profile, backend state, backend version, startup and `tools/list` timing, last error |
 
-Total surface for `cloak`: 76 tools = 72 backend `browser_*` tools + 2 local diagnostics + 2 broker meta-tools. The seven group switches and `disabled_tools` shape the backend tools; the broker applies the manifest and adds the meta-tools, which stay callable. Engine changes apply after the MCP server restarts.
+Total surface for `cloak` at the default profile: 76 tools = 72 backend `browser_*` tools + 2 local diagnostics + 2 broker meta-tools. At `portable`: 26 = 24 backend `browser_*` tools + 2 broker meta-tools. Engine and profile changes apply after the MCP server restarts.
 
 ## Sign-in
 
@@ -98,7 +114,7 @@ Sign in to Google or any site manually, in the headed window, with the persisten
 
 ## Version and updates
 
-The plugin is version 2.0.0. It pins `cloakbrowser-mcp@1.15.1`, runs it on `patchright@1.64.1`, and pins the engine wrapper to `0.6.3`. The plugin version moves independently of the MCP pin; the pin lives in `.mcp.json`.
+The plugin is version 2.1.0. It pins `cloakbrowser-mcp@1.15.1`, runs it on `patchright@1.64.1`, and pins the engine wrapper to `0.6.3`. The plugin version moves independently of the MCP pin; the pin lives in `.mcp.json`.
 
 ## Tool groups and per-tool control
 
@@ -123,6 +139,8 @@ Presets are combinations of those switches:
 | `full` | all seven | 72 |
 
 Those counts are backend `browser_*` tools. The two local diagnostics and the two broker meta-tools are additional and are not controlled by these switches.
+
+Tool groups act on the backend list before the tool profile and before `disabled_tools`, so all three combine rather than replace each other.
 
 For individual tools, set **Disabled tools** to a comma-separated list. The broker hides those names from `tools/list` and returns an `isError: true` tool result if one is called, for example:
 

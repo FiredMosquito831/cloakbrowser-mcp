@@ -14,20 +14,22 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import {
+  availableProfileNames,
+  DEFAULT_ENGINE,
+  engineChangeHelp,
+  loadEngineConfiguration,
+  manifestSupport,
+  portableToolNames,
+  profileAllows,
+  resolveToolProfile,
+} from './engine-registry.mjs';
 
 const PLUGIN_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const LAUNCHER = path.join(PLUGIN_ROOT, 'launch.mjs');
 const ENGINES_DIR = path.join(PLUGIN_ROOT, 'engines');
+const PROFILES_FILE = path.join(ENGINES_DIR, 'profiles.json');
 const PLUGIN_MANIFEST = path.join(PLUGIN_ROOT, '.claude-plugin', 'plugin.json');
-
-// Fixed registry: user input selects a key, never a path or a command.
-const ENGINE_FILES = new Map([
-  ['cloak', 'cloak.json'],
-  ['playwright', 'playwright.json'],
-]);
-const DEFAULT_ENGINE = 'cloak';
-const SUPPORT_VALUES = new Set(['full', 'partial', 'none', 'unknown']);
-const ONLY_IMPLEMENTED_PROFILE = 'full';
 const SHUTDOWN_GRACE_MS = 300;
 const LOG_PREFIX = '[cloakbrowser-broker]';
 
@@ -46,11 +48,6 @@ const META_TOOLS = [
     inputSchema: { type: 'object', properties: {} },
   },
 ];
-
-const ENGINE_CHANGE_HELP =
-  'Set the "Browser engine" (browser_engine) option in the cloakbrowser plugin configuration to ' +
-  "'cloak' or 'playwright', then restart Claude Code. The engine is resolved when the MCP server starts; " +
-  'it cannot be switched inside a running session.';
 
 function log(message) {
   process.stderr.write(`${LOG_PREFIX} ${message}\n`);
@@ -97,68 +94,6 @@ function resolveEngine(env) {
   return { id: DEFAULT_ENGINE, source: 'default' };
 }
 
-function validateManifest(manifest, expectedId) {
-  if (manifest === null || typeof manifest !== 'object' || Array.isArray(manifest)) {
-    return 'manifest is not a JSON object';
-  }
-  if (manifest.schemaVersion !== 1) {
-    return `unsupported schemaVersion: ${String(manifest.schemaVersion)}`;
-  }
-  if (manifest.id !== expectedId) {
-    return `manifest id "${String(manifest.id)}" does not match engine "${expectedId}"`;
-  }
-  if (!nonEmptyString(manifest.label)) {
-    return 'label is missing';
-  }
-  if (manifest.transport !== 'launch') {
-    return `unsupported transport: ${String(manifest.transport)}`;
-  }
-  if (manifest.contract !== 'playwright-mcp') {
-    return `unsupported contract: ${String(manifest.contract)}`;
-  }
-  if (manifest.defaultToolProfile !== ONLY_IMPLEMENTED_PROFILE) {
-    return (
-      `unsupported defaultToolProfile "${String(manifest.defaultToolProfile)}"; ` +
-      `this broker implements "${ONLY_IMPLEMENTED_PROFILE}" only`
-    );
-  }
-  if (manifest.toolSupport === null || typeof manifest.toolSupport !== 'object') {
-    return 'toolSupport is missing';
-  }
-  if (Array.isArray(manifest.toolSupport)) {
-    return 'toolSupport must be an object';
-  }
-  for (const [name, support] of Object.entries(manifest.toolSupport)) {
-    if (!SUPPORT_VALUES.has(support)) {
-      return `toolSupport["${name}"] has unsupported value "${String(support)}"`;
-    }
-  }
-  if (typeof manifest.notes !== 'string') {
-    return 'notes is missing';
-  }
-  return null;
-}
-
-function loadEngine(engineId) {
-  const fileName = ENGINE_FILES.get(engineId);
-  if (fileName === undefined) {
-    const supported = [...ENGINE_FILES.keys()].join(', ');
-    return { engine: null, error: `Unknown engine "${engineId}". Supported engines: ${supported}.` };
-  }
-  const file = path.join(ENGINES_DIR, fileName);
-  let manifest;
-  try {
-    manifest = JSON.parse(readFileSync(file, 'utf8'));
-  } catch (error) {
-    return { engine: null, error: `Cannot read ${file}: ${error.message}` };
-  }
-  const validationError = validateManifest(manifest, engineId);
-  if (validationError !== null) {
-    return { engine: null, error: `Invalid engine manifest ${file}: ${validationError}` };
-  }
-  return { engine: manifest, error: null };
-}
-
 function parseDisabledTools(value) {
   return new Set(
     (value ?? '')
@@ -169,14 +104,37 @@ function parseDisabledTools(value) {
 }
 
 const selected = resolveEngine(process.env);
-const loaded = loadEngine(selected.id);
+const loaded = loadEngineConfiguration({
+  enginesDir: ENGINES_DIR,
+  profilesFile: PROFILES_FILE,
+  engineId: selected.id,
+});
 const engine = loaded.engine;
+const profiles = loaded.profiles;
+const profileSelection = resolveToolProfile(process.env.STEALTH_TOOL_PROFILE, engine, profiles);
+
+if (profileSelection.placeholder !== null) {
+  log(`ignoring unsubstituted tool-profile placeholder: ${profileSelection.placeholder}`);
+}
+if (profileSelection.ignored !== null) {
+  log(`ignoring unknown tool profile: ${profileSelection.ignored}`);
+}
+for (const warning of loaded.warnings) {
+  log(warning);
+}
+
+const ENGINE_CHANGE_HELP = engineChangeHelp(loaded.engineIds);
 
 const state = {
   engineId: selected.id,
   engineSource: selected.source,
   engine,
   engineError: loaded.error,
+  engineChoices: loaded.engineIds,
+  profiles,
+  toolProfile: profileSelection.profile,
+  toolProfileSource: profileSelection.source,
+  requestedToolProfile: profileSelection.requested,
   disabled: parseDisabledTools(process.env.CLOAK_DISABLED_TOOLS),
   child: null,
   spawnedAt: null,
@@ -201,24 +159,18 @@ const state = {
   pendingRequests: new Map(),
   hiddenByManifest: new Set(),
   hiddenByCollision: new Set(),
+  hiddenByProfile: new Set(),
 };
 
 function supportFor(toolName) {
-  const rules = state.engine?.toolSupport ?? {};
-  if (Object.hasOwn(rules, toolName)) {
-    return rules[toolName];
-  }
-  if (Object.hasOwn(rules, '*')) {
-    return rules['*'];
-  }
-  return 'unknown';
+  return manifestSupport(state.engine, toolName);
 }
 
-// The only profile implemented in this release is "full": keep every backend
-// tool whose manifest support is not "none". Profile filtering runs after the
-// backend's own list and after the seven tool-group switches have shaped it.
-function profileAllows(support) {
-  return support !== 'none';
+// The effective profile is the active manifest's default unless the user set
+// tool_profile. Filtering runs after the backend's own list and after the seven
+// tool-group switches have shaped it.
+function profileAllowsTool(toolName) {
+  return profileAllows(state.toolProfile, state.profiles, toolName, supportFor(toolName));
 }
 
 function backendAlive() {
@@ -285,7 +237,7 @@ function toolCounts() {
 
 function supportedCounts() {
   const names = backendToolNames();
-  const supported = names.filter((name) => profileAllows(supportFor(name)));
+  const supported = names.filter((name) => profileAllowsTool(name));
   return {
     all: supported.length,
     browser: supported.filter((name) => name.startsWith('browser_')).length,
@@ -306,8 +258,8 @@ function capabilitiesPayload() {
     label: state.engine?.label ?? null,
     contract: state.engine?.contract ?? null,
     transport: state.engine?.transport ?? null,
-    toolProfile: state.engine?.defaultToolProfile ?? null,
-    engineChoices: [...ENGINE_FILES.keys()],
+    toolProfile: state.toolProfile,
+    engineChoices: [...state.engineChoices],
     engineSource: state.engineSource,
     engineError: state.engineError,
     engineNotes: state.engine?.notes ?? null,
@@ -326,6 +278,14 @@ function capabilitiesPayload() {
     disabledTools: [...state.disabled],
     hiddenByManifest: [...state.hiddenByManifest],
     hiddenByCollision: [...state.hiddenByCollision],
+    requestedToolProfile: state.requestedToolProfile,
+    toolProfileSource: state.toolProfileSource,
+    engineDefaultToolProfile: state.engine?.defaultToolProfile ?? null,
+    availableToolProfiles: state.profiles === null ? [] : availableProfileNames(state.profiles),
+    portableToolNames: state.profiles === null ? [] : portableToolNames(state.profiles),
+    perToolSupportNotes: state.engine?.toolSupportNotes ?? {},
+    hiddenByProfile: [...state.hiddenByProfile],
+    unavailableTools: [],
   };
 }
 
@@ -345,7 +305,7 @@ function statusPayload() {
     engineError: state.engineError,
     transport: state.engine?.transport ?? null,
     contract: state.engine?.contract ?? null,
-    toolProfile: state.engine?.defaultToolProfile ?? null,
+    toolProfile: state.toolProfile,
     backendState: state.backend.state,
     backendPid: state.backend.pid,
     backendVersion: state.serverInfo?.version ?? null,
@@ -378,10 +338,14 @@ function handleMetaCall(message) {
   return false;
 }
 
+// Application order: meta collision, then manifest "none", then the selected
+// profile, then disabled_tools. The seven group switches already shaped the
+// backend list inside the launcher.
 function filterTools(tools, addMeta) {
   const kept = [];
   state.hiddenByManifest = new Set();
   state.hiddenByCollision = new Set();
+  state.hiddenByProfile = new Set();
   for (const tool of tools) {
     if (tool === null || typeof tool !== 'object' || typeof tool.name !== 'string') {
       kept.push(tool);
@@ -395,12 +359,15 @@ function filterTools(tools, addMeta) {
       log(`backend tool "${name}" collides with a broker meta-tool and was hidden`);
       continue;
     }
-    if (state.disabled.has(name)) {
+    if (supportFor(name) === 'none') {
+      state.hiddenByManifest.add(name);
       continue;
     }
-    const support = supportFor(name);
-    if (!profileAllows(support)) {
-      state.hiddenByManifest.add(name);
+    if (!profileAllowsTool(name)) {
+      state.hiddenByProfile.add(name);
+      continue;
+    }
+    if (state.disabled.has(name)) {
       continue;
     }
     kept.push(tool);
@@ -544,17 +511,28 @@ function handleClientRequest(message, rawLine) {
       }
       return;
     }
+    if (typeof name === 'string' && state.engine !== null && state.profiles !== null) {
+      const support = supportFor(name);
+      if (support === 'none') {
+        sendToolError(
+          id,
+          `Tool "${name}" is not exposed by the "${state.engineId}" engine manifest (support: none).`,
+        );
+        return;
+      }
+      if (!profileAllowsTool(name)) {
+        sendToolError(
+          id,
+          `Tool "${name}" is hidden by the "${state.toolProfile}" tool profile (support: ${support}). ` +
+            'Set "Tool profile" (tool_profile) to "full" and restart Claude Code to expose it.',
+        );
+        return;
+      }
+    }
     if (typeof name === 'string' && state.disabled.has(name)) {
       sendToolError(
         id,
         `Tool "${name}" is disabled by the cloakbrowser plugin. Remove it from the "disabled_tools" setting and restart Claude Code to use it.`,
-      );
-      return;
-    }
-    if (typeof name === 'string' && (state.hiddenByManifest.has(name) || !profileAllows(supportFor(name)))) {
-      sendToolError(
-        id,
-        `Tool "${name}" is not exposed by the "${state.engineId}" engine manifest (support: ${supportFor(name)}).`,
       );
       return;
     }
@@ -666,7 +644,7 @@ function startBackend() {
   state.spawnedAt = Date.now();
   log(
     `engine=${state.engineId} source=${state.engineSource} contract=${state.engine.contract} ` +
-      `profile=${state.engine.defaultToolProfile} launcher=${path.basename(LAUNCHER)}`,
+      `profile=${state.toolProfile} profileSource=${state.toolProfileSource} launcher=${path.basename(LAUNCHER)}`,
   );
   const child = spawn(process.execPath, [LAUNCHER], {
     stdio: ['pipe', 'pipe', 'pipe'],
