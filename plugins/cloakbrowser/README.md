@@ -58,7 +58,7 @@ Both plugins share a generated core. Edit `shared/core/` and run `node scripts/s
 - **A `uv` you provide must be 0.13.5 or newer.** The plugin pins `uv` 0.13.5 because that release installs the managed CPython 3.13.17; older ones fail with `No download found for request: cpython-3.13.17-windows-x86_64-none`, and the Camoufox launchers then exit. A `uv` on `PATH` older than 0.13.5, or one that does not answer `--version`, is ignored with one log line and the plugin provisions its own pinned copy. An explicit `UV`/`UV_BIN` older than 0.13.5 is refused with the version it reported: the plugin never silently replaces your explicit choice.
 - **The first start may take seconds to several minutes.** The largest item is the Camoufox browser build (about 1.3 GB); everything else is tens of megabytes. If Claude Code's MCP startup timeout expires during a first download, restart Claude Code (`/reload-plugins`): the next start reuses what was already provisioned and does not download it again.
 - The first launch installs the MCP and its pinned engine wrapper into Claude Code's plugin data directory, then downloads the CloakBrowser Chromium binary (~200 MB) into `~/.cloakbrowser` on the first browser call. Nothing binary is committed to this repository.
-- With the profile setting empty, the plugin uses its own persistent profile at `<plugin data>/profiles/default`. It is a real on-disk profile, not a temporary one, and it survives plugin updates.
+- With the profile settings empty, the plugin uses its own persistent profile at `<plugin data>/profiles/default`. It is a real on-disk profile, not a temporary one, and it survives plugin updates. **Profile isolation** (`shared`, the default) can instead derive one profile per project folder; see [Session safety and profile isolation](#session-safety-and-profile-isolation).
 - The MCP runs on **Patchright 1.64.1** instead of stock Playwright. Stock Playwright's CDP control channel sets `isAutomatedWithCDP` on fingerprint tests; Patchright keeps the same Playwright API and avoids it. The bridge's console fallback is disabled for the same reason, and console capture still works.
 - **Camoufox first launch is large.** The launcher creates a venv at `<plugin data>/venvs/camoufox` and installs `camoufox-playwright-mcp==0.1.5` plus its Camoufox dependency. It then ensures the pinned Camoufox build `v156.0.1-beta.39`; when absent, that is a **~1.3 GB download and ~2.4 GB on disk** in Camoufox's machine-wide cache. Plan for the time and space; the browser itself starts on the first browser tool call, not at `initialize`.
 - **Camoufox cache side effect.** Camoufox stores builds in a machine-wide user cache (`%LOCALAPPDATA%\camoufox` on Windows), and its installer makes the build it installs the active one. Installing the pin can therefore move another Camoufox consumer on this machine to `v156.0.1-beta.39`. This engine's own launches stay pinned through `CAMOUFOX_EXECUTABLE_PATH` regardless of which build is active.
@@ -140,8 +140,9 @@ Values live in Claude Code's plugin configuration, not in this repository. Non-s
 | Humanised preset | `default` | `careful` is slower and more deliberate |
 | Release channel | `stable` | `preview` requires a Pro licence |
 | GeoIP proxy match | `false` | Aligns timezone and locale to the proxy exit; enable with a proxy |
-| Account profile | empty → the plugin's default profile | One profile per account: `profiles/<engine>/<name>`, and `default` reaches the existing `profiles/default`. Ignored when Profile directory is set. Restart after changing it. See [Accounts](#accounts) |
-| Profile directory | empty → `<plugin data>/profiles/default` | Explicit profile path; wins over Account profile. Persistent cookies, logins and fingerprint seed. One directory per account |
+| Profile isolation | `shared` | `shared` keeps one profile per account for every Claude Code window, exactly as before. `workspace` derives one profile per project folder (`profiles/<engine>/ws-<hash>`) with a fresh login state, and moves to a numbered sibling if that profile is already in use. Ignored when Account profile or Profile directory is set. The free CloakBrowser tier still allows one browser at a time. See [Session safety and profile isolation](#session-safety-and-profile-isolation) |
+| Account profile | empty → the plugin's default profile | One profile per account: `profiles/<engine>/<name>`, and `default` reaches the existing `profiles/default`. Wins over Profile isolation; ignored when Profile directory is set. Restart after changing it. See [Accounts](#accounts) |
+| Profile directory | empty → `<plugin data>/profiles/default` | Explicit profile path; wins over Account profile and Profile isolation. Persistent cookies, logins and fingerprint seed. One directory per account |
 | Proxy server / bypass | empty | Sticky proxy and hosts that skip it |
 | Licence key | empty | CloakBrowser Pro key; the free tier allows one concurrent session |
 | Engine version pin | empty | Pin a specific Chromium build; empty follows the stable channel |
@@ -151,21 +152,24 @@ The launcher drops empty optional values before starting the server, so leaving 
 
 ## Accounts
 
-One browser profile per account. Set **Account profile** to a name such as `alice`; the broker resolves it to a directory under Claude Code's plugin data directory and starts the engine with it. With both Account profile and Profile directory empty, nothing changes: the plugin uses `profiles/default` exactly as before.
+One browser profile per account. Set **Account profile** to a name such as `alice`; the broker resolves it to a directory under Claude Code's plugin data directory and starts the engine with it. With Account profile, Profile directory and Profile isolation at their defaults, nothing changes: the plugin uses `profiles/default` exactly as before.
 
 | Account / setting | Effective profile directory |
 |---|---|
-| empty, `profile_dir` empty | `<plugin data>/profiles/default` |
-| `default` | `<plugin data>/profiles/default` — the profile you already have |
+| empty, isolation `shared` | `<plugin data>/profiles/default` |
+| empty, isolation `workspace` | `<plugin data>/profiles/<engine>/ws-<sha256(cwd)[:7]>` |
+| `default` | the engine's existing default profile — `profiles/default` for `cloak`/`playwright`, `profiles/<engine>/default` otherwise |
 | `alice`, engine `cloak` | `<plugin data>/profiles/cloak/alice` |
 | `alice`, engine `playwright` | `<plugin data>/profiles/playwright/alice` |
 | `alice`, engine `camoufox` | `<plugin data>/profiles/camoufox/alice` |
-| `profile_dir` set | that path, unchanged; Account profile is ignored |
+| `profile_dir` set | that path, unchanged; Account profile and Profile isolation are ignored |
+
+Precedence is **Profile directory → Account profile → Profile isolation → engine default**. Only the first value that is set applies.
 
 - **Names:** 1–64 characters, starting with a letter or digit, then letters, digits, `.`, `_` or `-`. No trailing dot, no slash, no Windows device name (`CON`, `NUL`, `COM1`, …). An invalid name is a start-up error: no browser starts and `browser_engine_status.lastError` carries the exact reason. The name is validated before any path is built, so it can never escape the profiles directory.
-- **`camoufox-native` and `kameleo` do not use account profiles.** Their manifests ignore `profile_dir`, so `browser_capabilities.accountApplies` is `false`; use `camoufox_profile` for the native engine, and Kameleo's own profile for the attach engine.
-- **One account at a time.** The plugin configuration holds one value per key, so one plugin instance runs one account. Changing Account profile, Profile directory or the proxy takes effect when the MCP server restarts — restart Claude Code. There is no runtime account switch. Two Claude Code windows share the same configuration and therefore the same account.
-- **Visibility.** `browser_capabilities` reports `account`, `profileDir`, `profileSource` (`profile_dir`, `account`, `engine`, `default`), `defaultProfileDir`, `availableAccounts` (at most 100 names), `availableAccountCount` and `accountApplies`. `browser_engine_status` adds `account` and `profileDir`. The broker creates the account directory; it never copies, renames or deletes a profile.
+- **`camoufox-native` and `kameleo` do not use account profiles.** Their manifests declare `profileApplies: false`, so `browser_capabilities.profileApplies` and `accountApplies` are `false`; use `camoufox_profile` for the native engine, and Kameleo's own profile for the attach engine. Profile isolation and the lock preflight are inert for them too.
+- **One account at a time.** The plugin configuration holds one value per key, so one plugin instance runs one account. Changing Account profile, Profile directory, Profile isolation or the proxy takes effect when the MCP server restarts — restart Claude Code. There is no runtime account switch. Two Claude Code windows share the same configuration and therefore the same account unless Profile isolation is `workspace` and they run in different project folders.
+- **Visibility.** `browser_capabilities` reports `account`, `profileDir`, `profileSource` (`profile_dir`, `account`, `workspace`, `engine`, `default`), `defaultProfileDir`, `availableAccounts` (at most 100 names), `availableAccountCount`, `accountApplies`, `profileApplies`, `profileIsolation`, `profileIsolationSource`, `profileFallback` and `profileLock`. `browser_engine_status` adds `account`, `profileDir`, `profileIsolation`, `profileApplies`, `profileFallback` and `profileLock`. The broker creates the account and workspace directories; it never copies, renames, moves or deletes a profile.
 - **One profile per account, always.** Two identities in one profile overwrite each other's cookies and make the account history incoherent. Windows is case-insensitive, so `Alice` and `alice` are the same directory; the resolved path in `browser_capabilities` makes that visible.
 - **Concurrency.** The bridge refuses a second server on the same profile directory (`Persistent profile is already active: <dir>`), and the CloakBrowser free tier allows **one concurrent browser session**. A second session is expected to fail at the engine; the plugin adds no account counter. A Pro licence is the supported path for concurrent sessions.
 - See [Sign-in](#sign-in) for the manual, headed login each account needs.
@@ -193,6 +197,74 @@ A proxy can be sticky per account with a file beside the profile instead of the 
 - **Delete:** close the browser, delete the directory and the `.proxy` file. Irreversible. There is no delete in the plugin.
 - To switch accounts: `/plugin` → Configure → set Account profile → restart Claude Code.
 
+## Session safety and profile isolation
+
+A persistent Chromium profile can be used by only one browser at a time. The engine bridge takes an exclusive lock at backend start-up, before any browser or tool call, so a second Claude Code window that starts against the same profile loses the whole tool list, not just the browser. Two windows can differ in project folder, account or scope and still collide, because `${CLAUDE_PLUGIN_DATA}` and the default profile are shared by every window.
+
+Claude Code always starts one MCP server per window, and this plugin cannot change when the bridge locks. It can choose the profile, check the lock first and explain the result. That is what this release adds.
+
+### Profile isolation
+
+**Profile isolation** (`profile_isolation`) has two values:
+
+| Value | Profile for a window with no Account profile and no Profile directory | Behaviour |
+|---|---|---|
+| `shared` (default) | `<plugin data>/profiles/default` (or the engine default) | Exactly the previous behaviour, byte for byte. Two windows share one identity, and a second window is stopped by the loud preflight below |
+| `workspace` | `<plugin data>/profiles/<engine>/ws-<sha256(cwd)[:7]>` | One identity per project folder, Playwright-style. Different projects never collide. The profile starts with a **fresh login state** — no cookies, logins or fingerprint seed from `profiles/default` are carried over |
+
+- The hash is Playwright's own derivation: SHA-256 of the exact working-directory string, first seven hex characters. For example `D:\Projects2\StealthBrowserAutomation` → `ws-0b0e194`. The same folder always maps to the same profile; a different spelling of the same path (different case or separator) maps to a different one.
+- Precedence: **Profile directory → Account profile → Profile isolation → engine default**. An explicit Profile directory or Account profile therefore keeps its exact previous meaning, and `shared` never changes an existing path.
+- The free CloakBrowser licence still allows **one browser at a time**. `workspace` removes the profile collision, not the seat limit: with two browsers running, the second fails at the engine with the licence error, not with the profile lock. The stock `playwright` and `camoufox` engines are not Cloak-licensed and do not have that seat cap.
+- A workspace profile is an ordinary profile directory: it keeps its own `.proxy` file beside it (`<plugin data>/profiles/<engine>/ws-<hash>.proxy`) and survives restarts and updates. Nothing is moved, copied or deleted.
+
+### Loud preflight
+
+Before spawning the backend, the broker reads the bridge's own lock file, `<profile>/.cloakbrowser-mcp-profile.lock`. When a **live** process owns it, the broker does not start a doomed backend: the meta-tools answer instead, and the same sentence appears in `initialize.instructions`, `browser_capabilities.engineError` and `browser_engine_status.lastError`:
+
+```
+The browser profile <dir> is already in use by pid 25028, started 2026-10-24T14:09:50.197Z.
+Close the Claude Code session or browser window that owns this profile (pid 25028, started ...);
+if that process is gone, the lock is reclaimed automatically. You can also set "Profile directory"
+(profile_dir) to another folder, or set "Profile isolation" (profile_isolation) to workspace so each
+project folder gets its own profile. Restart Claude Code after the change. The backend was not started.
+```
+
+- `browser_capabilities.profileLock` and `browser_engine_status.profileLock` report `{ state, profileDir, path, owner: { pid, createdAt }, fix }`. `state` is `free` (no lock), `live` (owner exists, start refused), `stale` (owner is gone; the bridge reclaims it automatically) or `invalid` (the file exists but cannot be read; the start is refused and the fix names the file).
+- A lock whose recorded process is gone is **not** removed by the plugin. It is reported as `stale`, and the bridge reclaims it at start-up exactly as before.
+- A lock file that exists but cannot be read also stops the start: the bridge cannot reclaim it either, so the plugin names it instead of letting the backend exit.
+- The preflight is best-effort: it narrows the window, but the bridge remains the authority. If another process takes the lock between the check and the bridge start, the bridge's own message now reaches `browser_engine_status.lastError` as well, because the last launcher/backend stderr line is reported for **every** engine.
+- Proxy URLs are never printed: the lock text contains no proxy, and relayed stderr is redacted as before.
+
+### Loud fallback (workspace only)
+
+With `profile_isolation=workspace`, when the derived workspace profile is locked by a live owner, the broker tries the numbered siblings `ws-<hash>-2`, `ws-<hash>-3`, `ws-<hash>-4` and `ws-<hash>-5`. The first one whose lock is absent, stale or unreadable-by-the-bridge is used, and the switch is always reported:
+
+- `browser_capabilities.profileFallback` and `browser_engine_status.profileFallback` = `{ from, to, reason }`.
+- `initialize.instructions` carries the same sentence.
+- One line in the MCP log says the same.
+
+```
+The workspace profile <data>/profiles/cloak/ws-0b0e194 was already in use (pid 25028, started ...),
+so this session uses <data>/profiles/cloak/ws-0b0e194-2 instead. It has separate cookies, logins
+and fingerprint seed.
+```
+
+- The fallback profile is a **different identity**: if the first window is signed in, the fallback window is not. Nothing is shared, copied or migrated.
+- When `ws-<hash>-2` through `ws-<hash>-5` are all live-locked, no backend starts and the error says so, naming the base owner.
+- With `shared` (the default) there is **no fallback**. The loud preflight is the whole behaviour; a busy profile is never silently swapped for another identity.
+- Fallback applies only to the profile derived by `profile_isolation=workspace`. An explicit Account profile or Profile directory is never moved aside.
+
+### Concurrent windows, plainly
+
+| Situation | `shared` (default) | `workspace` |
+|---|---|---|
+| Two windows, different project folders | Second window: loud preflight, no browser | Both get their own profile; two browsers (free Cloak tier refuses the second with its licence error) |
+| Two windows, same project folder | Second window: loud preflight, no browser | Second window: falls back to `ws-<hash>-2` (a fresh identity) |
+| Two windows, same named Account profile | Second window: loud preflight, no browser | Same — an account is never moved aside |
+| Same profile, one window closed | Next start reclaims the stale lock automatically | Same |
+
+To run two CloakBrowser browsers at once you need a Pro licence; no profile setting adds a seat. `workspace` is for isolating projects, not for lifting that limit.
+
 ## Engines and the broker
 
 `broker.mjs` is the single MCP server Claude Code starts. It reads the **Browser engine** setting, discovers every `engines/*.json` manifest, validates it, loads the selected one, starts `launch.mjs` for that engine and relays JSON-RPC in both directions. The engine value is an enum in the plugin configuration, never a command or a path. The enum (`browser_engine.options`) is generated from the manifests; adding an engine does not edit the broker. See `engines/README.md` for the add-an-engine recipe.
@@ -204,6 +276,8 @@ A proxy can be sticky per account with a file beside the profile instead of the 
 | `camoufox` | `engines/camoufox.json` | Camoufox stealth Firefox via `camoufox-playwright-mcp` 0.1.5 | Provisions uv, Python and its venv automatically; portable by default; four tools absent and `browser_pdf_save` unusable; no CDP |
 | `camoufox-native` | `engines/camoufox-native.json` | Camoufox stealth Firefox via PyPI `mcp-camoufox` 0.4.5, fetched into a plugin-managed venv | Its own 27-tool contract; 16 canonical aliases + 9 prefixed native tools; portable by default; 10 portable verbs absent; no CDP; licence FSL-1.1-MIT; never bundled |
 | `kameleo` | `engines/kameleo.json` | A running Kameleo Chroma profile over CDP | Full 72-tool contract over attach; portable by default (26), 74 at full; the profile and its proxy belong to Kameleo; Junglefox unsupported; no local diagnostics; **stealth UNVERIFIED**, no detector run |
+
+Every manifest is the source of truth for whether the profile model applies: `cloak`, `playwright` and `camoufox` own a local profile directory and resolve `profile_dir`, `account` and `profile_isolation` (`profileApplies: true`, the default). `camoufox-native` (the app owns its profile and its lease) and `kameleo` (CDP attach) declare `profileApplies: false`; for them the profile settings, the lock preflight and the workspace derivation are inert, and the meta-tools report `profileApplies: false`. The broker has no engine-id branch for this rule.
 
 The Camoufox engine differs from the Chromium engines where the backend does:
 
@@ -274,8 +348,10 @@ The broker adds two meta-tools that are always present and cannot collide with b
 
 | Meta-tool | What it reports |
 |---|---|
-| `browser_capabilities` | Selected engine, label, contract, effective `toolProfile` and its source, per-tool support and notes, the portable list, what the profile and manifest hid, and how to change engines |
-| `browser_engine_status` | Selected engine, effective tool profile, backend state, backend version, startup and `tools/list` timing, last error |
+| `browser_capabilities` | Selected engine, label, contract, effective `toolProfile` and its source, per-tool support and notes, the portable list, what the profile and manifest hid, how to change engines, and the profile facts: `profileIsolation`, `profileApplies`, `profileFallback` and `profileLock` |
+| `browser_engine_status` | Selected engine, effective tool profile, backend state, backend version, startup and `tools/list` timing, last error, and the same profile facts |
+
+Both meta-tool descriptions mention the profile diagnostic, so an agent that sees only the two-tool degraded surface knows to call them when a profile is already in use.
 
 Total surface for `cloak` at the default profile: 76 tools = 72 backend `browser_*` tools + 2 local diagnostics + 2 broker meta-tools. At `portable`: 26 = 24 backend `browser_*` tools + 2 broker meta-tools. Engine and profile changes apply after the MCP server restarts.
 
@@ -296,7 +372,7 @@ Never automated, for any account or engine: the credential form, password entry,
 
 ## Version and updates
 
-The plugin is version 2.7.1. It pins `cloakbrowser-mcp@1.15.1`, runs it on `patchright@1.64.1`, and pins the engine wrapper to `0.6.3`. The Camoufox engine pins `camoufox-playwright-mcp==0.1.5`, the managed `uv` `0.13.5`, CPython `3.13.17` and browser build `v156.0.1-beta.39`. The Camoufox native engine provisions `mcp-camoufox==0.4.5` from PyPI with the same uv/Python pins and browser build `156.0.1-beta.39` in `.mcp.json` (`CAMOUFOX_NATIVE_PACKAGE`, `CAMOUFOX_NATIVE_BROWSER_BUILD`). The Kameleo engine has no package pin of its own: it reuses the `cloakbrowser-mcp@1.15.1` runtime and starts its pinned `@playwright/mcp` CLI with `--cdp-endpoint`. The uv version, its per-platform SHA-256 values and the Python pin live in `lib/provision.mjs`; the package pins live in `.mcp.json` or the launcher. The plugin version moves independently of the MCP pins.
+The plugin is version 2.8.0. It adds session-safe profiles (`profile_isolation`, the lock preflight and the workspace fallback) without changing the default profile path. It pins `cloakbrowser-mcp@1.15.1`, runs it on `patchright@1.64.1`, and pins the engine wrapper to `0.6.3`. The Camoufox engine pins `camoufox-playwright-mcp==0.1.5`, the managed `uv` `0.13.5`, CPython `3.13.17` and browser build `v156.0.1-beta.39`. The Camoufox native engine provisions `mcp-camoufox==0.4.5` from PyPI with the same uv/Python pins and browser build `156.0.1-beta.39` in `.mcp.json` (`CAMOUFOX_NATIVE_PACKAGE`, `CAMOUFOX_NATIVE_BROWSER_BUILD`). The Kameleo engine has no package pin of its own: it reuses the `cloakbrowser-mcp@1.15.1` runtime and starts its pinned `@playwright/mcp` CLI with `--cdp-endpoint`. The uv version, its per-platform SHA-256 values and the Python pin live in `lib/provision.mjs`; the package pins live in `.mcp.json` or the launcher. The plugin version moves independently of the MCP pins.
 
 ## Tool groups and per-tool control
 

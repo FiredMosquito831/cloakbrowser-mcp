@@ -87,5 +87,6 @@
     "groupSwitchesApply": true,
     "cdpAttach": true
   },
+  "profileApplies": false,
   "notes": "Attaches to a Kameleo Chroma profile over CDP with the full 72-tool Playwright MCP contract. The profile, its cookies, its logins and its proxy belong to Kameleo; the plugin's profile, proxy, humanize and Camoufox settings do not apply, and the plugin never starts the Kameleo app. Junglefox (Firefox) profiles cannot be attached over CDP. Stealth over attach is UNVERIFIED in this release: Kameleo is not installed on the build machine, so no detector run exists; install the app, activate a licence, create a Chroma profile and provide its id, then record the detector result before claiming suppression. No local diagnostics: the surface is 72 browser tools + 2 broker meta-tools = 74 at full, 24 + 2 = 26 at portable."
 }

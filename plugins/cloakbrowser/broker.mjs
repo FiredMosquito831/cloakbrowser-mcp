@@ -21,6 +21,7 @@ import {
   engineChangeHelp,
   firstMissingRequiredEnv,
   loadEngineConfiguration,
+  manifestProfileApplies,
   manifestSupport,
   portableToolNames,
   profileAllows,
@@ -33,9 +34,17 @@ import {
   accountProxyPath,
   backendEnvironment,
   DEFAULT_PROFILE_NAME,
+  effectiveProfileDir,
+  lockBlocksStart,
+  profileFallbackReason,
+  profileLockFix,
+  profileLockMessage,
   readAccountProxy,
+  readProfileLock,
   redactSecrets,
   resolveProfile,
+  resolveProfileIsolation,
+  selectFallbackProfile,
 } from './lib/profile.mjs';
 import {
   aliasSummary,
@@ -59,13 +68,13 @@ const META_TOOLS = [
   {
     name: 'browser_capabilities',
     description:
-      'Report the selected browser engine, its Playwright MCP contract, the active tool profile, the backend tool count, per-tool support and how to change engines. This is a local broker tool; it does not start a browser.',
+      'Report the selected browser engine, its Playwright MCP contract, the active tool profile, the backend tool count, per-tool support and how to change engines. This is a local broker tool; it does not start a browser. When another session already uses the browser profile, it also reports the profile directory, the owning process and the fix.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'browser_engine_status',
     description:
-      'Report the selected engine, backend process state, backend version when the handshake has completed, startup timing and the last error. This is a local broker tool; it does not start a browser.',
+      'Report the selected engine, backend process state, backend version when the handshake has completed, startup timing and the last error. This is a local broker tool; it does not start a browser. When another session already uses the browser profile, it also reports the profile directory, the owning process and the fix.',
     inputSchema: { type: 'object', properties: {} },
   },
 ];
@@ -75,8 +84,8 @@ function log(message) {
 }
 
 // The last non-empty stderr line a launcher wrote, bounded so a stack trace
-// cannot bloat a status payload. Used only for engines that declare a runtime
-// hint, so other engines keep their exact previous error text.
+// cannot bloat a status payload. Every engine reports it when its backend exits;
+// the line is redacted before it is stored, so a proxy URL never appears.
 function lastStderrLine(tail) {
   const lines = String(tail)
     .split(/\r?\n/)
@@ -178,11 +187,30 @@ const PLUGIN_DATA_DIR =
     ? path.resolve(process.env.CLAUDE_PLUGIN_DATA.trim())
     : path.join(homedir(), '.cloakbrowser-mcp-plugin');
 
+// profile_isolation. "shared" (the default) is the behaviour before the setting
+// existed: one profile per account, shared by every Claude Code session.
+// "workspace" derives one profile per project folder, Playwright-style. An
+// unsubstituted placeholder and an unknown value both mean "shared"; they are
+// logged once and are never fatal.
+const isolationSetting =
+  typeof process.env.STEALTH_PROFILE_ISOLATION === 'string' ? process.env.STEALTH_PROFILE_ISOLATION : '';
+const profileIsolation = resolveProfileIsolation(isolationSetting);
+if (profileIsolation.placeholder !== null) {
+  log(`ignoring unsubstituted profile-isolation placeholder: ${profileIsolation.placeholder.trim()}`);
+}
+if (profileIsolation.ignored !== null) {
+  log(`ignoring unknown profile isolation: ${profileIsolation.ignored}`);
+}
+// An engine that owns its profile elsewhere, or attaches to one, declares
+// profileApplies: false; the whole profile model is inert for it.
+const profileApplies = engine !== null && manifestProfileApplies(engine);
+
 // One profile per account. Resolution runs once, before the backend starts, and
 // its result feeds both the spawn environment and the meta-tools. With the
-// account and profile_dir settings unset it resolves to "default" and the
-// broker sets nothing, so launch.mjs keeps applying profiles/default exactly as
-// before. An unsubstituted placeholder is treated as unset, like the engine.
+// account, profile_dir and profile_isolation settings unset it resolves to
+// "default" and the broker sets nothing, so launch.mjs keeps applying
+// profiles/default exactly as before. An unsubstituted placeholder is treated as
+// unset, like the engine.
 const rawAccount = typeof process.env.STEALTH_ACCOUNT === 'string' ? process.env.STEALTH_ACCOUNT : '';
 if (rawAccount.includes('${')) {
   log(`ignoring unsubstituted account placeholder: ${rawAccount.trim()}`);
@@ -204,6 +232,9 @@ const profileResolution =
         dataDir: PLUGIN_DATA_DIR,
         launcherName: resolveLauncherName(engine),
         ignoredSettings: Array.isArray(engine.ignoredSettings) ? engine.ignoredSettings : [],
+        profileApplies,
+        isolation: profileIsolation.mode,
+        cwd: process.cwd(),
       });
 if (rawAccount.trim() !== '' && !rawAccount.includes('${') && profileResolution.accountApplies === false) {
   const ownSetting = engine?.profileArgument?.setting;
@@ -218,33 +249,80 @@ if (engineError === null && profileResolution.error !== null) {
   engineError = profileResolution.error;
 }
 
+// Loud lock preflight. The bridge takes its exclusive profile lock at backend
+// start-up, so starting a backend against a profile a live process owns only
+// produces "Backend exited" and a two-tool surface. The broker reads the same
+// lock file first (never writes, moves, copies or deletes a lock or a profile).
+//   shared / account / profile_dir: a busy profile stops the spawn; the owner and
+//                                   the fix are reported instead.
+//   workspace:                      a busy derived profile moves to its first
+//                                   free numbered sibling (-2 ... -5) and the
+//                                   fallback is always reported.
+let profileLock = null;
+let profileFallback = null;
+if (engineError === null && profileApplies) {
+  const lockDir = effectiveProfileDir(profileResolution);
+  if (lockDir !== null) {
+    const lock = readProfileLock(lockDir);
+    if (lockBlocksStart(lock)) {
+      const workspaceProfile =
+        profileIsolation.mode === 'workspace' && profileResolution.profileSource === 'workspace';
+      const fallbackDir = workspaceProfile
+        ? selectFallbackProfile(lockDir, (candidate) => lockBlocksStart(readProfileLock(candidate)))
+        : null;
+      if (fallbackDir !== null) {
+        profileFallback = {
+          from: lockDir,
+          to: fallbackDir,
+          reason: profileFallbackReason(lock, fallbackDir),
+        };
+        profileResolution.profileDir = fallbackDir;
+        profileLock = readProfileLock(fallbackDir);
+        log(profileFallback.reason);
+      } else {
+        profileLock = { ...lock, fix: profileLockFix(lock) };
+        engineError = profileLockMessage(lock, { fallbackExhausted: workspaceProfile });
+        log(engineError);
+      }
+    } else {
+      profileLock = { ...lock, fix: null };
+      if (lock.state === 'stale') {
+        log(
+          `profile lock ${lock.path} is stale (pid ${lock.owner?.pid ?? 'unknown'} is gone); ` +
+            'the backend reclaims it',
+        );
+      }
+    }
+  }
+}
+
+// The profile directory an optional .proxy file sits beside: an account or
+// workspace profile, or the default profile when the broker sets nothing.
+function proxyCandidate() {
+  const source = profileResolution.profileSource;
+  if (source === 'account' || source === 'workspace') {
+    return profileResolution.profileDir;
+  }
+  return source === 'default' ? profileResolution.defaultProfileDir : null;
+}
+
 // The optional per-account proxy file. proxy_server wins when set; otherwise the
-// file beside the resolved profile is read for a named account and for the
-// default account (where it is used only when it exists). Engines whose
-// manifest ignores profile_dir have no account profile, so no file is read.
+// file beside the resolved profile is read for a named account, for a workspace
+// profile and for the default account (where it is used only when it exists).
+// Engines whose manifest ignores profile_dir have no account profile, so no file
+// is read.
 function resolveProxy() {
   const setting =
     typeof process.env.PLAYWRIGHT_MCP_PROXY_SERVER === 'string'
       ? process.env.PLAYWRIGHT_MCP_PROXY_SERVER.trim()
       : '';
+  const candidate = proxyCandidate();
   if (setting !== '') {
-    const candidate =
-      profileResolution.profileSource === 'account'
-        ? profileResolution.profileDir
-        : profileResolution.profileSource === 'default'
-          ? profileResolution.defaultProfileDir
-          : null;
     if (candidate !== null && existsSync(accountProxyPath(candidate))) {
       log('ignoring the account proxy file because the proxy_server setting is set');
     }
     return { source: 'setting', configured: true, value: null, error: null };
   }
-  const candidate =
-    profileResolution.profileSource === 'account'
-      ? profileResolution.profileDir
-      : profileResolution.profileSource === 'default'
-        ? profileResolution.defaultProfileDir
-        : null;
   if (candidate === null) {
     return { source: 'none', configured: false, value: null, error: null };
   }
@@ -253,11 +331,13 @@ function resolveProxy() {
     return { source: 'error', configured: false, value: null, error: result.error };
   }
   if (result.value !== null) {
-    log(
-      profileResolution.profileSource === 'account'
-        ? `using the account proxy file for account "${profileResolution.account}"`
-        : `using the account proxy file beside the default profile`,
-    );
+    if (profileResolution.profileSource === 'account') {
+      log(`using the account proxy file for account "${profileResolution.account}"`);
+    } else if (profileResolution.profileSource === 'workspace') {
+      log('using the proxy file beside the workspace profile');
+    } else {
+      log('using the account proxy file beside the default profile');
+    }
     return { source: 'account-file', configured: true, value: result.value, error: null };
   }
   return { source: 'none', configured: false, value: null, error: null };
@@ -269,14 +349,18 @@ if (engineError === null && proxyResolution.error !== null) {
   engineError = proxyResolution.error;
 }
 
-// The broker creates the resolved account directory (it never deletes, copies or
-// migrates one). An explicit profile_dir is not created here: launch.mjs has
-// always created it, and its bytes are unchanged.
-if (engineError === null && profileResolution.profileSource === 'account') {
+// The broker creates the resolved account or workspace directory (it never
+// deletes, copies or migrates one). An explicit profile_dir is not created here:
+// launch.mjs has always created it, and its bytes are unchanged.
+if (
+  engineError === null &&
+  (profileResolution.profileSource === 'account' || profileResolution.profileSource === 'workspace')
+) {
   try {
     mkdirSync(profileResolution.profileDir, { recursive: true });
   } catch (error) {
-    engineError = `Cannot create the account profile directory ${profileResolution.profileDir}: ${error.message}`;
+    const label = profileResolution.profileSource === 'workspace' ? 'workspace' : 'account';
+    engineError = `Cannot create the ${label} profile directory ${profileResolution.profileDir}: ${error.message}`;
   }
 }
 
@@ -311,17 +395,25 @@ const state = {
   toolProfileSource: profileSelection.source,
   requestedToolProfile: profileSelection.requested,
   disabled: parseDisabledTools(process.env.CLOAK_DISABLED_TOOLS),
-  // Per-account profile state. `dir` is set only when the broker resolved an
-  // account and must set PLAYWRIGHT_MCP_USER_DATA_DIR itself; `appliedProxy` is
-  // the file proxy to inject into the spawn environment. Neither value is ever
-  // returned to the client except as the account name / a boolean.
+  // Profile state. `dir` is set only when the broker resolved an account or a
+  // workspace and must set PLAYWRIGHT_MCP_USER_DATA_DIR itself; `appliedProxy` is
+  // the file proxy to inject into the spawn environment. The lock/fallback facts
+  // describe this start and are reported additively by the meta-tools.
   profile: {
     account: profileResolution.account,
-    dir: profileResolution.profileSource === 'account' ? profileResolution.profileDir : null,
+    dir:
+      profileResolution.profileSource === 'account' || profileResolution.profileSource === 'workspace'
+        ? profileResolution.profileDir
+        : null,
     source: profileResolution.profileSource,
     applies: profileResolution.accountApplies,
     defaultDir: profileResolution.defaultProfileDir,
     error: profileResolution.error,
+    isolation: profileIsolation.mode,
+    isolationSource: profileIsolation.source,
+    appliesToEngine: profileApplies,
+    lock: profileLock,
+    fallback: profileFallback,
   },
   proxy: {
     source: proxyResolution.source,
@@ -725,6 +817,14 @@ function capabilitiesPayload() {
     accountApplies: state.profile.applies,
     proxySource: state.proxy.source,
     proxyConfigured: state.proxy.configured,
+    // Session safety, additive. profileLock is null only when the engine owns its
+    // profile, or before the resolution failed; profileFallback is non-null only
+    // when a workspace profile was busy and a numbered sibling was chosen.
+    profileIsolation: state.profile.isolation,
+    profileIsolationSource: state.profile.isolationSource,
+    profileApplies: state.profile.appliesToEngine,
+    profileFallback: state.profile.fallback,
+    profileLock: state.profile.lock,
   };
 }
 
@@ -782,6 +882,11 @@ function statusPayload() {
       : {}),
     account: state.profile.account,
     profileDir: state.profile.dir,
+    // Session safety, additive; every existing value above is unchanged.
+    profileIsolation: state.profile.isolation,
+    profileApplies: state.profile.appliesToEngine,
+    profileFallback: state.profile.fallback,
+    profileLock: state.profile.lock,
   };
 }
 
@@ -869,6 +974,7 @@ function synthesizeInitialize(id, reason) {
   const instructions =
     `The ${state.engineId} backend is unavailable: ${reason} ` +
     'Call browser_engine_status for details. Only broker meta-tools are exposed until Claude Code restarts the MCP server.' +
+    (state.profile.fallback === null ? '' : ` ${state.profile.fallback.reason}`) +
     (dependencyHint === null ? '' : ` ${dependencyHint}`);
   sendResult(id, {
     protocolVersion: state.requestedProtocolVersion ?? '2025-06-18',
@@ -1136,6 +1242,20 @@ function handleBackendMessage(message, rawLine) {
     if (state.backend.state === 'starting' || state.backend.state === 'idle') {
       state.backend.state = 'running';
     }
+    if (state.profile.fallback !== null) {
+      // The session is running on a different identity than its workspace
+      // profile; say so in the handshake, not only in the meta-tools. Every
+      // other initialise response is relayed byte-for-byte.
+      const result = message.result !== null && typeof message.result === 'object' ? message.result : {};
+      const current = typeof result.instructions === 'string' ? result.instructions.trim() : '';
+      message.result = {
+        ...result,
+        instructions:
+          current === '' ? state.profile.fallback.reason : `${current} ${state.profile.fallback.reason}`,
+      };
+      process.stdout.write(`${JSON.stringify(message)}\n`);
+      return;
+    }
   }
 
   if (pending?.method === 'tools/list' && Array.isArray(message.result?.tools)) {
@@ -1201,9 +1321,14 @@ function startBackend() {
     `engine=${state.engineId} source=${state.engineSource} contract=${state.engine.contract} ` +
       `profile=${state.toolProfile} profileSource=${state.toolProfileSource} launcher=${path.basename(launcher)}`,
   );
-  // Only an active account/profile or a proxy-file decision adds a line, so the
-  // default start-up log stays byte-identical.
-  if (state.profile.source === 'account' || state.proxy.source !== 'none') {
+  // Only an active account/workspace profile, a fallback or a proxy-file
+  // decision adds a line, so the default start-up log stays byte-identical.
+  if (
+    state.profile.source === 'account' ||
+    state.profile.source === 'workspace' ||
+    state.proxy.source !== 'none' ||
+    state.profile.fallback !== null
+  ) {
     log(
       `account=${state.profile.account ?? 'none'} profileSource=${state.profile.source ?? 'none'} ` +
         `proxySource=${state.proxy.source} profileDir=${state.profile.dir ?? 'none'}`,
@@ -1270,7 +1395,10 @@ function startBackend() {
     state.backend.state = wasStarting ? 'failed' : 'exited';
     if (!state.shuttingDown) {
       const detail = signal === null ? `code ${String(code)}` : `signal ${signal}`;
-      const launcherLine = runtimeHint === null ? null : lastStderrLine(state.stderrTail);
+      // The last stderr line explains most backend exits (a profile lock, a
+      // missing package, a refused licence seat). It is reported for every
+      // engine, not only those that declare a runtime hint.
+      const launcherLine = lastStderrLine(state.stderrTail);
       state.lastError =
         launcherLine === null ? `Backend exited (${detail}).` : `Backend exited (${detail}): ${launcherLine}`;
       log(state.lastError);

@@ -1,7 +1,7 @@
 {
   "name": "camoufox",
   "displayName": "Camoufox",
-  "version": "2.7.1",
+  "version": "2.8.0",
   "description": "Camoufox stealth Firefox through the Playwright MCP tool contract. Provisions a pinned uv, a managed Python and the engine venv automatically; the pinned Camoufox browser build downloads on first use. Portable profile by default; no CDP.",
   "author": {
     "name": "FiredMosquito831"
@@ -70,6 +70,13 @@
       "title": "Disabled tools",
       "description": "Comma-separated tool names to hide from the agent and reject when called, for example browser_start_video,browser_take_screenshot. Leave empty to expose the selected profile unchanged.",
       "default": ""
+    },
+    "profile_isolation": {
+      "type": "string",
+      "title": "Profile isolation",
+      "description": "Session safety for the browser profile. shared keeps one profile per account for every Claude Code window, exactly as before. workspace gives each project folder its own profile (profiles/camoufox/ws-<hash>); that profile starts with a fresh login state, and if it is already in use the plugin uses a numbered sibling (ws-<hash>-2 to -5) and reports the switch. Ignored when Profile directory or Account profile is set. Restart Claude Code after changing it.",
+      "options": ["shared", "workspace"],
+      "default": "shared"
     },
     "account": {
       "type": "string",
