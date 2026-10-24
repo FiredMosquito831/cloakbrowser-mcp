@@ -180,7 +180,7 @@ Under `portable` the two local diagnostics (`cloakbrowser_binary_info`, `cloakbr
 | `camoufox-native` | `portable` | 27 | 16 (of which 2 meta) |
 | `kameleo` | `portable` | 74 | 26 (of which 2 meta) |
 
-The `camoufox-native` counts include the two broker meta-tools: 25 exposed tools at `full` (16 canonical + 9 prefixed) and 14 canonical tools at `portable` — ten portable verbs are not available on that engine. The group switches do not apply to it. The `kameleo` counts also include the two meta-tools: 72 browser tools at `full` and 24 at `portable`; the group switches do apply, so with fewer groups both counts fall.
+The `camoufox-native` counts include the two broker meta-tools: 25 exposed tools at `full` (16 canonical + 9 prefixed) and 14 canonical tools at `portable` — ten portable verbs are not available on that engine. The group switches do not apply to it. The `kameleo` counts also include the two meta-tools: 72 browser tools at `full` and 24 at `portable`; the group switches do apply, so with fewer groups both counts fall. With all seven groups off, `kameleo` exposes 27 at `full` (25 browser + 2 meta) and 21 at `portable` (19 + 2): the CLI's minimal 25-tool set contains 19 of the 24 portable names, including `browser_close`.
 
 The profile is applied before `disabled_tools`; for `cloak`, `playwright`, `camoufox` and `kameleo` the seven group switches still shape the backend list first. With `tools_storage=false` cloak exposes 59 at `full` and 21 at `portable`; with `tools_pdf=false` it exposes 75 at `full` and 26 at `portable`.
 
