@@ -119,7 +119,11 @@ The Camoufox engine differs from the Chromium engines where the backend does:
 - **The profile is injected by the broker.** Every native call except `list_sessions` receives the configured `camoufox_profile`; the agent never sees the argument.
 - **Results are native.** Snapshot text, tab listings and network numbering are mcp-camoufox's formats, not Playwright's. The broker passes results through untouched and does not pretend they are identical.
 - **The seven tool-group switches do not apply.** They shape the Playwright MCP capability groups inside the cloak launcher. For this engine, `tool_profile` and `disabled_tools` are the controls; `browser_capabilities.groupSwitchesApply` is `false`.
-- **Detection note (2026-10-24).** Two headed runs through the broker on `https://deviceandbrowserinfo.com/are_you_a_bot` returned `isBot: true`. The only failing signal was `hasInconsistentTimingResolution: true`; `isAutomatedWithCDP`, `isAutomatedWithCDPInWebWorker`, `hasWebdriverTrue` and the WebGL checks were all false. This engine is therefore **not** stealth-validated by those runs: mcp-camoufox 0.4.5 on browser build 156.0.1-beta.39 behaves differently from the `camoufox` contract engine's recorded baseline. The result is recorded here, not hidden.
+- **Detection note (2026-10-24).** Five headed runs through the broker on `https://deviceandbrowserinfo.com/are_you_a_bot` were recorded; the result is **not** a clean pass:
+  - With the default random fingerprint (both runs picked macOS/MacIntel), `isBot: true` both times, caused solely by `hasInconsistentTimingResolution: true`; every other signal was false, including `isAutomatedWithCDP`, `isAutomatedWithCDPInWebWorker` and the WebGL checks. These were the first two runs and navigation took 31–32 s.
+  - With `CAMOUFOX_FINGERPRINT_OS=windows` and a fresh profile, `isBot: false` both times with every flag false; navigation took 7–9 s.
+  - With `CAMOUFOX_FINGERPRINT_OS=macos`, the page returned no verdict within the probe window (inconclusive).
+  - **Cause not established:** the two failing runs were also the cold first runs (the app's startup update check was active), so profile OS and startup load are both plausible. The engine is therefore **not** stealth-validated by these runs. `CAMOUFOX_FINGERPRINT_OS` is not a plugin setting, but the launcher passes it through when it is set in the environment; pinning `windows` produced the two passing runs.
 
 ### Tool profiles
 
