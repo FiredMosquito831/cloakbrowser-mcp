@@ -1,5 +1,13 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -268,7 +276,11 @@ afterEach(async () => {
 });
 
 function tempRoot(prefix: string): string {
-  const root = mkdtempSync(path.join(tmpdir(), prefix));
+  // Canonicalize the fixture path: macOS TMPDIR is under /var, which is a
+  // symlink to /private/var, while the broker child's process.cwd() reports the
+  // physical path. Every path derived from this root (workspace name, data dir,
+  // lock file) must match what the child sees.
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), prefix)));
   tempRoots.push(root);
   return root;
 }
