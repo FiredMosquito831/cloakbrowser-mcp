@@ -882,8 +882,13 @@ describe('gate command list', () => {
     });
     expect(commands[4]).toMatchObject({ command: 'npm', args: ['run', 'check:static'] });
     expect(commands[5]).toMatchObject({ command: 'npm', args: ['test'] });
-    expect(commands[6]).toMatchObject({ command: 'claude', args: ['plugin', 'validate', '.'] });
-    expect(commands.slice(7).map((step) => step.args.at(-1))).toEqual([
+    expect(commands[6]).toEqual({
+      label: 'audit dependencies',
+      command: 'npm',
+      args: ['audit', '--audit-level=high'],
+    });
+    expect(commands[7]).toMatchObject({ command: 'claude', args: ['plugin', 'validate', '.'] });
+    expect(commands.slice(8).map((step) => step.args.at(-1))).toEqual([
       './plugins/camoufox',
       './plugins/cloakbrowser',
     ]);
