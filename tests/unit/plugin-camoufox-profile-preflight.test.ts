@@ -1,0 +1,835 @@
+// Camoufox profile preflight (2.9.4).
+//
+// The bridge's own lock file is not the only lock a persistent profile carries:
+// Firefox writes <profile>/parent.lock, and the Camoufox wrapper never writes the
+// bridge lock at all. A manifest can now declare its engine's lock file, and the
+// broker refuses a start a live owner would fail (a 180 s hang or an
+// exitCode=0 launch failure), while a leftover lock from an exited browser is
+// reported as stale and allowed.
+//
+// The live owner is proven two ways because the real files differ. The Windows
+// Firefox lock is a zero-byte file the OS refuses to open while the browser runs
+// (EBUSY on this machine), so it carries no process id; a lock file that does
+// carry a pid is checked with process.kill(pid, 0). Both rules are exercised.
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync as originalReadFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import process from 'node:process';
+import readline from 'node:readline';
+import { fileURLToPath } from 'node:url';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+// A lock file the OS refuses to open cannot be produced portably (Windows only),
+// so the error mapping is exercised by injecting the exact error Node reported
+// for the real Firefox lock: EBUSY "resource busy or locked". Every other read
+// in this file goes to the real fs.
+const faults = vi.hoisted(() => ({ unreadablePath: '', unreadableCode: '' }));
+
+vi.mock('node:fs', async (importOriginal) => {
+  const original = await importOriginal<typeof import('node:fs')>();
+  const readFileSync = (file: string, options: BufferEncoding): string => {
+    if (faults.unreadablePath !== '' && String(file) === faults.unreadablePath) {
+      const error = new Error(`Injected ${faults.unreadableCode}`);
+      Object.assign(error, { code: faults.unreadableCode });
+      throw error;
+    }
+    return original.readFileSync(file, options);
+  };
+  return { ...original, readFileSync };
+});
+
+interface EngineLock {
+  profileDir: string;
+  path: string;
+  file: string | null;
+  liveness: string | null;
+  state: 'free' | 'live' | 'stale' | 'unknown';
+  owner: { pid: number | null; createdAt: string | null } | null;
+  error: string | null;
+}
+
+interface ProfileModule {
+  ENGINE_LOCK_OWNER_RULES: string[];
+  readEngineProfileLock(
+    profileDir: string,
+    descriptor: { file?: string; owner?: string } | null | undefined,
+  ): EngineLock;
+  engineLockBlocksStart(lock: EngineLock): boolean;
+  engineProfileLockFix(lock: EngineLock): string | null;
+  engineProfileLockMessage(lock: EngineLock): string;
+}
+
+interface RegistryModule {
+  validateManifest(
+    manifest: unknown,
+    expectedId: string,
+    profileNames: string[],
+    launcherDir?: string,
+  ): string | null;
+}
+
+interface JsonRpcResponse {
+  result?: {
+    tools?: { name: string }[];
+    structuredContent?: Record<string, unknown>;
+    instructions?: string;
+  };
+}
+
+const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
+const pluginDir = path.join(repoRoot, 'plugins', 'cloakbrowser');
+const profile = (await import(
+  new URL('../../plugins/cloakbrowser/lib/profile.mjs', import.meta.url).href
+)) as unknown as ProfileModule;
+const registry = (await import(
+  new URL('../../plugins/cloakbrowser/engine-registry.mjs', import.meta.url).href
+)) as unknown as RegistryModule;
+
+// The 2.9.3 cloak-engine payload keys, captured from a pristine broker built from
+// origin/main 62c48cd with the same stub backend (.scratch/pr-camoufox-preflight/
+// baseline/cloak-baseline.json). An engine that declares no profileLock must
+// produce exactly this shape: the new check is opt-in.
+const CAPABILITIES_KEYS_293 = [
+  'engine',
+  'label',
+  'contract',
+  'transport',
+  'toolProfile',
+  'engineChoices',
+  'engineSource',
+  'engineError',
+  'engineNotes',
+  'howToChangeEngine',
+  'backendToolCount',
+  'browserToolCount',
+  'localToolCount',
+  'supportedToolCount',
+  'supportedBrowserToolCount',
+  'exposedToolCount',
+  'metaToolCount',
+  'metaTools',
+  'backendCapabilities',
+  'perToolSupport',
+  'supportRules',
+  'disabledTools',
+  'hiddenByManifest',
+  'hiddenByCollision',
+  'requestedToolProfile',
+  'toolProfileSource',
+  'engineDefaultToolProfile',
+  'availableToolProfiles',
+  'portableToolNames',
+  'perToolSupportNotes',
+  'hiddenByProfile',
+  'unavailableTools',
+  'launch',
+  'requirements',
+  'ignoredSettings',
+  'account',
+  'profileDir',
+  'profileSource',
+  'defaultProfileDir',
+  'availableAccounts',
+  'availableAccountCount',
+  'accountApplies',
+  'proxySource',
+  'proxyConfigured',
+  'profileIsolation',
+  'profileIsolationSource',
+  'profileApplies',
+  'profileFallback',
+  'profileLock',
+];
+
+const STATUS_KEYS_293 = [
+  'engine',
+  'label',
+  'engineSource',
+  'engineError',
+  'transport',
+  'contract',
+  'toolProfile',
+  'backendState',
+  'backendPid',
+  'backendVersion',
+  'backendServerName',
+  'lastError',
+  'startupMs',
+  'waitMs',
+  'toolsListWaitMs',
+  'pendingRequestCount',
+  'uptimeMs',
+  'backendToolCount',
+  'exposedToolCount',
+  'metaToolCount',
+  'brokerVersion',
+  'howToChangeEngine',
+  'backendStderrTail',
+  'account',
+  'profileDir',
+  'profileIsolation',
+  'profileApplies',
+  'profileFallback',
+  'profileLock',
+];
+
+const tempRoots: string[] = [];
+const sessions: BrokerSession[] = [];
+
+afterEach(async () => {
+  faults.unreadablePath = '';
+  faults.unreadableCode = '';
+  for (const session of sessions.splice(0)) {
+    await session.close();
+  }
+  for (const root of tempRoots.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function tempRoot(prefix: string): string {
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), prefix)));
+  tempRoots.push(root);
+  return root;
+}
+
+function profileWithLock(name: string, contents?: string, file = 'parent.lock'): string {
+  const dir = path.join(tempRoot('pr-camoufox-preflight-'), name);
+  mkdirSync(dir, { recursive: true });
+  if (contents !== undefined) {
+    writeFileSync(path.join(dir, file), contents);
+  }
+  return dir;
+}
+
+function deadPid(root: string): number {
+  const file = path.join(root, 'exit-now.mjs');
+  writeFileSync(file, 'process.exit(0);\n');
+  const result = spawnSync(process.execPath, [file], { windowsHide: true });
+  if (result.pid === undefined || result.pid <= 0) {
+    throw new Error('could not obtain a dead pid');
+  }
+  return result.pid;
+}
+
+function injectedCode(lockPath: string, code: string): void {
+  faults.unreadablePath = lockPath;
+  faults.unreadableCode = code;
+}
+
+describe('engine lock reading (exclusive-open)', () => {
+  const descriptor = { file: 'parent.lock', owner: 'exclusive-open' };
+
+  it('reports free when the profile has no lock file', () => {
+    const dir = profileWithLock('free');
+    expect(profile.readEngineProfileLock(dir, descriptor)).toMatchObject({
+      state: 'free',
+      owner: null,
+      error: null,
+      file: 'parent.lock',
+      liveness: 'exclusive-open',
+      path: path.join(dir, 'parent.lock'),
+    });
+  });
+
+  it('reports live when the OS refuses to open a file a browser holds (EBUSY)', () => {
+    const dir = profileWithLock('live-busy', '');
+    injectedCode(path.join(dir, 'parent.lock'), 'EBUSY');
+    const lock = profile.readEngineProfileLock(dir, descriptor);
+    expect(lock).toMatchObject({ state: 'live', owner: { pid: null, createdAt: null }, error: null });
+    expect(profile.engineLockBlocksStart(lock)).toBe(true);
+  });
+
+  it('treats a permission error on the lock as a live holder', () => {
+    const dir = profileWithLock('live-denied', '');
+    injectedCode(path.join(dir, 'parent.lock'), 'EPERM');
+    expect(profile.readEngineProfileLock(dir, descriptor)).toMatchObject({
+      state: 'live',
+      owner: { pid: null },
+    });
+  });
+
+  it('reports stale for the zero-byte file Firefox leaves after a clean exit', () => {
+    // Measured on this machine: a running Camoufox holds parent.lock unreadable
+    // and 0 bytes; after exit the file stays 0 bytes and opens normally.
+    const dir = profileWithLock('stale', '');
+    const lock = profile.readEngineProfileLock(dir, descriptor);
+    expect(lock).toMatchObject({ state: 'stale', owner: null, error: null });
+    expect(profile.engineLockBlocksStart(lock)).toBe(false);
+  });
+
+  it('reports stale even when a leftover file has content', () => {
+    const dir = profileWithLock('stale-content', 'leftover');
+    expect(profile.readEngineProfileLock(dir, descriptor)).toMatchObject({ state: 'stale' });
+  });
+
+  it('allows the start with a note when the file cannot be read for another reason', () => {
+    const dir = profileWithLock('unknown', '');
+    injectedCode(path.join(dir, 'parent.lock'), 'EIO');
+    const lock = profile.readEngineProfileLock(dir, descriptor);
+    expect(lock.state).toBe('unknown');
+    expect(String(lock.error)).toContain('The start continues');
+    expect(profile.engineLockBlocksStart(lock)).toBe(false);
+  });
+
+  it('allows the start with a note when the lock path is not a regular file', () => {
+    const dir = profileWithLock('directory');
+    mkdirSync(path.join(dir, 'parent.lock'));
+    const lock = profile.readEngineProfileLock(dir, descriptor);
+    expect(lock.state).toBe('unknown');
+    expect(String(lock.error)).toContain('not a regular file');
+    expect(profile.engineLockBlocksStart(lock)).toBe(false);
+  });
+});
+
+describe('engine lock reading (pid)', () => {
+  const descriptor = { file: 'owner.lock', owner: 'pid' };
+
+  it('reports live for the pid of a running process', () => {
+    const dir = profileWithLock('pid-live', `${process.pid}\n`, 'owner.lock');
+    const lock = profile.readEngineProfileLock(dir, descriptor);
+    expect(lock).toMatchObject({ state: 'live', owner: { pid: process.pid, createdAt: null } });
+    expect(profile.engineLockBlocksStart(lock)).toBe(true);
+  });
+
+  it('reports stale for a pid that is gone', () => {
+    const pid = deadPid(tempRoot('pr-camoufox-preflight-dead-'));
+    const dir = profileWithLock('pid-stale', `${pid}\n`, 'owner.lock');
+    const lock = profile.readEngineProfileLock(dir, descriptor);
+    expect(lock).toMatchObject({ state: 'stale', owner: { pid } });
+    expect(profile.engineLockBlocksStart(lock)).toBe(false);
+  });
+
+  it('tolerates trailing text and surrounding whitespace around the pid', () => {
+    const dir = profileWithLock('pid-trailing', `  ${process.pid} locked by firefox\n`, 'owner.lock');
+    expect(profile.readEngineProfileLock(dir, descriptor)).toMatchObject({
+      state: 'live',
+      owner: { pid: process.pid },
+    });
+  });
+
+  it.each([
+    ['empty', ''],
+    ['whitespace', '   \n'],
+    ['not a number', 'parent'],
+    ['zero', '0'],
+    ['negative', '-7'],
+    ['fractional', '1.5'],
+  ])('allows the start with a note for a %s pid', (_label, contents) => {
+    const dir = profileWithLock('pid-malformed', contents, 'owner.lock');
+    const lock = profile.readEngineProfileLock(dir, descriptor);
+    expect(lock.state).toBe('unknown');
+    expect(lock.owner).toBeNull();
+    expect(String(lock.error)).toContain('does not name a process id');
+    expect(profile.engineLockBlocksStart(lock)).toBe(false);
+  });
+
+  it('reports live when a pid lock file is held open, so the OS proof wins', () => {
+    const dir = profileWithLock('pid-busy', '1234', 'owner.lock');
+    injectedCode(path.join(dir, 'owner.lock'), 'EACCES');
+    expect(profile.readEngineProfileLock(dir, descriptor)).toMatchObject({
+      state: 'live',
+      owner: { pid: null },
+    });
+  });
+
+  it('allows the start with a note for an unusable descriptor', () => {
+    const dir = profileWithLock('bad-descriptor', '1234', 'owner.lock');
+    for (const descriptor of [
+      null,
+      {},
+      { file: 'owner.lock' },
+      { owner: 'pid' },
+      { file: '', owner: 'pid' },
+    ]) {
+      const lock = profile.readEngineProfileLock(dir, descriptor as never);
+      expect(lock.state).toBe('unknown');
+      expect(profile.engineLockBlocksStart(lock)).toBe(false);
+    }
+  });
+
+  it('declares exactly the two owner rules it implements', () => {
+    expect([...profile.ENGINE_LOCK_OWNER_RULES]).toEqual(['exclusive-open', 'pid']);
+  });
+});
+
+describe('engine lock message', () => {
+  it('names the profile dir, the owner pid and the fix for a live pid lock', () => {
+    const dir = profileWithLock('message-pid', `${process.pid}\n`, 'owner.lock');
+    const lock = profile.readEngineProfileLock(dir, { file: 'owner.lock', owner: 'pid' });
+    const message = profile.engineProfileLockMessage(lock);
+    expect(message).toContain(dir);
+    expect(message).toContain(`pid ${process.pid}`);
+    expect(message).toContain('profile_isolation');
+    expect(message).toContain('The backend was not started.');
+    expect(profile.engineProfileLockFix(lock)).toContain('Close the browser or Claude Code session');
+  });
+
+  it('names the lock file when the holder cannot be identified', () => {
+    const dir = profileWithLock('message-open', '');
+    injectedCode(path.join(dir, 'parent.lock'), 'EBUSY');
+    const lock = profile.readEngineProfileLock(dir, { file: 'parent.lock', owner: 'exclusive-open' });
+    const message = profile.engineProfileLockMessage(lock);
+    expect(message).toContain(dir);
+    expect(message).toContain(path.join(dir, 'parent.lock'));
+    expect(message).toContain('holds the engine lock file');
+    expect(message).toContain('The backend was not started.');
+  });
+
+  it('has no fix for a stale lock', () => {
+    const dir = profileWithLock('message-stale', '');
+    const stale = profile.readEngineProfileLock(dir, { file: 'parent.lock', owner: 'exclusive-open' });
+    expect(profile.engineProfileLockFix(stale)).toBeNull();
+    expect(profile.engineLockBlocksStart(stale)).toBe(false);
+  });
+});
+
+describe('manifest profileLock validation', () => {
+  const base = {
+    schemaVersion: 1,
+    id: 'alpha',
+    label: 'Alpha',
+    transport: 'launch',
+    contract: 'playwright-mcp',
+    defaultToolProfile: 'full',
+    toolSupport: { '*': 'full' },
+    notes: 'test',
+  };
+
+  it('accepts both owner rules and no descriptor at all', () => {
+    expect(registry.validateManifest(base, 'alpha', ['full'])).toBeNull();
+    expect(
+      registry.validateManifest(
+        { ...base, profileLock: { file: 'parent.lock', owner: 'exclusive-open' } },
+        'alpha',
+        ['full'],
+      ),
+    ).toBeNull();
+    expect(
+      registry.validateManifest({ ...base, profileLock: { file: 'owner.lock', owner: 'pid' } }, 'alpha', [
+        'full',
+      ]),
+    ).toBeNull();
+  });
+
+  it('rejects an unsupported field, a missing file or a missing owner', () => {
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [{ file: 'parent.lock', owner: 'pid', mode: 'x' }, 'unsupported field "mode"'],
+      [{ owner: 'pid' }, 'profileLock.file is missing'],
+      [{ file: 'parent.lock' }, 'profileLock.owner is missing'],
+      [{ file: '  ', owner: 'pid' }, 'profileLock.file is missing'],
+    ];
+    for (const [profileLock, expected] of cases) {
+      expect(registry.validateManifest({ ...base, profileLock }, 'alpha', ['full'])).toContain(expected);
+    }
+  });
+
+  it('rejects a path, a traversal or an unknown owner rule', () => {
+    const files = ['../parent.lock', 'sub/parent.lock', '..\\parent.lock', '.', '..', 'a'.repeat(65)];
+    for (const file of files) {
+      expect(
+        registry.validateManifest({ ...base, profileLock: { file, owner: 'pid' } }, 'alpha', ['full']),
+      ).toBe('profileLock.file must be a plain file name inside the profile directory');
+    }
+    expect(
+      registry.validateManifest({ ...base, profileLock: { file: 'parent.lock', owner: 'open' } }, 'alpha', [
+        'full',
+      ]),
+    ).toContain('profileLock.owner must be one of');
+  });
+
+  it('rejects a descriptor on an engine that owns no plugin profile', () => {
+    expect(
+      registry.validateManifest(
+        { ...base, profileApplies: false, profileLock: { file: 'parent.lock', owner: 'pid' } },
+        'alpha',
+        ['full'],
+      ),
+    ).toContain('profileApplies is not false');
+  });
+});
+
+describe('manifest wiring', () => {
+  const universal = path.join(repoRoot, 'plugins', 'cloakbrowser', 'engines');
+  const camoufoxPlugin = path.join(repoRoot, 'plugins', 'camoufox', 'engines');
+
+  it('declares parent.lock for the camoufox engine in both plugins', () => {
+    for (const dir of [universal, camoufoxPlugin]) {
+      const manifest = JSON.parse(originalReadFileSync(path.join(dir, 'camoufox.json'), 'utf8'));
+      expect(manifest.profileLock).toEqual({ file: 'parent.lock', owner: 'exclusive-open' });
+    }
+    expect(originalReadFileSync(path.join(universal, 'camoufox.json'))).toEqual(
+      originalReadFileSync(path.join(camoufoxPlugin, 'camoufox.json')),
+    );
+  });
+
+  it('declares no profileLock for the engines that do not need one', () => {
+    for (const engine of ['cloak', 'playwright', 'camoufox-native', 'kameleo']) {
+      const manifest = JSON.parse(originalReadFileSync(path.join(universal, `${engine}.json`), 'utf8'));
+      expect(manifest.profileLock).toBeUndefined();
+    }
+  });
+
+  it('keeps every shipped manifest valid with the new field', () => {
+    const profiles = JSON.parse(originalReadFileSync(path.join(universal, 'profiles.json'), 'utf8')) as {
+      profiles: Record<string, unknown>;
+    };
+    const profileNames = Object.keys(profiles.profiles).sort();
+    for (const engine of ['cloak', 'playwright', 'camoufox', 'camoufox-native', 'kameleo']) {
+      const manifest = JSON.parse(originalReadFileSync(path.join(universal, `${engine}.json`), 'utf8'));
+      expect(
+        registry.validateManifest(manifest, engine, profileNames, pluginDir),
+        `${engine}.json`,
+      ).toBeNull();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Broker wiring: the real plugin for the cloak engine and a scratch plugin with
+// two synthetic engines, one that declares profileLock and one that does not.
+// The broker reads the lock before spawning.
+// ---------------------------------------------------------------------------
+
+const STUB_TOOLS = ['browser_navigate', 'browser_snapshot'];
+const STUB_SOURCE = `#!/usr/bin/env node
+import readline from 'node:readline';
+const TOOLS = ${JSON.stringify(STUB_TOOLS)};
+function send(message) { process.stdout.write(JSON.stringify(message) + '\\n'); }
+function handle(message) {
+  if (message.method === 'initialize') {
+    send({ jsonrpc: '2.0', id: message.id, result: { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'stub-lock-mcp', version: '0.0.0' } } });
+    return;
+  }
+  if (message.method === 'tools/list') {
+    send({ jsonrpc: '2.0', id: message.id, result: { tools: TOOLS.map((name) => ({ name, description: 'stub ' + name, inputSchema: { type: 'object', properties: {} } })) } });
+    return;
+  }
+  send({ jsonrpc: '2.0', id: message.id, result: { content: [{ type: 'text', text: '{}' }], isError: false } });
+}
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+rl.on('line', (line) => { if (line.trim() !== '') { try { handle(JSON.parse(line)); } catch {} } });
+rl.on('close', () => process.exit(0));
+`;
+
+const CLOAK_STUB_SOURCE = `#!/usr/bin/env node
+const readline = require('node:readline');
+const TOOLS = ${JSON.stringify(STUB_TOOLS)};
+function send(message) { process.stdout.write(JSON.stringify(message) + '\\n'); }
+function handle(message) {
+  if (message.method === 'initialize') {
+    send({ jsonrpc: '2.0', id: message.id, result: { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'stub-browser-mcp', version: '0.0.0' } } });
+    return;
+  }
+  if (message.method === 'tools/list') {
+    send({ jsonrpc: '2.0', id: message.id, result: { tools: TOOLS.map((name) => ({ name, description: 'stub ' + name, inputSchema: { type: 'object', properties: {} } })) } });
+    return;
+  }
+  send({ jsonrpc: '2.0', id: message.id, result: { content: [{ type: 'text', text: '{}' }], isError: false } });
+}
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+rl.on('line', (line) => { if (line.trim() !== '') { try { handle(JSON.parse(line)); } catch {} } });
+rl.on('close', () => process.exit(0));
+`;
+
+function writeJson(file: string, value: unknown): void {
+  writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function createLockPlugin(root: string): string {
+  const plugin = path.join(root, 'plugin');
+  const engines = path.join(plugin, 'engines');
+  const lib = path.join(plugin, 'lib');
+  mkdirSync(engines, { recursive: true });
+  mkdirSync(lib, { recursive: true });
+  for (const file of ['broker.mjs', 'engine-registry.mjs']) {
+    copyFileSync(path.join(pluginDir, file), path.join(plugin, file));
+  }
+  for (const file of ['attach.mjs', 'profile.mjs', 'provision.mjs', 'surface.mjs']) {
+    copyFileSync(path.join(pluginDir, 'lib', file), path.join(lib, file));
+  }
+  copyFileSync(path.join(pluginDir, 'engines', 'profiles.json'), path.join(engines, 'profiles.json'));
+  writeJson(path.join(engines, 'lock-engine.json'), {
+    schemaVersion: 1,
+    id: 'lock-engine',
+    label: 'Lock test engine',
+    transport: 'launch',
+    contract: 'playwright-mcp',
+    defaultToolProfile: 'full',
+    launch: { launcher: 'launch-lock-engine.mjs' },
+    profileLock: { file: 'owner.lock', owner: 'pid' },
+    toolSupport: { '*': 'full' },
+    notes: 'Synthetic manifest for the profile-lock unit suite.',
+  });
+  writeJson(path.join(engines, 'plain-engine.json'), {
+    schemaVersion: 1,
+    id: 'plain-engine',
+    label: 'Plain test engine',
+    transport: 'launch',
+    contract: 'playwright-mcp',
+    defaultToolProfile: 'full',
+    launch: { launcher: 'launch-lock-engine.mjs' },
+    toolSupport: { '*': 'full' },
+    notes: 'Synthetic manifest with no profileLock, for the byte-identical check.',
+  });
+  writeFileSync(path.join(plugin, 'launch-lock-engine.mjs'), STUB_SOURCE);
+  return plugin;
+}
+
+// The stub runtime the cloak launcher finds already provisioned: it checks the
+// package identities, then starts dist/cli.js.
+function createCloakRuntime(dataDir: string): string {
+  const runtime = path.join(dataDir, 'runtime');
+  const modules = path.join(runtime, 'node_modules');
+  for (const name of ['cloakbrowser', 'playwright-core', 'playwright', 'cloakbrowser-mcp']) {
+    mkdirSync(path.join(modules, name), { recursive: true });
+  }
+  mkdirSync(path.join(modules, 'cloakbrowser-mcp', 'dist'), { recursive: true });
+  writeJson(path.join(runtime, '.installed.json'), {
+    package: 'cloakbrowser-mcp@1.15.1',
+    engine: '0.6.3',
+    driver: 'patchright@1.64.1',
+  });
+  writeJson(path.join(modules, 'cloakbrowser', 'package.json'), { name: 'cloakbrowser', version: '0.6.3' });
+  writeJson(path.join(modules, 'playwright-core', 'package.json'), {
+    name: 'patchright-core',
+    version: '1.64.1',
+  });
+  writeJson(path.join(modules, 'playwright', 'package.json'), { name: 'patchright', version: '1.64.1' });
+  writeFileSync(path.join(modules, 'cloakbrowser-mcp', 'dist', 'cli.js'), CLOAK_STUB_SOURCE);
+  return dataDir;
+}
+
+function createSyntheticRuntime(dataDir: string): string {
+  const runtime = path.join(dataDir, 'runtime');
+  mkdirSync(runtime, { recursive: true });
+  writeJson(path.join(runtime, '.installed.json'), {
+    package: 'cloakbrowser-mcp@1.15.1',
+    engine: '0.6.3',
+    driver: 'patchright@1.64.1',
+  });
+  return dataDir;
+}
+
+interface BrokerSession {
+  request: (method: string, params?: Record<string, unknown>) => Promise<JsonRpcResponse>;
+  stderr: () => string;
+  close: () => Promise<void>;
+}
+
+function startBroker(options: { dataDir: string; engine: string; pluginDir: string }): BrokerSession {
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    CLAUDE_PLUGIN_DATA: options.dataDir,
+    STEALTH_ENGINE: options.engine,
+    STEALTH_TOOL_PROFILE: 'full',
+    CLOAK_PLAYWRIGHT_MCP_PACKAGE: 'cloakbrowser-mcp@1.15.1',
+  };
+  for (const name of [
+    'STEALTH_ACCOUNT',
+    'STEALTH_PROFILE_ISOLATION',
+    'PLAYWRIGHT_MCP_USER_DATA_DIR',
+    'PLAYWRIGHT_MCP_PROXY_SERVER',
+    'CLOAK_DISABLED_TOOLS',
+  ]) {
+    delete env[name];
+  }
+  const child = spawn(process.execPath, [path.join(options.pluginDir, 'broker.mjs')], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env,
+    windowsHide: true,
+  });
+  let stderr = '';
+  child.stderr.on('data', (chunk) => {
+    stderr += chunk.toString('utf8');
+  });
+  const pending = new Map<number, (message: JsonRpcResponse) => void>();
+  readline.createInterface({ input: child.stdout, crlfDelay: Infinity }).on('line', (line) => {
+    if (line.trim() === '') return;
+    let message: JsonRpcResponse & { id?: number };
+    try {
+      message = JSON.parse(line) as JsonRpcResponse & { id?: number };
+    } catch {
+      return;
+    }
+    if (message.id !== undefined && pending.has(message.id)) {
+      const resolve = pending.get(message.id) as (value: JsonRpcResponse) => void;
+      pending.delete(message.id);
+      resolve(message);
+    }
+  });
+  let nextId = 1;
+  const request = (method: string, params?: Record<string, unknown>) => {
+    const id = nextId++;
+    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, ...(params ? { params } : {}) })}\n`);
+    return new Promise<JsonRpcResponse>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(`timeout waiting for ${method}; stderr=${stderr.slice(-400)}`));
+      }, 8000);
+      pending.set(id, (message) => {
+        clearTimeout(timer);
+        resolve(message);
+      });
+    });
+  };
+  const exited = new Promise((resolve) => child.on('exit', resolve));
+  const session: BrokerSession = {
+    request,
+    stderr: () => stderr,
+    close: async () => {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.stdin.end();
+        await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 3000))]);
+      }
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill();
+      }
+    },
+  };
+  sessions.push(session);
+  return session;
+}
+
+async function initialize(session: BrokerSession): Promise<string> {
+  const response = await session.request('initialize', {
+    protocolVersion: '2025-06-18',
+    capabilities: {},
+    clientInfo: { name: 'test', version: '1' },
+  });
+  return response.result?.instructions ?? '';
+}
+
+async function payload(session: BrokerSession, name: string): Promise<Record<string, unknown>> {
+  const response = await session.request('tools/call', { name, arguments: {} });
+  return response.result?.structuredContent ?? {};
+}
+
+async function toolNames(session: BrokerSession): Promise<string[]> {
+  const list = await session.request('tools/list', {});
+  return (list.result?.tools ?? []).map((tool) => tool.name);
+}
+
+describe('broker engine-lock preflight', () => {
+  // The broker reads the lock once, before it reads stdin, so the fixture must
+  // exist before the spawn: writing it after startBroker() is a race that a fast
+  // Linux runner loses (seen on ubuntu-latest node 22 in PR #31's first run).
+  function setupSynthetic(
+    engine: string,
+    prepare?: (profileDir: string) => void,
+  ): { dataDir: string; profileDir: string; session: BrokerSession } {
+    const root = tempRoot('pr-camoufox-preflight-broker-');
+    const plugin = createLockPlugin(root);
+    const dataDir = createSyntheticRuntime(path.join(root, 'data'));
+    const profileDir = path.join(dataDir, 'profiles', engine, 'default');
+    mkdirSync(profileDir, { recursive: true });
+    if (prepare !== undefined) {
+      prepare(profileDir);
+    }
+    const session = startBroker({ dataDir, engine, pluginDir: plugin });
+    return { dataDir, profileDir, session };
+  }
+
+  it('refuses to spawn when the engine lock names a live pid and reports it', async () => {
+    const { profileDir, session } = setupSynthetic('lock-engine', (dir) => {
+      writeFileSync(path.join(dir, 'owner.lock'), `${process.pid}\n`);
+    });
+    const instructions = await initialize(session);
+    expect(instructions).toContain(profileDir);
+    expect(instructions).toContain(path.join(profileDir, 'owner.lock'));
+    expect(instructions).toContain(`pid ${process.pid}`);
+    expect(instructions).toContain('The backend was not started.');
+    expect(await toolNames(session)).toEqual(['browser_capabilities', 'browser_engine_status']);
+    const statusPayload = await payload(session, 'browser_engine_status');
+    expect(statusPayload.backendState).toBe('failed');
+    expect(statusPayload.backendPid).toBeNull();
+    expect(String(statusPayload.lastError)).toContain(profileDir);
+    const engineLock = statusPayload.engineProfileLock as Record<string, unknown>;
+    expect(engineLock).toMatchObject({
+      state: 'live',
+      profileDir,
+      file: 'owner.lock',
+      liveness: 'pid',
+      owner: { pid: process.pid },
+    });
+    expect(String(engineLock.fix)).toContain('Close the browser or Claude Code session');
+    const caps = await payload(session, 'browser_capabilities');
+    expect(String(caps.engineError)).toContain(profileDir);
+    expect(caps.engineProfileLock).toMatchObject({ state: 'live' });
+    expect(session.stderr()).toContain('not starting a backend');
+  });
+
+  it('allows the start and reports stale when the engine lock pid is gone', async () => {
+    const dead = deadPid(tempRoot('pr-camoufox-preflight-broker-dead-'));
+    const { session } = setupSynthetic('lock-engine', (dir) => {
+      writeFileSync(path.join(dir, 'owner.lock'), `${dead}\n`);
+    });
+    const instructions = await initialize(session);
+    expect(instructions).toBe('');
+    expect(await toolNames(session)).toContain('browser_navigate');
+    const caps = await payload(session, 'browser_capabilities');
+    expect(caps.engineProfileLock).toMatchObject({ state: 'stale', owner: { pid: dead } });
+    expect(caps.profileLock).toMatchObject({ state: 'free' });
+    expect(session.stderr()).toContain('engine profile lock');
+    expect(session.stderr()).toContain('is stale');
+  });
+
+  it('starts normally with no engine lock file', async () => {
+    const { profileDir, session } = setupSynthetic('lock-engine');
+    await initialize(session);
+    expect(await toolNames(session)).toContain('browser_navigate');
+    const caps = await payload(session, 'browser_capabilities');
+    expect(caps.engineProfileLock).toMatchObject({ state: 'free', profileDir });
+  });
+
+  it('allows the start with a note when the engine lock is malformed', async () => {
+    const { session } = setupSynthetic('lock-engine', (dir) => {
+      writeFileSync(path.join(dir, 'owner.lock'), 'not a pid\n');
+    });
+    await initialize(session);
+    expect(await toolNames(session)).toContain('browser_navigate');
+    const caps = await payload(session, 'browser_capabilities');
+    expect(caps.engineProfileLock).toMatchObject({ state: 'unknown' });
+    expect(String((caps.engineProfileLock as Record<string, unknown>).error)).toContain(
+      'does not name a process id',
+    );
+    expect(session.stderr()).toContain('does not name a process id');
+  });
+
+  it('adds no engineProfileLock key for an engine without the descriptor', async () => {
+    const { session } = setupSynthetic('plain-engine', (dir) => {
+      writeFileSync(path.join(dir, 'owner.lock'), `${process.pid}\n`);
+    });
+    await initialize(session);
+    expect(await toolNames(session)).toContain('browser_navigate');
+    const caps = await payload(session, 'browser_capabilities');
+    const statusPayload = await payload(session, 'browser_engine_status');
+    expect(Object.keys(caps)).toEqual(CAPABILITIES_KEYS_293);
+    expect(Object.keys(statusPayload)).toEqual(STATUS_KEYS_293);
+    expect('engineProfileLock' in caps).toBe(false);
+    expect('engineProfileLock' in statusPayload).toBe(false);
+  });
+
+  it('keeps the real cloak engine payloads byte-identical to 2.9.3', async () => {
+    const root = tempRoot('pr-camoufox-preflight-cloak-');
+    const dataDir = createCloakRuntime(path.join(root, 'data'));
+    const session = startBroker({ dataDir, engine: 'cloak', pluginDir });
+    await initialize(session);
+    expect(await toolNames(session)).toContain('browser_navigate');
+    const caps = await payload(session, 'browser_capabilities');
+    const statusPayload = await payload(session, 'browser_engine_status');
+    expect(Object.keys(caps)).toEqual(CAPABILITIES_KEYS_293);
+    expect(Object.keys(statusPayload)).toEqual(STATUS_KEYS_293);
+    expect(caps.profileLock).toMatchObject({ state: 'free' });
+    expect(statusPayload.profileLock).toMatchObject({ state: 'free' });
+  });
+});

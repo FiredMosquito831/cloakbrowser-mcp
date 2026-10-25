@@ -35,11 +35,15 @@ import {
   backendEnvironment,
   DEFAULT_PROFILE_NAME,
   effectiveProfileDir,
+  engineLockBlocksStart,
+  engineProfileLockFix,
+  engineProfileLockMessage,
   lockBlocksStart,
   profileFallbackReason,
   profileLockFix,
   profileLockMessage,
   readAccountProxy,
+  readEngineProfileLock,
   readProfileLock,
   redactSecrets,
   resolveProfile,
@@ -272,6 +276,7 @@ if (engineError === null && profileResolution.error !== null) {
 //                                   fallback is always reported.
 let profileLock = null;
 let profileFallback = null;
+let engineProfileLock = null;
 if (engineError === null && profileApplies) {
   const lockDir = effectiveProfileDir(profileResolution);
   if (lockDir !== null) {
@@ -303,6 +308,26 @@ if (engineError === null && profileApplies) {
           `profile lock ${lock.path} is stale (pid ${lock.owner?.pid ?? 'unknown'} is gone); ` +
             'the backend reclaims it',
         );
+      }
+    }
+    // An engine that declares its own lock file (Camoufox: Firefox's parent.lock)
+    // gets a second, additive check. The bridge's lock missed it before, and a
+    // busy Firefox profile is a 180 s hang or an exitCode=0 launch failure, so a
+    // live owner stops the spawn with the same loud, actionable start. The file is
+    // never written, moved or deleted; a stale one is reported and allowed.
+    if (engineError === null && engine !== null && engine.profileLock !== undefined) {
+      const engineOwnerLock = readEngineProfileLock(lockDir, engine.profileLock);
+      engineProfileLock = { ...engineOwnerLock, fix: engineProfileLockFix(engineOwnerLock) };
+      if (engineLockBlocksStart(engineOwnerLock)) {
+        engineError = engineProfileLockMessage(engineOwnerLock);
+        log(engineError);
+      } else if (engineOwnerLock.state === 'stale') {
+        log(
+          `engine profile lock ${engineOwnerLock.path} is stale (no live process holds it); ` +
+            'the browser replaces it',
+        );
+      } else if (engineOwnerLock.state === 'unknown') {
+        log(engineOwnerLock.error);
       }
     }
   }
@@ -425,6 +450,9 @@ const state = {
     isolationSource: profileIsolation.source,
     appliesToEngine: profileApplies,
     lock: profileLock,
+    // The engine's own lock (manifest "profileLock"). Always null for an engine
+    // that declares none, and then no payload key is added.
+    engineLock: engineProfileLock,
     fallback: profileFallback,
   },
   proxy: {
@@ -839,11 +867,13 @@ function capabilitiesPayload() {
     // Session safety, additive. profileLock is null only when the engine owns its
     // profile, or before the resolution failed; profileFallback is non-null only
     // when a workspace profile was busy and a numbered sibling was chosen.
+    // engineProfileLock appears only for a manifest that declares profileLock.
     profileIsolation: state.profile.isolation,
     profileIsolationSource: state.profile.isolationSource,
     profileApplies: state.profile.appliesToEngine,
     profileFallback: state.profile.fallback,
     profileLock: state.profile.lock,
+    ...(state.profile.engineLock === null ? {} : { engineProfileLock: state.profile.engineLock }),
   };
 }
 
@@ -909,6 +939,7 @@ function statusPayload() {
     profileApplies: state.profile.appliesToEngine,
     profileFallback: state.profile.fallback,
     profileLock: state.profile.lock,
+    ...(state.profile.engineLock === null ? {} : { engineProfileLock: state.profile.engineLock }),
   };
 }
 

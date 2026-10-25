@@ -467,6 +467,49 @@ function validateRuntime(manifest) {
   return null;
 }
 
+// Optional description of the engine's own profile lock, read by the broker
+// before it spawns a backend. The bridge's lock file is not enough for every
+// engine: the Camoufox wrapper checks a Unix "lockfile" name and never writes
+// the bridge lock, while Firefox itself takes <profile>/parent.lock. "file" is a
+// plain file name inside the profile directory (never a path); "owner" names how
+// the broker proves a live owner. An engine without the field keeps every
+// previous byte of behaviour: no second check, no new payload key.
+const ENGINE_PROFILE_LOCK_OWNERS = new Set(['exclusive-open', 'pid']);
+const ENGINE_PROFILE_LOCK_FILE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+function validateProfileLock(manifest) {
+  if (manifest.profileLock === undefined) {
+    return null;
+  }
+  if (!isPlainObject(manifest.profileLock)) {
+    return 'profileLock must be an object';
+  }
+  const allowed = new Set(['file', 'owner']);
+  for (const key of Object.keys(manifest.profileLock)) {
+    if (!allowed.has(key)) {
+      return `profileLock has an unsupported field "${key}"`;
+    }
+  }
+  const file = manifest.profileLock.file;
+  if (!nonEmptyString(file)) {
+    return 'profileLock.file is missing';
+  }
+  const trimmed = file.trim();
+  if (!ENGINE_PROFILE_LOCK_FILE_PATTERN.test(trimmed) || trimmed === '.' || trimmed === '..') {
+    return 'profileLock.file must be a plain file name inside the profile directory';
+  }
+  if (!nonEmptyString(manifest.profileLock.owner)) {
+    return 'profileLock.owner is missing';
+  }
+  if (!ENGINE_PROFILE_LOCK_OWNERS.has(manifest.profileLock.owner.trim())) {
+    return `profileLock.owner must be one of: ${[...ENGINE_PROFILE_LOCK_OWNERS].join(', ')}`;
+  }
+  if (manifest.profileApplies === false) {
+    return 'profileLock is only meaningful when profileApplies is not false';
+  }
+  return null;
+}
+
 // Optional boolean: whether the plugin's own profile model applies to this
 // engine. A local-profile engine (cloak, playwright, camoufox) resolves
 // profile_dir, account, profile_isolation and the lock preflight; an engine that
@@ -706,6 +749,7 @@ export function validateManifest(manifest, expectedId, profileNames, launcherDir
     validateRuntime,
     validateCapabilities,
     validateProfileApplies,
+    validateProfileLock,
     validateSystemDependencies,
   ]) {
     const error = validation(manifest);

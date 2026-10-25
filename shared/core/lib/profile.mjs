@@ -419,6 +419,158 @@ export function selectFallbackProfile(baseDir, isBlocked) {
   return null;
 }
 
+// An engine's own profile lock, declared by its manifest as
+// "profileLock": { "file": "<name inside the profile directory>", "owner": "<rule>" }.
+// Camoufox is why this exists: its Firefox wrapper checks a Unix "lockfile" name
+// and never writes the bridge's lock, while Firefox itself takes
+// <profile>/parent.lock. The owner rule is explicit because the real files differ:
+//   exclusive-open  the OS refuses to open the file while a live process holds it
+//                   (the Windows Firefox lock: a zero-byte file kept open, so it
+//                   carries no process id)
+//   pid             the file contains the owner's process id as text
+// A malformed or unreadable file is never treated as a lock: the start is allowed
+// and the reason is reported, because this check is a courtesy, not a guarantee.
+export const ENGINE_LOCK_OWNER_RULES = Object.freeze(['exclusive-open', 'pid']);
+// Error codes that prove a live holder: the file exists and the OS refuses to
+// open it (Windows ERROR_SHARING_VIOLATION surfaces as EBUSY or EACCES).
+const ENGINE_LOCK_LIVE_CODES = new Set(['EBUSY', 'EACCES', 'EPERM', 'ETXTBSY']);
+
+function engineLockResult(base, liveness, state, owner, error = null) {
+  return { ...base, liveness, state, owner, error };
+}
+
+// Read an engine's own lock file without creating, moving or deleting anything.
+//
+// Returns { profileDir, path, file, liveness, state, owner, error } where state is:
+//   free     no lock file (or the directory does not exist)
+//   live     a live process owns the profile (the file cannot be opened, or the
+//            pid it names exists); owner is { pid, createdAt } and pid may be null
+//   stale    the file exists but no live owner holds it; the browser replaces it
+//   unknown  the file cannot be interpreted; the start is allowed with a note
+export function readEngineProfileLock(profileDir, descriptor) {
+  const resolved = path.resolve(typeof profileDir === 'string' ? profileDir : '');
+  const file = isPlainObject(descriptor) && nonEmptyString(descriptor.file) ? descriptor.file.trim() : null;
+  const liveness =
+    isPlainObject(descriptor) && nonEmptyString(descriptor.owner) ? descriptor.owner.trim() : null;
+  const lockPath = path.join(resolved, file === null ? '' : file);
+  const base = {
+    profileDir: resolved,
+    path: lockPath,
+    file,
+    liveness,
+    state: 'free',
+    owner: null,
+    error: null,
+  };
+  if (file === null || !ENGINE_LOCK_OWNER_RULES.includes(liveness)) {
+    return engineLockResult(
+      base,
+      liveness,
+      'unknown',
+      null,
+      `The engine profile lock descriptor ${JSON.stringify(descriptor ?? null)} is not usable; ` +
+        'the start continues without checking it.',
+    );
+  }
+  let bytes;
+  try {
+    if (!statSync(lockPath).isFile()) {
+      return engineLockResult(
+        base,
+        liveness,
+        'unknown',
+        null,
+        `The engine profile lock ${lockPath} is not a regular file; the start continues.`,
+      );
+    }
+    bytes = readFileSync(lockPath);
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return base;
+    }
+    if (ENGINE_LOCK_LIVE_CODES.has(error?.code)) {
+      // The operating system proved a live holder: the file exists and cannot be
+      // opened. Its contents are not readable, so no process id is known.
+      return engineLockResult(base, liveness, 'live', { pid: null, createdAt: null });
+    }
+    return engineLockResult(
+      base,
+      liveness,
+      'unknown',
+      null,
+      `Cannot read the engine profile lock ${lockPath}: ${error.message}. The start continues.`,
+    );
+  }
+  if (liveness === 'exclusive-open') {
+    // The file was opened, so no process holds it. Firefox leaves this zero-byte
+    // file behind after a clean exit; the next browser replaces it.
+    return engineLockResult(base, liveness, 'stale', null);
+  }
+  // pid rule: the leading integer is the owner's process id. Firefox and other
+  // tools append text after it, so trailing text and whitespace are tolerated;
+  // a fractional value ("1.5") is not a process id and reads as malformed.
+  const text = bytes.toString('utf8');
+  const match = /^\s*(\d+)(?!\d|\.\d)/u.exec(text);
+  const pid = match === null ? NaN : Number(match[1]);
+  if (!Number.isSafeInteger(pid) || pid <= 0) {
+    return engineLockResult(
+      base,
+      liveness,
+      'unknown',
+      null,
+      `The engine profile lock ${lockPath} does not name a process id; the start continues.`,
+    );
+  }
+  const owner = { pid, createdAt: null };
+  return engineLockResult(base, liveness, processLiveness(pid) === 'live' ? 'live' : 'stale', owner);
+}
+
+// True when an engine lock must stop the backend. Only a proven live owner does;
+// a stale file and an unreadable one never block.
+export function engineLockBlocksStart(lock) {
+  return lock !== null && typeof lock === 'object' && lock.state === 'live';
+}
+
+// A plain-language, actionable fix for a live engine lock. It names the lock file
+// and never suggests deleting, moving or editing a profile directory.
+export function engineProfileLockFix(lock) {
+  if (lock === null || typeof lock !== 'object' || lock.state !== 'live') {
+    return null;
+  }
+  const owner = lock.owner ?? {};
+  const who =
+    typeof owner.pid === 'number'
+      ? `pid ${owner.pid}${typeof owner.createdAt === 'string' ? `, started ${owner.createdAt}` : ''}`
+      : 'another process';
+  return (
+    `Close the browser or Claude Code session that owns this profile (${who}); ` +
+    `${lock.path} stays locked until that process exits. You can also set "Profile directory" ` +
+    '(profile_dir) to another folder, or set "Profile isolation" (profile_isolation) to workspace so ' +
+    'each project folder gets its own profile. Restart Claude Code after the change.'
+  );
+}
+
+// The start-up sentence for a blocking engine lock. The broker does not spawn a
+// backend in this state; this text is what initialize.instructions,
+// browser_capabilities.engineError and browser_engine_status.lastError carry.
+export function engineProfileLockMessage(lock) {
+  if (lock === null || typeof lock !== 'object') {
+    return 'The browser profile is locked by another process.';
+  }
+  const owner = lock.owner ?? {};
+  let heading;
+  if (typeof owner.pid === 'number') {
+    const when = typeof owner.createdAt === 'string' ? `, started ${owner.createdAt}` : '';
+    heading = `The browser profile ${lock.profileDir} is already in use by pid ${owner.pid}${when}.`;
+  } else {
+    heading =
+      `The browser profile ${lock.profileDir} is already in use: another process holds the engine ` +
+      `lock file ${lock.path} open.`;
+  }
+  const fix = engineProfileLockFix(lock);
+  return `${heading}${fix === null ? '' : ` ${fix}`} The backend was not started.`;
+}
+
 // The optional proxy file that sits beside a profile directory:
 // profiles/cloak/alice.proxy beside profiles/cloak/alice/.
 export function accountProxyPath(profileDir) {
