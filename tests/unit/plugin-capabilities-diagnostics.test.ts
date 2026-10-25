@@ -7,13 +7,16 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { spawn } from 'node:child_process';
 
-// Capabilities diagnostics (2.9.5). browser_capabilities must report the server
-// cwd, the effective artifact directory and the MCP roots the client advertised,
-// because upstream's file-access allowlist is [output directory, workspace root]
-// and through the Cloak bridge the client's roots never reach the backend. The
-// roots probe is one lazy server->client roots/list request with a 2 s bound,
-// cached for the session; it never delays initialize or tools/list. Each guard is
-// mutation-checked by the PR.
+// Capabilities diagnostics (2.9.5, updated for the 2.10.1 output-directory
+// policy). browser_capabilities must report the server cwd, the effective
+// artifact directory and the MCP roots the client advertised, because upstream's
+// file-access allowlist is [output directory, workspace root] and through the
+// Cloak bridge the client's roots never reach the backend. The roots probe is one
+// server->client roots/list request with a 2 s bound, cached for the session.
+// Since 2.10.1 the empty output_dir default depends on those roots, so the probe
+// is sent on the client's initialize request, before the backend starts, rather
+// than lazily on the first browser_capabilities call; a client that declares no
+// roots is still never asked. Each guard is mutation-checked by the PR.
 
 interface JsonRpcMessage {
   id?: number | string;
@@ -316,7 +319,7 @@ function comparable(value: unknown): unknown {
 }
 
 describe('browser_capabilities artifact diagnostics', () => {
-  it('reports serverCwd, the default outputDir and the roots the client answered', async () => {
+  it('reports serverCwd, the client-root outputDir and the roots the client answered', async () => {
     const root = tempRoot('capabilities-roots-');
     const dataDir = createRuntime(root);
     const cwd = path.join(root, 'cwd');
@@ -325,13 +328,19 @@ describe('browser_capabilities artifact diagnostics', () => {
 
     const initialized = await initialize(session, true);
     expect(initialized.result?.serverInfo?.name).toBe('stub-capabilities');
-    const sentence = `Browser artifacts (screenshots, traces, downloads) go to ${path.join(cwd, '.playwright-mcp')}`;
+    // 2.10.1: with output_dir empty the first usable file root hosts the
+    // artifacts directory, and the sentence says which default was applied.
+    const firstRoot = fileURLToPath(new URL(ROOTS[0].uri));
+    const expectedDir = path.join(firstRoot, '.playwright-mcp');
+    const sentence = `Browser artifacts (screenshots, traces, downloads) go to ${expectedDir}`;
     expect(String(initialized.result?.instructions)).toContain(sentence);
-    expect(String(initialized.result?.instructions)).toContain('output_dir setting');
+    expect(String(initialized.result?.instructions)).toContain(
+      `the client's first file root is ${firstRoot}; set that setting to change it.`,
+    );
 
     const payload = await capabilities(session);
     expect(payload.serverCwd).toBe(cwd);
-    expect(payload.outputDir).toBe(path.join(cwd, '.playwright-mcp'));
+    expect(payload.outputDir).toBe(expectedDir);
     expect(payload.clientRoots).toEqual(ROOTS);
     expect(Object.hasOwn(payload, 'clientRootsError')).toBe(false);
     expect(session.serverRequests().filter((request) => request.method === 'roots/list')).toHaveLength(1);
@@ -386,6 +395,7 @@ describe('browser_capabilities artifact diagnostics', () => {
     const elapsed = Date.now() - startedAt;
     expect(payload.clientRoots).toBeNull();
     expect(payload.clientRootsError).toBe('the client did not advertise the roots capability');
+    expect(payload.outputDir).toBe(path.join(dataDir, 'output', 'cloak'));
     expect(session.serverRequests().filter((request) => request.method === 'roots/list')).toHaveLength(0);
     expect(elapsed).toBeLessThan(1000);
   });
@@ -401,10 +411,11 @@ describe('browser_capabilities artifact diagnostics', () => {
     const payload = await capabilities(session);
     expect(payload.clientRoots).toBeNull();
     expect(payload.clientRootsError).toBe('-32601: Method not found');
+    expect(payload.outputDir).toBe(path.join(dataDir, 'output', 'cloak'));
     expect(session.stderr()).toContain('client roots unavailable: -32601: Method not found');
   });
 
-  it('bounds a silent client at about 2 s without delaying the handshake, tools/list or tool calls', async () => {
+  it('bounds a silent client at about 2 s and falls back to the plugin-data directory', async () => {
     const root = tempRoot('capabilities-silent-');
     const dataDir = createRuntime(root);
     const cwd = path.join(root, 'cwd');
@@ -412,30 +423,28 @@ describe('browser_capabilities artifact diagnostics', () => {
     const stubLines = path.join(root, 'stub-lines.log');
     const session = startBroker({ dataDir, cwd, roots: 'silent', stubLines });
 
+    // 2.10.1: the empty output_dir default needs the roots, so the probe is sent
+    // on the initialize request and the handshake waits for its bound.
     const initializeStartedAt = Date.now();
     const initialized = await initialize(session, true);
     const initializeMs = Date.now() - initializeStartedAt;
     expect(initialized.error).toBeUndefined();
+    expect(initializeMs).toBeGreaterThanOrEqual(1900);
+    expect(initializeMs).toBeLessThan(8000);
+    expect(session.serverRequests().filter((request) => request.method === 'roots/list')).toHaveLength(1);
 
     const listStartedAt = Date.now();
     await session.request('tools/list', {});
     const listMs = Date.now() - listStartedAt;
 
-    // The probe is not sent at startup or during the handshake: the exact list of
-    // server->client requests is still empty here, whatever the runner's latency.
-    expect(session.serverRequests()).toEqual([]);
-
+    // The probe is cached, so the capabilities call does not wait again.
     const startedAt = Date.now();
     const payload = await capabilities(session);
     const elapsed = Date.now() - startedAt;
     expect(payload.clientRoots).toBeNull();
     expect(payload.clientRootsError).toBe('no answer within 2000 ms');
-    // The bound, not a hang: at least the 2 s timer, and well inside the
-    // harness's own 8 s request bound. The handshake and tools/list finished
-    // without the probe, so their exact latency is not part of the contract.
-    expect(elapsed).toBeGreaterThanOrEqual(1900);
-    expect(elapsed).toBeLessThan(8000);
-    expect(initializeMs).toBeLessThan(8000);
+    expect(payload.outputDir).toBe(path.join(dataDir, 'output', 'cloak'));
+    expect(elapsed).toBeLessThan(1000);
     expect(listMs).toBeLessThan(8000);
 
     // After the bound, the session is still healthy: tools/list and a tool call
@@ -456,6 +465,7 @@ describe('browser_capabilities artifact diagnostics', () => {
     const relayed = readFileSync(stubLines, 'utf8');
     expect(relayed).not.toContain(PROBE_ID);
     expect((await capabilities(session)).clientRoots).toBeNull();
+    expect((await capabilities(session)).outputDir).toBe(path.join(dataDir, 'output', 'cloak'));
   });
 
   it('caches the probe for the session', async () => {
@@ -466,10 +476,12 @@ describe('browser_capabilities artifact diagnostics', () => {
     const session = startBroker({ dataDir, cwd, roots: 'answer' });
     await initialize(session, true);
 
+    const firstRoot = fileURLToPath(new URL(ROOTS[0].uri));
     expect((await capabilities(session)).clientRoots).toEqual(ROOTS);
     const startedAt = Date.now();
     expect((await capabilities(session)).clientRoots).toEqual(ROOTS);
-    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect((await capabilities(session)).outputDir).toBe(path.join(firstRoot, '.playwright-mcp'));
+    expect(Date.now() - startedAt).toBeLessThan(1500);
     expect(session.serverRequests().filter((request) => request.method === 'roots/list')).toHaveLength(1);
   });
 
@@ -484,6 +496,8 @@ describe('browser_capabilities artifact diagnostics', () => {
     const actual = normalize(await capabilities(session), root) as Record<string, unknown>;
 
     // 2.10.0 appends the default-profile pointer facts after the artifact keys.
+    // 2.10.1 changes only the *value* of outputDir when output_dir is empty, so
+    // that key is compared separately below against the new policy.
     const newKeys = [
       'serverCwd',
       'outputDir',
@@ -501,8 +515,9 @@ describe('browser_capabilities artifact diagnostics', () => {
     }
     // 2.10.0 adds one broker meta-tool. The three baseline values that count the
     // surface change with it, so they are asserted exactly against the 2.9.4
-    // values instead of compared blindly.
-    const metaCountKeys = ['metaToolCount', 'metaTools', 'exposedToolCount'];
+    // values instead of compared blindly. outputDir changed value in 2.10.1 for
+    // the empty setting, and is asserted exactly under the new policy.
+    const metaCountKeys = ['metaToolCount', 'metaTools', 'exposedToolCount', 'outputDir'];
     for (const [key, value] of Object.entries(baseline)) {
       if (metaCountKeys.includes(key)) {
         continue;
@@ -513,7 +528,8 @@ describe('browser_capabilities artifact diagnostics', () => {
     expect(payload.metaTools).toEqual(['browser_capabilities', 'browser_engine_status', 'browser_profiles']);
     expect(payload.exposedToolCount).toBe((baseline.exposedToolCount as number) + 1);
     expect(payload.serverCwd).toBe('<ROOT>/cwd');
-    expect(payload.outputDir).toBe('<ROOT>/cwd/.playwright-mcp');
+    // A client that declared no roots: the plugin-data fallback, engine-scoped.
+    expect(payload.outputDir).toBe('<ROOT>/data/output/cloak');
     expect(payload.profileDefault).toBeNull();
     expect(payload.profileDefaultSource).toBe('none');
     expect(payload.profileDefaultPath).toBe('<ROOT>/data/profiles/cloak/.default');
@@ -550,9 +566,10 @@ describe('browser_capabilities artifact diagnostics', () => {
     mkdirSync(cwd, { recursive: true });
     const session = startBroker({ dataDir, cwd, roots: 'silent' });
     const initialized = await initialize(session, false);
+    // Declared no roots, so no probe and no wait: the plugin-data default.
     expect(String(initialized.result?.instructions)).toBe(
-      `Browser artifacts (screenshots, traces, downloads) go to ${path.join(cwd, '.playwright-mcp')} because ` +
-        'the output_dir setting is empty; set that setting to change it.',
+      `Browser artifacts (screenshots, traces, downloads) go to ${path.join(dataDir, 'output', 'cloak')} because ` +
+        'the output_dir setting is empty and no file root was available from the client; set that setting to change it.',
     );
   });
 
@@ -565,9 +582,10 @@ describe('browser_capabilities artifact diagnostics', () => {
     const initialized = await initialize(session, false);
     expect(String(initialized.result?.instructions)).toBe(
       `Backend instructions stay first. Browser artifacts (screenshots, traces, downloads) go to ${path.join(
-        cwd,
-        '.playwright-mcp',
-      )} because the output_dir setting is empty; set that setting to change it.`,
+        dataDir,
+        'output',
+        'cloak',
+      )} because the output_dir setting is empty and no file root was available from the client; set that setting to change it.`,
     );
   });
 });

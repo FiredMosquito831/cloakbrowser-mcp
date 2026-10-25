@@ -460,19 +460,25 @@ if (
 const runtimeHint = runtimeErrorHint(engine, process.env);
 const profileSelection = resolveToolProfile(process.env.STEALTH_TOOL_PROFILE, engine, profiles);
 
-// Artifact diagnostics (2.9.5). Upstream's file-access allowlist is
+// Artifact directory policy (2.10.1). Upstream's file-access allowlist is
 // [output directory, workspace root], and through the Cloak bridge the client's
 // roots never reach the backend, so both values fall back to the MCP server's
 // working directory. browser_capabilities therefore reports the cwd, the
 // effective output directory and the client's roots: without them a denied
 // screenshot ("File access denied: ... outside allowed roots") is unexplainable.
-// The output directory is PLAYWRIGHT_MCP_OUTPUT_DIR when set, otherwise
-// <server cwd>/.playwright-mcp, resolved against the cwd like the bridge does.
-// An engine whose manifest lists output_dir in ignoredSettings never reads the
-// setting, so reporting a directory for it would be an invented fact. Nothing
-// here reads the filesystem or creates the directory.
+//
+// The directory itself follows one policy, in order:
+//   1. an explicit output_dir always wins and is resolved against the server
+//      cwd, exactly as the bridge resolves it;
+//   2. with no setting, .playwright-mcp inside the client's first usable file://
+//      root, so auto-named artifacts land next to the project the client opened;
+//   3. with no setting and no usable file root, <plugin data>/output/<engine>,
+//      which is one known writable place per engine and survives a change of
+//      working directory.
+// An engine whose manifest lists output_dir in ignoredSettings keeps its own
+// model and reports null. Nothing here reads or creates a directory: the engine
+// creates the directory it is given when it first needs it.
 const SERVER_CWD = process.cwd();
-const DEFAULT_OUTPUT_DIR = path.join(SERVER_CWD, '.playwright-mcp');
 const outputDirSetting = (() => {
   const raw =
     typeof process.env.PLAYWRIGHT_MCP_OUTPUT_DIR === 'string'
@@ -491,29 +497,125 @@ const outputDirIgnoredByEngine =
   engine !== null && Array.isArray(engine.ignoredSettings) && engine.ignoredSettings.includes('output_dir');
 const OUTPUT_DIR_SOURCE =
   outputDirIgnoredByEngine === true ? 'engine' : outputDirSetting === null ? 'default' : 'setting';
-const OUTPUT_DIR =
+// The plugin-data fallback, named in the instructions sentence and used when the
+// client offers no usable file root.
+const PLUGIN_DATA_OUTPUT_DIR = path.join(PLUGIN_DATA_DIR, 'output', selected.id);
+// The effective directory and its provenance. "setting" and "engine" are known
+// at startup; "default" needs the client's roots, which only exist after it has
+// sent initialize, so it is resolved exactly once by resolveOutputDir() before
+// the backend starts (see the deferred start below).
+let outputDirState =
   OUTPUT_DIR_SOURCE === 'engine'
-    ? null
-    : outputDirSetting === null
-      ? DEFAULT_OUTPUT_DIR
-      : path.resolve(SERVER_CWD, outputDirSetting);
+    ? { resolved: true, dir: null, branch: 'engine', rootUri: null, rootPath: null }
+    : OUTPUT_DIR_SOURCE === 'setting'
+      ? {
+          resolved: true,
+          dir: path.resolve(SERVER_CWD, outputDirSetting),
+          branch: 'setting',
+          rootUri: null,
+          rootPath: null,
+        }
+      : { resolved: false, dir: null, branch: null, rootUri: null, rootPath: null };
+
+// The first root the client advertises as a usable file:// directory. A non-file
+// root (https:, in-memory names) is skipped, and a file URI that fileURLToPath
+// rejects is skipped rather than guessed at, so a malformed entry cannot send
+// artifacts somewhere unintended. Windows drive letters and percent-encoded
+// names are what fileURLToPath is for; the path it returns is the native one.
+function firstFileRootPath(roots) {
+  if (!Array.isArray(roots)) {
+    return null;
+  }
+  for (const entry of roots) {
+    if (entry === null || typeof entry !== 'object' || typeof entry.uri !== 'string') {
+      continue;
+    }
+    let rootPath;
+    try {
+      const url = new URL(entry.uri);
+      if (url.protocol !== 'file:') {
+        continue;
+      }
+      rootPath = fileURLToPath(url);
+    } catch {
+      continue;
+    }
+    if (nonEmptyString(rootPath)) {
+      return { uri: entry.uri, path: rootPath };
+    }
+  }
+  return null;
+}
+
+// Resolve the "default" source once. It reuses the cached roots probe, so the
+// client is asked at most once per session; a client that declared no roots,
+// refused, answered a malformed payload or stayed silent takes the plugin-data
+// fallback after the probe's 2 s bound. Callers await this before the backend
+// starts, so every later read of outputDirState is synchronous.
+function resolveOutputDir() {
+  if (outputDirState.resolved || OUTPUT_DIR_SOURCE !== 'default') {
+    return Promise.resolve(outputDirState);
+  }
+  return clientRootsResult().then((roots) => {
+    if (outputDirState.resolved) {
+      return outputDirState;
+    }
+    const root = firstFileRootPath(roots.roots);
+    if (root !== null) {
+      outputDirState = {
+        resolved: true,
+        dir: path.join(root.path, '.playwright-mcp'),
+        branch: 'client-root',
+        rootUri: root.uri,
+        rootPath: root.path,
+      };
+      log(`artifact directory from the client's first file root: ${outputDirState.dir}`);
+    } else {
+      outputDirState = {
+        resolved: true,
+        dir: PLUGIN_DATA_OUTPUT_DIR,
+        branch: 'plugin-data',
+        rootUri: null,
+        rootPath: null,
+      };
+      log(`artifact directory from plugin data (no usable client file root): ${outputDirState.dir}`);
+    }
+    return outputDirState;
+  });
+}
 
 // One sentence for every initialize handshake the broker returns. It names the
-// directory artifacts go to and how to change it, and it states the fallback
-// rather than implying the setting is always in force.
+// directory artifacts go to and how to change it, and when a default was
+// applied it says which one, so the text never claims the setting is in force
+// when it is empty.
 function artifactDirectorySentence() {
   if (OUTPUT_DIR_SOURCE === 'engine') {
     return "This engine manages its own artifact files, so the plugin's output_dir setting does not apply to it.";
   }
   if (OUTPUT_DIR_SOURCE === 'setting') {
     return (
-      `Browser artifacts (screenshots, traces, downloads) go to ${OUTPUT_DIR} from the output_dir setting; ` +
-      `set that setting to change it, and while it is empty they land in ${DEFAULT_OUTPUT_DIR}.`
+      `Browser artifacts (screenshots, traces, downloads) go to ${outputDirState.dir} from the output_dir setting; ` +
+      `set that setting to change it, and while it is empty they default to .playwright-mcp inside the client's ` +
+      `first file root, or to ${PLUGIN_DATA_OUTPUT_DIR} when no file root is available.`
+    );
+  }
+  if (!outputDirState.resolved) {
+    // Defensive: every path that answers initialize resolves the value first.
+    return (
+      "Browser artifacts (screenshots, traces, downloads) default to .playwright-mcp inside the client's first " +
+      `file root, or to ${PLUGIN_DATA_OUTPUT_DIR} when no file root is available, because the output_dir setting ` +
+      'is empty; set that setting to change it.'
+    );
+  }
+  if (outputDirState.branch === 'client-root') {
+    return (
+      `Browser artifacts (screenshots, traces, downloads) go to ${outputDirState.dir} because the output_dir ` +
+      `setting is empty and the client's first file root is ${outputDirState.rootPath}; set that setting to change it.`
     );
   }
   return (
-    `Browser artifacts (screenshots, traces, downloads) go to ${OUTPUT_DIR} because the output_dir setting is ` +
-    'empty; set that setting to change it.'
+    `Browser artifacts (screenshots, traces, downloads) go to ${outputDirState.dir} because the output_dir ` +
+    'setting is empty and no file root was available from the client; set that setting to change it.'
   );
 }
 
@@ -832,6 +934,92 @@ function handleClientRootsAnswer(message) {
   finishClientRootsProbe({ roots: normalizeClientRoots(roots), error: null });
 }
 
+// --- deferred backend start (2.10.1) ----------------------------------------
+// When the artifact directory depends on the client's roots, the backend cannot
+// start at process start: PLAYWRIGHT_MCP_OUTPUT_DIR is read from the child
+// environment at its first breath, and the roots exist only after the client has
+// sent initialize. Until the value is resolved every client line is buffered in
+// arrival order and replayed once the backend is up, so the relay stays
+// byte-for-byte and no request is lost. The answer to the broker's own roots
+// probe is the one line that is never buffered: it is consumed above. A client
+// that answers at once makes the wait a few milliseconds; one that stays silent
+// costs the probe's 2 s bound and takes the plugin-data default.
+//
+// Two kinds of line are not initialize: a notification, and the 2026-era
+// `server/discover` era probe that a current client sends immediately before
+// initialize (observed from Claude Code 2.1.310). Both are buffered, because a
+// conforming client either does not wait for them or sends initialize at once,
+// and because answering discover would need the backend whose environment is
+// what is being decided. Any *other* request before initialize comes from a
+// client that will never give us roots: the safe plugin-data default is used,
+// the backend starts, and the request is replayed exactly as before.
+const deferredStart = { lines: [], started: false };
+
+function outputDirUnresolved() {
+  return !outputDirState.resolved;
+}
+
+function replayBufferedClientLines() {
+  const lines = deferredStart.lines.splice(0);
+  for (const line of lines) {
+    let message;
+    try {
+      message = JSON.parse(line);
+    } catch {
+      // Preserve the old proxy behaviour for non-JSON input: pass it through.
+      if (!forwardToBackend(line)) {
+        log('dropped non-JSON client line because the backend is unavailable');
+      }
+      continue;
+    }
+    if (message === null || typeof message !== 'object' || Array.isArray(message)) {
+      log('dropped client line that is not a JSON-RPC object');
+      continue;
+    }
+    if (message.method === undefined && message.id === ROOTS_PROBE_ID) {
+      handleClientRootsAnswer(message);
+      continue;
+    }
+    handleClientRequest(message, line);
+  }
+}
+
+function startBackendIfNeeded() {
+  if (state.shuttingDown) {
+    return;
+  }
+  if (state.child === null) {
+    startBackend();
+  }
+  replayBufferedClientLines();
+}
+
+function beginDeferredStart() {
+  if (deferredStart.started) {
+    return;
+  }
+  deferredStart.started = true;
+  resolveOutputDir().then(startBackendIfNeeded);
+}
+
+// A request arrived before any initialize: there is no client roots statement to
+// wait for, so the fallback applies immediately and the request is answered.
+function beginDeferredStartWithoutRoots(method) {
+  if (deferredStart.started) {
+    return;
+  }
+  deferredStart.started = true;
+  outputDirState = {
+    resolved: true,
+    dir: PLUGIN_DATA_OUTPUT_DIR,
+    branch: 'plugin-data',
+    rootUri: null,
+    rootPath: null,
+  };
+  log(`artifact directory from plugin data ("${String(method)}" arrived before initialize)`);
+  startBackendIfNeeded();
+}
+
 function metaToolList() {
   return META_TOOLS.map((tool) => ({ ...tool }));
 }
@@ -1117,7 +1305,7 @@ function capabilitiesPayload(clientRoots) {
     // advertised ({ uri, name? }, an empty list when it advertises none) or null
     // when the probe could not read it, with the short reason beside it.
     serverCwd: SERVER_CWD,
-    outputDir: OUTPUT_DIR,
+    outputDir: outputDirState.dir,
     clientRoots: clientRoots.roots,
     ...(clientRoots.roots === null ? { clientRootsError: clientRoots.error ?? 'unavailable' } : {}),
     // Default-profile pointer (2.10.0), additive and last. It is re-read here so
@@ -1209,24 +1397,27 @@ function statusPayload() {
   };
 }
 
-// browser_capabilities is the only caller of the lazy roots probe: its payload
-// needs the answer, so the call is answered once the probe settles (an answer,
-// an error, or the 2 s bound). Every other request and notification keeps
-// flowing while the probe waits.
+// browser_capabilities needs both the client's roots and the effective artifact
+// directory. Resolving the directory first reuses the same cached probe, so this
+// is still at most one roots/list request per session; every other request and
+// notification keeps flowing while the probe waits. The call is answered once
+// the probe settles (an answer, an error, or the 2 s bound).
 function respondCapabilities(id) {
-  clientRootsResult().then(
-    (roots) => sendToolPayload(id, capabilitiesPayload(roots)),
-    (error) => {
-      // Unreachable in practice; a failed probe must still answer the call.
-      sendToolPayload(
-        id,
-        capabilitiesPayload({
-          roots: null,
-          error: `probe failed: ${error instanceof Error ? error.message : String(error)}`,
-        }),
-      );
-    },
-  );
+  resolveOutputDir()
+    .then(() => clientRootsResult())
+    .then(
+      (roots) => sendToolPayload(id, capabilitiesPayload(roots)),
+      (error) => {
+        // Unreachable in practice; a failed probe must still answer the call.
+        sendToolPayload(
+          id,
+          capabilitiesPayload({
+            roots: null,
+            error: `probe failed: ${error instanceof Error ? error.message : String(error)}`,
+          }),
+        );
+      },
+    );
 }
 
 // --- browser_profiles (2.10.0) ---------------------------------------------
@@ -1868,11 +2059,16 @@ function startBackend() {
     // The manifest is the source of truth for the selected engine; keep the
     // legacy backend variable in sync even if only STEALTH_ENGINE was set. The
     // account profile and the file proxy are added only when they were resolved;
-    // otherwise the environment is the base plus that one variable.
+    // otherwise the environment is the base plus that one variable. The resolved
+    // default artifact directory is passed the way every launcher and engine
+    // honours it; an explicit output_dir already reaches the engine through the
+    // plugin env and is never rewritten, and an engine that ignores output_dir
+    // never receives it.
     env: backendEnvironment(process.env, {
       engineId: state.engineId,
       profileDir: state.profile.dir,
       proxyServer: state.proxy.appliedProxy,
+      outputDir: OUTPUT_DIR_SOURCE === 'default' ? outputDirState.dir : null,
     }),
     windowsHide: true,
     detached: false,
@@ -1973,6 +2169,26 @@ readline
       handleClientRootsAnswer(message);
       return;
     }
+    // While the artifact directory is unresolved the backend has not started
+    // yet: buffer every line in arrival order and resolve the directory on the
+    // initialize request, which is where the client states whether it supports
+    // roots at all. The buffer is replayed by beginDeferredStart().
+    if (outputDirUnresolved()) {
+      deferredStart.lines.push(line);
+      if (message.method === 'initialize') {
+        noteInitializeRequest(message);
+        beginDeferredStart();
+        return;
+      }
+      const isRequest = typeof message.method === 'string' && message.id !== undefined && message.id !== null;
+      if (isRequest && message.method !== 'server/discover') {
+        // No initialize is coming (or this client never sends one): the
+        // plugin-data default is all that can be chosen, and the backend must
+        // start now to answer this request as before.
+        beginDeferredStartWithoutRoots(message.method);
+      }
+      return;
+    }
     handleClientRequest(message, line);
   })
   .on('close', beginShutdown);
@@ -1985,4 +2201,14 @@ if (state.engineError !== null) {
   log(state.engineError);
 }
 
-startBackend();
+// The artifact directory can depend on the client's roots (2.10.1). When it
+// does, the backend must not start until the client's initialize arrives and the
+// value is resolved, because the engine reads PLAYWRIGHT_MCP_OUTPUT_DIR from its
+// environment at start; all client lines are buffered until then. With an
+// explicit output_dir, an engine that ignores it, or a failed engine, the start
+// is exactly the previous path.
+if (outputDirUnresolved() && state.engineError === null) {
+  log('backend start deferred until initialize: the artifact directory depends on the client roots');
+} else {
+  startBackend();
+}
