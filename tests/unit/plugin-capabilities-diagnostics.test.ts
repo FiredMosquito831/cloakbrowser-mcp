@@ -299,6 +299,22 @@ function normalize(value: unknown, root: string): unknown {
   return value;
 }
 
+// The baseline was captured on Windows. Two facts are platform-dependent and are
+// compared set-wise instead: path separators, and engineChoices, which follows
+// directory discovery order. Both sides get the same treatment.
+function comparable(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return value.split('\\').join('/');
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => comparable(entry));
+  }
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, comparable(entry)]));
+  }
+  return value;
+}
+
 describe('browser_capabilities artifact diagnostics', () => {
   it('reports serverCwd, the default outputDir and the roots the client answered', async () => {
     const root = tempRoot('capabilities-roots-');
@@ -464,15 +480,20 @@ describe('browser_capabilities artifact diagnostics', () => {
     const session = startBroker({ dataDir, cwd, roots: 'silent' });
     await initialize(session, false);
     await session.request('tools/list', {});
-    const payload = normalize(await capabilities(session), root) as Record<string, unknown>;
+    const actual = normalize(await capabilities(session), root) as Record<string, unknown>;
 
     const newKeys = ['serverCwd', 'outputDir', 'clientRoots', 'clientRootsError'];
-    expect(Object.keys(payload)).toEqual([...Object.keys(fixture), ...newKeys]);
-    for (const [key, value] of Object.entries(fixture)) {
+    expect(Object.keys(actual)).toEqual([...Object.keys(fixture), ...newKeys]);
+    const payload = comparable(actual) as Record<string, unknown>;
+    const baseline = comparable(fixture) as Record<string, unknown>;
+    for (const record of [payload, baseline]) {
+      record.engineChoices = [...(record.engineChoices as string[])].sort();
+    }
+    for (const [key, value] of Object.entries(baseline)) {
       expect(payload[key], `capability "${key}" changed`).toEqual(value);
     }
-    expect(payload.serverCwd).toBe('<ROOT>\\cwd');
-    expect(payload.outputDir).toBe('<ROOT>\\cwd\\.playwright-mcp');
+    expect(payload.serverCwd).toBe('<ROOT>/cwd');
+    expect(payload.outputDir).toBe('<ROOT>/cwd/.playwright-mcp');
   });
 
   it('reports no artifact directory for an engine that ignores output_dir', async () => {
