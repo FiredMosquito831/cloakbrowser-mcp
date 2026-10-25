@@ -136,13 +136,14 @@ A copy branches an existing profile under a new account name with the same cooki
 2. Run the copy tool, from a checkout of this repository at the repository root:
 
    ```powershell
-   node plugins/camoufox/scripts/profile-copy.mjs --engine camoufox --from default --to work2
+   node plugins/camoufox/scripts/profile-copy.mjs --engine camoufox --from default --to work2 `
+     --data-dir "$env:USERPROFILE\.claude\plugins\data\camoufox-cloakbrowser-mcp"
    ```
 
    An installed plugin carries the same script at `<plugin root>/scripts/profile-copy.mjs`, for example
    `%USERPROFILE%\.claude\plugins\cache\cloakbrowser-mcp\camoufox\<version>\scripts\profile-copy.mjs`.
    This plugin ships only the `camoufox` engine, so `--engine camoufox` is required: the tool's default engine is `cloak`, which this plugin does not contain and therefore rejects. The tool uses the same account rule and `profiles/camoufox/<name>` layout as the broker:
-   - `--data-dir <path>` names the plugin data root. Default: `CLAUDE_PLUGIN_DATA`, otherwise `~/.cloakbrowser-mcp-plugin`.
+   - `--data-dir <path>` names the plugin data root. In a Claude Code process it is `CLAUDE_PLUGIN_DATA`; a terminal normally does not have that variable, so pass the directory shown by `browser_capabilities.profileDir` two levels up — for this plugin `%USERPROFILE%\.claude\plugins\data\camoufox-cloakbrowser-mcp`. The fallback when nothing is set is `~/.cloakbrowser-mcp-plugin`, which is why the command above passes it explicitly.
    - `--dry-run` lists the top-level entries and totals without creating anything; `--json` prints one machine-readable summary.
    - `--from default --to work2` copies `profiles/camoufox/default` to `profiles/camoufox/work2`.
 3. **Set Account profile to the copy** (`work2` above) and restart Claude Code. The copy starts signed in wherever the source was signed in.
