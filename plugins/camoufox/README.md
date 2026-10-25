@@ -130,7 +130,7 @@ A proxy can be sticky per account with a file beside the profile instead of the 
 
 ### Copy a profile (safe copies)
 
-A copy branches an existing profile under a new account name with the same cookies, logins, local storage and fingerprint seed. Use it to experiment from a signed-in state, to keep a checked backup, or to start a second account from the same point. **A copy is not a new identity**: it presents the same fingerprint and the same sessions, so the one-account-per-profile rule still applies.
+A copy branches an existing profile under a new account name with the same cookies, logins, local storage and fingerprint seed. Use it to experiment from a signed-in state, to keep a checked backup, or to start a second account from the same point. **A copy is not a new identity**: it presents the same fingerprint and the same sessions, so the one-account-per-profile rule still applies. It is not a way to move a session to a different account or to skip that account's sign-in.
 
 1. **Close the browser first.** The profile lock exists while a browser uses the directory and a live profile is not safe to copy. The tool refuses a source whose lock names a live process; a stale lock (owner gone) is ignored and is not copied. An unreadable lock also refuses the copy.
 2. Run the copy tool, from a checkout of this repository at the repository root:

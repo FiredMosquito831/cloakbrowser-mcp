@@ -268,10 +268,14 @@ function cleanupCreated(targetDir, targetCreated, createdParentRoot) {
   if (createdParentRoot !== null) {
     let current = path.dirname(targetDir);
     while (isWithin(createdParentRoot, current)) {
-      try {
-        rmdirSync(current);
-      } catch {
-        break;
+      if (existsSync(current)) {
+        try {
+          rmdirSync(current);
+        } catch {
+          // ENOTEMPTY (another writer's files) or a permission error: stop here
+          // rather than touch anything this run did not create empty.
+          break;
+        }
       }
       if (path.resolve(current) === path.resolve(createdParentRoot)) {
         break;
