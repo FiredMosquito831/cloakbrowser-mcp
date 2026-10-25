@@ -216,7 +216,7 @@ This is one recorded run on this Windows host, not a general stealth validation.
 
 ## Updates and versions
 
-This plugin is version **2.9.0**, the same version as `cloakbrowser` while both share a generated core. This release adds the shared profile copy tool (`scripts/profile-copy.mjs`), which copies cookies, logins and the fingerprint seed to a new profile name while excluding the lock, Chromium singletons, caches and logs. The previous release added session-safe profiles (`profile_isolation`, the lock preflight and the workspace fallback) without changing the default profile path. Update them separately:
+This plugin is version **2.9.1**, the same version as `cloakbrowser` while both share a generated core. This release adds a Windows-only warm-up in the Camoufox entry point, so the first Camoufox browser tool call no longer stalls while the engine's modules load; no setting or tool changes. The previous release added the shared profile copy tool (`scripts/profile-copy.mjs`), which copies cookies, logins and the fingerprint seed to a new profile name while excluding the lock, Chromium singletons, caches and logs. The release before that added session-safe profiles (`profile_isolation`, the lock preflight and the workspace fallback) without changing the default profile path. Update them separately:
 
 ```bash
 claude plugin marketplace update
