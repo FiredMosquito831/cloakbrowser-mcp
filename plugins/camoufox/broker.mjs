@@ -63,6 +63,18 @@ const PLUGIN_MANIFEST = path.join(PLUGIN_ROOT, '.claude-plugin', 'plugin.json');
 const SHUTDOWN_GRACE_MS = 300;
 const LOG_PREFIX = '[cloakbrowser-broker]';
 
+// Appended to a rejected initialize when the backend serves the 2026-07-28
+// protocol era (the Camoufox wrapper stack before plugin 2.9.2, where every
+// request gets a new session and the wrapper starts a new browser per call).
+// Additive text only: every other rejection keeps its exact previous message.
+const PROTOCOL_2026_MARKER = '2026-07-28';
+const PROTOCOL_2026_HINT =
+  'The backend is serving the 2026-07-28 protocol era (a new session per request, so the Camoufox wrapper starts a new browser on every tool call); update the plugin, because 2.9.2 and later pin the Python MCP stack (fastmcp 3.4.7, mcp 1.29.0) so this no longer occurs.';
+
+function protocolEraHint(reason) {
+  return String(reason).includes(PROTOCOL_2026_MARKER) ? ` ${PROTOCOL_2026_HINT}` : '';
+}
+
 const META_TOOL_NAMES = new Set(['browser_capabilities', 'browser_engine_status']);
 const META_TOOLS = [
   {
@@ -74,7 +86,7 @@ const META_TOOLS = [
   {
     name: 'browser_engine_status',
     description:
-      'Report the selected engine, backend process state, backend version when the handshake has completed, startup timing and the last error. This is a local broker tool; it does not start a browser. When another session already uses the browser profile, it also reports the profile directory, the owning process and the fix.',
+      'Report the selected engine, backend process state, backend version when the handshake has completed, startup timing and the last error. A backend that rejected the initialize handshake but still answers tools reports `initializeRejected: true` and stays running. This is a local broker tool; it does not start a browser. When another session already uses the browser profile, it also reports the profile directory, the owning process and the fix.',
     inputSchema: { type: 'object', properties: {} },
   },
 ];
@@ -426,6 +438,13 @@ const state = {
   initializeAnsweredAt: null,
   requestedProtocolVersion: null,
   initializeAnswered: false,
+  // A backend can refuse the initialize handshake and still answer tools/list
+  // and tool calls (the Camoufox wrapper did before plugin 2.9.2). These flags
+  // keep the status honest without changing the normal path: initializeRejected
+  // is reported additively, and backendAnswered stops waitMs growing once the
+  // backend has answered anything at all.
+  initializeRejected: false,
+  backendAnswered: false,
   serverInfo: null,
   backendCapabilities: null,
   backendTools: [],
@@ -846,7 +865,9 @@ function statusPayload() {
       ? null
       : state.initializeAnsweredAt - state.spawnedAt;
   const waitMs =
-    state.spawnedAt === null || state.initializeAnswered ? null : Math.max(0, now - state.spawnedAt);
+    state.spawnedAt === null || state.initializeAnswered || state.backendAnswered
+      ? null
+      : Math.max(0, now - state.spawnedAt);
   return {
     engine: state.engineId,
     label: state.engine?.label ?? null,
@@ -860,6 +881,7 @@ function statusPayload() {
     backendVersion: state.serverInfo?.version ?? null,
     backendServerName: state.serverInfo?.name ?? null,
     lastError,
+    ...(state.initializeRejected ? { initializeRejected: true } : {}),
     startupMs,
     waitMs,
     toolsListWaitMs: state.lastToolsListWaitMs,
@@ -1188,6 +1210,21 @@ function handleClientRequest(message, rawLine) {
   }
 }
 
+// A backend that answered a forwarded request is alive, even when the answer is
+// an error. Once it answers tools/list or a tool call, a rejected initialize is
+// no longer the last word: the state returns to running and the rejection stays
+// visible through initializeRejected and lastError.
+function noteBackendAnswered(pending) {
+  state.backendAnswered = true;
+  if (
+    state.initializeRejected &&
+    state.backend.state === 'failed' &&
+    (pending?.method === 'tools/list' || pending?.method === 'tools/call')
+  ) {
+    state.backend.state = 'running';
+  }
+}
+
 function handleBackendMessage(message, rawLine) {
   if (message === null || typeof message !== 'object') {
     return;
@@ -1196,6 +1233,7 @@ function handleBackendMessage(message, rawLine) {
   const isResponse = message.method === undefined && id !== undefined && id !== null;
   const pending = isResponse ? state.pendingRequests.get(id) : undefined;
   if (isResponse) {
+    noteBackendAnswered(pending);
     state.pendingRequests.delete(id);
   }
 
@@ -1230,7 +1268,8 @@ function handleBackendMessage(message, rawLine) {
 
   if (pending?.method === 'initialize' && message.error !== undefined) {
     const reason = message.error?.message ?? 'unknown error';
-    state.lastError = `Backend rejected initialize: ${String(reason)}`;
+    state.initializeRejected = true;
+    state.lastError = `Backend rejected initialize: ${String(reason)}${protocolEraHint(reason)}`;
     state.backend.state = 'failed';
   }
 
