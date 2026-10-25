@@ -104,7 +104,7 @@ const META_TOOLS = [
   {
     name: 'browser_profiles',
     description:
-      'List the browser profiles of the selected engine and set the default profile for the next server start. "list" reports the engine, the profiles that already exist, the current profile and its source, the default-profile pointer, the effective profile directory and the profile lock. "set-default" validates a profile name and writes it to the default-profile pointer next to the profiles; the change applies at the next server start, this session keeps its profile, and no browser is started. This is a local broker tool.',
+      'List the browser profiles of the selected engine and set the default profile for the next server start. "list" reports the engine, the available profiles (existing directories plus the pointer name), the current profile and its source, the default-profile pointer, the effective profile directory and the profile lock. "set-default" validates a profile name and writes it to the default-profile pointer next to the profiles; the change applies at the next server start, this session keeps its profile, and no browser is started. This is a local broker tool.',
     inputSchema: {
       type: 'object',
       properties: {
