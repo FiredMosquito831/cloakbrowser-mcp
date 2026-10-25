@@ -39,6 +39,7 @@ an engine means adding a manifest, not editing broker code.
 | `capabilities` | no | Object with only `groupSwitchesApply` and `cdpAttach` (booleans). The broker copies these into `browser_capabilities` for the engine that declares them |
 | `systemDependencies` | no | Array of external software the engine needs but the plugin never installs (see below). Reported generically in `browser_capabilities`; omitted engines gain no key |
 | `profileApplies` | no | Boolean, default `true`. Whether the plugin's profile model applies to this engine: `profile_dir`, `account`, `profile_isolation`, the workspace derivation and the lock preflight. Declare `false` for an engine that owns its profile elsewhere or attaches to a browser it did not start. Reported by both meta-tools |
+| `profileLock` | no | Object with exactly `file` and `owner`, describing the engine's own lock file inside the profile directory (see below). Omit it for an engine whose only lock is the bridge's `.cloakbrowser-mcp-profile.lock`; nothing changes for it |
 | `ignoredSettings` | no | Array of non-empty strings naming plugin settings the engine cannot honour (reported by `browser_capabilities`) |
 | `notes` | yes | String summarising the backend and its limitations |
 
@@ -164,6 +165,43 @@ shipped examples are `camoufox-native` (mcp-camoufox owns its profile and lease)
 and `kameleo` (CDP attach). `ignoredSettings` is a separate, additive fact: an
 engine can ignore one plugin setting without opting out of the profile model, and
 vice versa. The rule is manifest-driven; no engine id appears in `broker.mjs`.
+
+## Engine profile lock (`profileLock`)
+
+The bridge's own lock is not the only lock a persistent profile can carry. The
+Camoufox wrapper checks a Unix `lockfile` name and never writes the bridge lock,
+while Firefox itself takes `<profile>/parent.lock`; a profile a live browser still
+holds therefore produced a 180 s hang or an immediate `exitCode=0` launch failure
+instead of a clear start. A manifest can declare that file:
+
+```json
+"profileLock": { "file": "parent.lock", "owner": "exclusive-open" }
+```
+
+- `file` is a plain file name inside the resolved profile directory — letters,
+  digits, `.`, `_`, `-`, at most 64 characters, never a path or `..`.
+- `owner` names how the broker proves a live owner:
+  - `exclusive-open` — the OS refuses to open the file while a live process holds
+    it. This is the Windows Firefox lock: a zero-byte file kept open, so it carries
+    no process id; after a clean exit the file stays behind, readable and 0 bytes.
+  - `pid` — the file contains the owner's process id as text. The leading integer
+    is used; trailing text and whitespace are tolerated, so `1234`, `1234\n` and
+    `1234 locked` all read as pid 1234. Liveness is `process.kill(pid, 0)`: `ESRCH`
+    means the owner is gone.
+
+The broker never writes, moves or deletes a lock. Before spawning it reports one
+of four states in the additive `engineProfileLock` key of both meta-tools:
+`free` (no file), `live` (a live owner: meta-only start, the owner named when the
+file carries a pid, and one actionable fix in `initialize.instructions`),
+`stale` (the file exists but nobody holds it: the start proceeds and the browser
+replaces it) and `unknown` (the file cannot be interpreted: the start proceeds
+with the reason in `error`). Only `live` blocks a start. `profileLock` for the
+bridge is unchanged and keeps its own meaning; an engine without this field gains
+no key and a byte-identical start.
+
+The check is exact to the declared file. On a platform where that file is not the
+browser's lock (Firefox on POSIX uses a `lock` symlink instead), the preflight
+reads `free` and changes nothing.
 
 ## Attach runtime (`requiredEnv` + `runtime`)
 
