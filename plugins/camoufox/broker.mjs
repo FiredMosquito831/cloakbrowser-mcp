@@ -1292,10 +1292,7 @@ function profileStatePayload() {
     defaultProfileDir: state.profile.defaultDir,
     profileIsolation: state.profile.isolation,
     profileIsolationSource: state.profile.isolationSource,
-    profileLock:
-      lock === null
-        ? null
-        : { ...lock, fix: lockBlocksStart(lock) ? profileLockFix(lock) : null },
+    profileLock: lock === null ? null : { ...lock, fix: lockBlocksStart(lock) ? profileLockFix(lock) : null },
   };
 }
 
@@ -1336,10 +1333,7 @@ function respondProfiles(id, args) {
     }
     const rawName = args !== null && typeof args === 'object' ? args.name : undefined;
     if (typeof rawName !== 'string' || rawName.trim() === '') {
-      sendToolError(
-        id,
-        `browser_profiles set-default requires a profile "name". ${INVALID_ACCOUNT_HINT}`,
-      );
+      sendToolError(id, `browser_profiles set-default requires a profile "name". ${INVALID_ACCOUNT_HINT}`);
       return;
     }
     const name = rawName.trim();
@@ -1373,10 +1367,7 @@ function respondProfiles(id, args) {
     });
     return;
   }
-  sendToolError(
-    id,
-    `Unknown browser_profiles action "${action}". Use "list" or "set-default".`,
-  );
+  sendToolError(id, `Unknown browser_profiles action "${action}". Use "list" or "set-default".`);
 }
 
 function handleMetaCall(message) {

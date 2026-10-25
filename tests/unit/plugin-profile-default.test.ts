@@ -1,5 +1,13 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -464,9 +472,10 @@ describe('default-profile pointer precedence', () => {
     });
 
     // Pointer over workspace isolation.
-    expect(
-      profile.resolveProfile({ ...base, account: '', isolation: 'workspace', cwd: CWD }),
-    ).toMatchObject({ profileDir: pointerDir, profileSource: 'pointer' });
+    expect(profile.resolveProfile({ ...base, account: '', isolation: 'workspace', cwd: CWD })).toMatchObject({
+      profileDir: pointerDir,
+      profileSource: 'pointer',
+    });
 
     // Account over the pointer.
     expect(
@@ -494,7 +503,9 @@ describe('default-profile pointer precedence', () => {
   });
 
   it('maps a pointer named "default" to the engine default directory', () => {
-    expect(profile.resolveProfile({ engineId: 'cloak', dataDir: DATA_DIR, pointer: 'default' })).toMatchObject({
+    expect(
+      profile.resolveProfile({ engineId: 'cloak', dataDir: DATA_DIR, pointer: 'default' }),
+    ).toMatchObject({
       profileDir: path.join(DATA_DIR, 'profiles', 'default'),
       profileSource: 'pointer',
     });
@@ -519,9 +530,11 @@ describe('default-profile pointer precedence', () => {
       profileSource: 'default',
     });
     // An invalid name passed directly is ignored rather than made fatal.
-    expect(profile.resolveProfile({ engineId: 'cloak', dataDir: DATA_DIR, pointer: '../x' })).toMatchObject(
-      { profileSource: 'default', profileDir: null, error: null },
-    );
+    expect(profile.resolveProfile({ engineId: 'cloak', dataDir: DATA_DIR, pointer: '../x' })).toMatchObject({
+      profileSource: 'default',
+      profileDir: null,
+      error: null,
+    });
     expect(
       profile.resolveProfile({
         engineId: 'cloak',
@@ -809,13 +822,19 @@ describe('browser_profiles meta-tool', () => {
     const dataDir = createRuntime(tempRoot('pr-default-tool-invalid-'));
     const session = startBroker({ dataDir });
     await initialize(session);
-    for (const args of [{ action: 'set-default', name: '../escape' }, { action: 'set-default' }, { action: 'set-default', name: 'bad/name' }]) {
+    for (const args of [
+      { action: 'set-default', name: '../escape' },
+      { action: 'set-default' },
+      { action: 'set-default', name: 'bad/name' },
+    ]) {
       const response = await profilesCall(session, args);
       expect(response.result?.isError).toBe(true);
       expect(String(response.result?.content?.[0]?.text)).toContain('browser_profiles set-default');
     }
     expect(
-      String((await profilesCall(session, { action: 'set-default', name: 'bad/name' })).result?.content?.[0]?.text),
+      String(
+        (await profilesCall(session, { action: 'set-default', name: 'bad/name' })).result?.content?.[0]?.text,
+      ),
     ).toContain('Invalid account name');
     expect(existsSync(pointerFile(dataDir))).toBe(false);
     // No action at all is a read, not a write.
@@ -860,7 +879,14 @@ describe('profile-default CLI', () => {
     });
     expect((show.summary?.pointer as Record<string, unknown>).state).toBe('missing');
 
-    const dry = cli.runProfileDefault({ engine: 'cloak', dataDir, set: 'work', dryRun: true, env: {}, home: root });
+    const dry = cli.runProfileDefault({
+      engine: 'cloak',
+      dataDir,
+      set: 'work',
+      dryRun: true,
+      env: {},
+      home: root,
+    });
     expect(dry.ok).toBe(true);
     expect(dry.summary).toMatchObject({ action: 'set-default', name: 'work', dryRun: true, written: false });
     expect(existsSync(pointerFile(dataDir))).toBe(false);
@@ -877,7 +903,7 @@ describe('profile-default CLI', () => {
       targetDir: path.join(dataDir, 'profiles', 'cloak', 'work'),
       targetExists: false,
     });
-    const text = cli.formatHumanSummary(shown.summary as Record<string, unknown>);
+    const text = cli.formatHumanSummary(shown.summary!);
     expect(text).toContain('created on the next launch');
     expect(text).toContain('next server start');
   });
@@ -897,7 +923,13 @@ describe('profile-default CLI', () => {
   it('refuses an invalid name, an unknown engine and an engine without broker profiles', () => {
     const root = tempRoot('pr-default-cli-refuse-');
     const dataDir = path.join(root, 'data');
-    const invalid = cli.runProfileDefault({ engine: 'cloak', dataDir, set: '../escape', env: {}, home: root });
+    const invalid = cli.runProfileDefault({
+      engine: 'cloak',
+      dataDir,
+      set: '../escape',
+      env: {},
+      home: root,
+    });
     expect(invalid.ok).toBe(false);
     expect(invalid.error?.code).toBe('invalid-name');
     expect(invalid.error?.message).toContain('Invalid account name');
@@ -937,20 +969,18 @@ describe('profile-default CLI', () => {
     const root = tempRoot('pr-default-cli-process-');
     const dataDir = path.join(root, 'data');
     const script = path.join(pluginDir, 'scripts', 'profile-default.mjs');
-    const set = spawnSync(
-      process.execPath,
-      [script, '--set', 'work', '--json', '--data-dir', dataDir],
-      { encoding: 'utf8', windowsHide: true },
-    );
+    const set = spawnSync(process.execPath, [script, '--set', 'work', '--json', '--data-dir', dataDir], {
+      encoding: 'utf8',
+      windowsHide: true,
+    });
     expect(set.status).toBe(0);
     const payload = JSON.parse(set.stdout) as Record<string, unknown>;
     expect(payload).toMatchObject({ action: 'set-default', name: 'work', written: true });
 
-    const invalid = spawnSync(
-      process.execPath,
-      [script, '--set', '../escape', '--data-dir', dataDir],
-      { encoding: 'utf8', windowsHide: true },
-    );
+    const invalid = spawnSync(process.execPath, [script, '--set', '../escape', '--data-dir', dataDir], {
+      encoding: 'utf8',
+      windowsHide: true,
+    });
     expect(invalid.status).toBe(1);
     expect(invalid.stderr).toContain('Invalid account name');
 

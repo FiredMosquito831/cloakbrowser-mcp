@@ -215,10 +215,7 @@ export function readProfileDefaultPointer(engineId, dataDir) {
     .map((line) => line.trim())
     .filter((line) => line !== '');
   if (lines.length === 0) {
-    return invalidPointer(
-      pointerPath,
-      `The default profile pointer ${pointerPath} is empty; it is ignored.`,
-    );
+    return invalidPointer(pointerPath, `The default profile pointer ${pointerPath} is empty; it is ignored.`);
   }
   if (lines.length > 1) {
     return invalidPointer(

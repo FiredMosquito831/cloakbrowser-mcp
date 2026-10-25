@@ -140,9 +140,7 @@ function resolveEngine({ engine, pluginRoot }) {
 function pointerReport(engineId, dataRoot, launcherName) {
   const pointer = readProfileDefaultPointer(engineId, dataRoot);
   const targetDir =
-    pointer.name === null
-      ? null
-      : profileDefaultPointerDir(engineId, dataRoot, pointer.name, launcherName);
+    pointer.name === null ? null : profileDefaultPointerDir(engineId, dataRoot, pointer.name, launcherName);
   return {
     path: pointer.path,
     exists: pointer.exists,
@@ -185,7 +183,10 @@ export function runProfileDefault({
     }
     return {
       ok: false,
-      error: { code: 'failed', message: `The profile default tool failed: ${error?.message ?? String(error)}` },
+      error: {
+        code: 'failed',
+        message: `The profile default tool failed: ${error?.message ?? String(error)}`,
+      },
     };
   }
 }
@@ -261,10 +262,14 @@ export function formatHumanSummary(summary) {
     } else {
       lines.push(`state: ${pointer.name}`);
       if (pointer.targetDir !== null) {
-        lines.push(`target: ${pointer.targetDir}${pointer.targetExists ? '' : ' (created on the next launch)'}`);
+        lines.push(
+          `target: ${pointer.targetDir}${pointer.targetExists ? '' : ' (created on the next launch)'}`,
+        );
       }
     }
-    lines.push('The pointer is applied at the next server start, when neither profile_dir nor account is set.');
+    lines.push(
+      'The pointer is applied at the next server start, when neither profile_dir nor account is set.',
+    );
     return `${lines.join('\n')}\n`;
   }
   const verb = summary.dryRun ? 'Dry run: would write' : 'Wrote';

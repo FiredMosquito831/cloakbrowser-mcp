@@ -277,6 +277,7 @@ describe('kameleo broker configuration errors', () => {
     expect(list.result?.tools?.map((tool) => tool.name)).toEqual([
       'browser_capabilities',
       'browser_engine_status',
+      'browser_profiles',
     ]);
     const status = await session.request('tools/call', {
       name: 'browser_engine_status',

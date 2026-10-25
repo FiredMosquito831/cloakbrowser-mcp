@@ -510,11 +510,7 @@ describe('browser_capabilities artifact diagnostics', () => {
       expect(payload[key], `capability "${key}" changed`).toEqual(value);
     }
     expect(payload.metaToolCount).toBe(3);
-    expect(payload.metaTools).toEqual([
-      'browser_capabilities',
-      'browser_engine_status',
-      'browser_profiles',
-    ]);
+    expect(payload.metaTools).toEqual(['browser_capabilities', 'browser_engine_status', 'browser_profiles']);
     expect(payload.exposedToolCount).toBe((baseline.exposedToolCount as number) + 1);
     expect(payload.serverCwd).toBe('<ROOT>/cwd');
     expect(payload.outputDir).toBe('<ROOT>/cwd/.playwright-mcp');
