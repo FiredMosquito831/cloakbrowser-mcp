@@ -449,11 +449,19 @@ function engineLockResult(base, liveness, state, owner, error = null) {
 //   unknown  the file cannot be interpreted; the start is allowed with a note
 export function readEngineProfileLock(profileDir, descriptor) {
   const resolved = path.resolve(typeof profileDir === 'string' ? profileDir : '');
-  const file =
-    isPlainObject(descriptor) && nonEmptyString(descriptor.file) ? descriptor.file.trim() : null;
-  const liveness = isPlainObject(descriptor) && nonEmptyString(descriptor.owner) ? descriptor.owner.trim() : null;
+  const file = isPlainObject(descriptor) && nonEmptyString(descriptor.file) ? descriptor.file.trim() : null;
+  const liveness =
+    isPlainObject(descriptor) && nonEmptyString(descriptor.owner) ? descriptor.owner.trim() : null;
   const lockPath = path.join(resolved, file === null ? '' : file);
-  const base = { profileDir: resolved, path: lockPath, file, liveness, state: 'free', owner: null, error: null };
+  const base = {
+    profileDir: resolved,
+    path: lockPath,
+    file,
+    liveness,
+    state: 'free',
+    owner: null,
+    error: null,
+  };
   if (file === null || !ENGINE_LOCK_OWNER_RULES.includes(liveness)) {
     return engineLockResult(
       base,

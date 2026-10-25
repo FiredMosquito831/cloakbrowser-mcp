@@ -7,10 +7,10 @@
 // exitCode=0 launch failure), while a leftover lock from an exited browser is
 // reported as stale and allowed.
 //
-// The live owner is proven two ways because the real files differ: the Windows
-// Firefox lock is a zero-byte file the OS refuses to open while the browser holds
-// it (EBUSY on this machine; it carries no process id), and a lock file that
-// carries a pid is checked with process.kill(pid, 0). Both rules are exercised.
+// The live owner is proven two ways because the real files differ. The Windows
+// Firefox lock is a zero-byte file the OS refuses to open while the browser runs
+// (EBUSY on this machine), so it carries no process id; a lock file that does
+// carry a pid is checked with process.kill(pid, 0). Both rules are exercised.
 import {
   copyFileSync,
   mkdirSync,
@@ -344,7 +344,13 @@ describe('engine lock reading (pid)', () => {
 
   it('allows the start with a note for an unusable descriptor', () => {
     const dir = profileWithLock('bad-descriptor', '1234', 'owner.lock');
-    for (const descriptor of [null, {}, { file: 'owner.lock' }, { owner: 'pid' }, { file: '', owner: 'pid' }]) {
+    for (const descriptor of [
+      null,
+      {},
+      { file: 'owner.lock' },
+      { owner: 'pid' },
+      { file: '', owner: 'pid' },
+    ]) {
       const lock = profile.readEngineProfileLock(dir, descriptor as never);
       expect(lock.state).toBe('unknown');
       expect(profile.engineLockBlocksStart(lock)).toBe(false);
@@ -474,7 +480,9 @@ describe('manifest wiring', () => {
   });
 
   it('keeps every shipped manifest valid with the new field', () => {
-    const profiles = JSON.parse(originalReadFileSync(path.join(universal, 'profiles.json'), 'utf8'));
+    const profiles = JSON.parse(originalReadFileSync(path.join(universal, 'profiles.json'), 'utf8')) as {
+      profiles: Record<string, unknown>;
+    };
     const profileNames = Object.keys(profiles.profiles).sort();
     for (const engine of ['cloak', 'playwright', 'camoufox', 'camoufox-native', 'kameleo']) {
       const manifest = JSON.parse(originalReadFileSync(path.join(universal, `${engine}.json`), 'utf8'));
