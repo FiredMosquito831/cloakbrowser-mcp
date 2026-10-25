@@ -16,12 +16,23 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ensurePython, ensureUv, ensureVenv } from './lib/provision.mjs';
 
 const PLUGIN_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PACKAGE_PIN = 'camoufox-playwright-mcp==0.1.5';
 const BUILD_PIN = 'v156.0.1-beta.39';
+// The Python MCP stack beside the wrapper, exactly as the wrapper's own uv.lock
+// resolves it (fastmcp 3.4.7 -> fastmcp-slim[client,server] -> mcp 1.29.0).
+// The wrapper's pyproject.toml only says `fastmcp>=3.4.2`, with no upper bound,
+// so an unpinned install resolves fastmcp 4.x. That major serves the
+// 2026-07-28 protocol era, where every request is its own connection with a new
+// session id; the wrapper keys its browser backend by that id, so it relaunches
+// the browser on every tool call and the second launch fails on the profile the
+// first browser still holds. A pin, not a range: every other dependency in this
+// plugin is exact, and the lock is the only version set upstream actually
+// tested.
+const PYTHON_STACK_PINS = ['fastmcp==3.4.7', 'mcp==1.29.0'];
 const BOOTSTRAP = 'camoufox_bootstrap.py';
 const ENTRY = 'camoufox_entry.py';
 const LOG_PREFIX = '[camoufox]';
@@ -111,6 +122,13 @@ function contractHash(spec, build) {
     .digest('hex');
 }
 
+// The venv package list: the wrapper pin (or the CAMOUFOX_MCP_PACKAGE override)
+// followed by the pinned MCP stack. Both feed the venv marker, so a change to
+// either rebuilds an existing venv on the next start.
+export function venvPackages(spec) {
+  return [spec, ...PYTHON_STACK_PINS];
+}
+
 function ensureRuntime(env, spec, build) {
   const data = dataDir(env);
   return ensureUv({ env, dataDir: data, log }).then((uv) => {
@@ -121,7 +139,7 @@ function ensureRuntime(env, spec, build) {
       uv,
       python,
       name: 'camoufox',
-      packages: [spec],
+      packages: venvPackages(spec),
       extra: { build, manifest: contractHash(spec, build) },
       log,
     });
@@ -201,6 +219,11 @@ async function main() {
   });
 }
 
-main().catch((error) => {
-  fail(error instanceof Error ? error.message : String(error));
-});
+// Run only when invoked as the launcher, so the unit suite can import the pure
+// helpers without provisioning a runtime or starting a backend.
+const invokedPath = process.argv[1] === undefined ? null : path.resolve(process.argv[1]);
+if (invokedPath !== null && import.meta.url === pathToFileURL(invokedPath).href) {
+  main().catch((error) => {
+    fail(error instanceof Error ? error.message : String(error));
+  });
+}

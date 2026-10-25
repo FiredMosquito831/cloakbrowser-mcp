@@ -58,6 +58,7 @@ interface ProvisionModule {
   extractUvArchive(kind: string, buffer: Buffer, destination: string, platform?: string): string;
   findOnPath(name: string, env: Record<string, string | undefined>, platform?: string): string | null;
   isVersionAtLeast(version: string | null, minimum: string): boolean;
+  missingPackages(venvDir: string, packages: string[], platform?: string): string[];
   parseVersion(value: string): { major: number; minor: number; patch: number; prerelease: string[] } | null;
   readTarEntries(buffer: Buffer): Map<string, Buffer>;
   readZipEntries(buffer: Buffer): Map<string, Buffer>;
@@ -1068,7 +1069,24 @@ describe('helpers', () => {
     expect(provision.distInfoName('camoufox-playwright-mcp==0.1.5')).toBe(
       'camoufox_playwright_mcp-0.1.5.dist-info',
     );
+    expect(provision.distInfoName('fastmcp==3.4.7')).toBe('fastmcp-3.4.7.dist-info');
+    expect(provision.distInfoName('mcp==1.29.0')).toBe('mcp-1.29.0.dist-info');
     expect(provision.distInfoName('unpinned')).toBeNull();
+  });
+
+  it('never accepts another version as the pinned one', () => {
+    const venvDir = path.join(tempDir(), 'venvs', 'camoufox');
+    const sitePackages = path.join(venvDir, 'Lib', 'site-packages');
+    for (const entry of ['fastmcp-4.1.3.dist-info', 'fastmcp_slim-4.1.3.dist-info', 'mcp-2.3.0.dist-info']) {
+      mkdirSync(path.join(sitePackages, entry), { recursive: true });
+    }
+    expect(provision.missingPackages(venvDir, ['fastmcp==3.4.7', 'mcp==1.29.0'], 'win32')).toEqual([
+      'fastmcp==3.4.7',
+      'mcp==1.29.0',
+    ]);
+    mkdirSync(path.join(sitePackages, 'fastmcp-3.4.7.dist-info'), { recursive: true });
+    mkdirSync(path.join(sitePackages, 'mcp-1.29.0.dist-info'), { recursive: true });
+    expect(provision.missingPackages(venvDir, ['fastmcp==3.4.7', 'mcp==1.29.0'], 'win32')).toEqual([]);
   });
 
   it('builds the venv console-script path per platform', () => {
