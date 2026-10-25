@@ -359,7 +359,10 @@ describe('kameleo broker with a lazy backend', () => {
       clientInfo: { name: 'test', version: '1' },
     });
     expect(initialize.result?.serverInfo?.name).toBe('stub-playwright-mcp');
-    expect(initialize.result?.instructions).toBeUndefined();
+    // 2.9.5 adds one artifact sentence to the handshake and nothing else.
+    expect(initialize.result?.instructions).toMatch(
+      /^Browser artifacts \(screenshots, traces, downloads\) go to /,
+    );
 
     const list = await session.request('tools/list', {});
     const names = list.result?.tools?.map((tool) => tool.name) ?? [];

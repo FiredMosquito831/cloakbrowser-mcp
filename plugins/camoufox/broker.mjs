@@ -84,7 +84,7 @@ const META_TOOLS = [
   {
     name: 'browser_capabilities',
     description:
-      'Report the selected browser engine, its Playwright MCP contract, the active tool profile, the backend tool count, per-tool support and how to change engines. This is a local broker tool; it does not start a browser. When another session already uses the browser profile, it also reports the profile directory, the owning process and the fix.',
+      'Report the selected browser engine, its Playwright MCP contract, the active tool profile, the backend tool count, per-tool support and how to change engines. It also reports the server working directory, the effective artifact directory and the MCP roots the client advertised, which together explain a file-access refusal. This is a local broker tool; it does not start a browser. When another session already uses the browser profile, it also reports the profile directory, the owning process and the fix.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
@@ -404,6 +404,63 @@ if (
 const runtimeHint = runtimeErrorHint(engine, process.env);
 const profileSelection = resolveToolProfile(process.env.STEALTH_TOOL_PROFILE, engine, profiles);
 
+// Artifact diagnostics (2.9.5). Upstream's file-access allowlist is
+// [output directory, workspace root], and through the Cloak bridge the client's
+// roots never reach the backend, so both values fall back to the MCP server's
+// working directory. browser_capabilities therefore reports the cwd, the
+// effective output directory and the client's roots: without them a denied
+// screenshot ("File access denied: ... outside allowed roots") is unexplainable.
+// The output directory is PLAYWRIGHT_MCP_OUTPUT_DIR when set, otherwise
+// <server cwd>/.playwright-mcp, resolved against the cwd like the bridge does.
+// An engine whose manifest lists output_dir in ignoredSettings never reads the
+// setting, so reporting a directory for it would be an invented fact. Nothing
+// here reads the filesystem or creates the directory.
+const SERVER_CWD = process.cwd();
+const DEFAULT_OUTPUT_DIR = path.join(SERVER_CWD, '.playwright-mcp');
+const outputDirSetting = (() => {
+  const raw =
+    typeof process.env.PLAYWRIGHT_MCP_OUTPUT_DIR === 'string'
+      ? process.env.PLAYWRIGHT_MCP_OUTPUT_DIR.trim()
+      : '';
+  if (raw === '') {
+    return null;
+  }
+  if (raw.includes('${')) {
+    log(`ignoring unsubstituted output_dir placeholder: ${raw}`);
+    return null;
+  }
+  return raw;
+})();
+const outputDirIgnoredByEngine =
+  engine !== null && Array.isArray(engine.ignoredSettings) && engine.ignoredSettings.includes('output_dir');
+const OUTPUT_DIR_SOURCE =
+  outputDirIgnoredByEngine === true ? 'engine' : outputDirSetting === null ? 'default' : 'setting';
+const OUTPUT_DIR =
+  OUTPUT_DIR_SOURCE === 'engine'
+    ? null
+    : outputDirSetting === null
+      ? DEFAULT_OUTPUT_DIR
+      : path.resolve(SERVER_CWD, outputDirSetting);
+
+// One sentence for every initialize handshake the broker returns. It names the
+// directory artifacts go to and how to change it, and it states the fallback
+// rather than implying the setting is always in force.
+function artifactDirectorySentence() {
+  if (OUTPUT_DIR_SOURCE === 'engine') {
+    return "This engine manages its own artifact files, so the plugin's output_dir setting does not apply to it.";
+  }
+  if (OUTPUT_DIR_SOURCE === 'setting') {
+    return (
+      `Browser artifacts (screenshots, traces, downloads) go to ${OUTPUT_DIR} from the output_dir setting; ` +
+      `set that setting to change it, and while it is empty they land in ${DEFAULT_OUTPUT_DIR}.`
+    );
+  }
+  return (
+    `Browser artifacts (screenshots, traces, downloads) go to ${OUTPUT_DIR} because the output_dir setting is ` +
+    'empty; set that setting to change it.'
+  );
+}
+
 if (profileSelection.placeholder !== null) {
   log(`ignoring unsubstituted tool-profile placeholder: ${profileSelection.placeholder}`);
 }
@@ -465,6 +522,11 @@ const state = {
   spawnedAt: null,
   initializeAnsweredAt: null,
   requestedProtocolVersion: null,
+  // Whether the client's initialize request declared the MCP roots capability
+  // (true), declared none (false) or has not initialized yet (null). The roots
+  // probe reads it: a server does not request an undeclared capability, and the
+  // capability is reported as the reason instead.
+  clientRootsDeclared: null,
   initializeAnswered: false,
   // A backend can refuse the initialize handshake and still answer tools/list
   // and tool calls (the Camoufox wrapper did before plugin 2.9.2). These flags
@@ -598,6 +660,114 @@ function sendToolPayload(id, payload) {
     content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
     structuredContent: payload,
   });
+}
+
+// --- MCP client roots probe (2.9.5) -----------------------------------------
+// The client's roots are the other half of the file-access allowlist, and
+// through the Cloak bridge they never reach the backend. The broker asks the
+// client once, lazily: the first browser_capabilities call sends one
+// server->client roots/list request under this id and waits at most 2 s. Any
+// answer (roots, an error such as -32601, a malformed payload, silence) is
+// cached for the life of the process; silence becomes null plus a short reason.
+// The probe never runs at startup, never delays initialize or tools/list, and
+// never changes tool filtering. A client that did not declare the roots
+// capability is not asked at all (MCP: a server does not request an undeclared
+// capability), so that call answers immediately with the reason.
+const ROOTS_PROBE_TIMEOUT_MS = 2000;
+const ROOTS_PROBE_ID = 'cloakbrowser-broker-roots';
+
+const clientRootsProbe = {
+  state: 'idle', // idle | pending | done
+  result: null, // { roots: Array|null, error: string|null }
+  timer: null,
+  waiters: [],
+};
+
+function finishClientRootsProbe(result) {
+  if (clientRootsProbe.state === 'done') {
+    return;
+  }
+  clientRootsProbe.state = 'done';
+  clientRootsProbe.result = result;
+  if (clientRootsProbe.timer !== null) {
+    clearTimeout(clientRootsProbe.timer);
+    clientRootsProbe.timer = null;
+  }
+  const waiters = clientRootsProbe.waiters.splice(0);
+  for (const waiter of waiters) {
+    waiter();
+  }
+  log(
+    result.roots === null
+      ? `client roots unavailable: ${String(result.error)}`
+      : `client roots: ${result.roots.length}`,
+  );
+}
+
+// The protocol carries { uri, name? }. Only those two fields are reported; an
+// entry without a string uri is dropped rather than guessed at.
+function normalizeClientRoots(roots) {
+  const normalized = [];
+  for (const entry of roots) {
+    if (entry === null || typeof entry !== 'object') {
+      continue;
+    }
+    if (typeof entry.uri !== 'string' || entry.uri === '') {
+      continue;
+    }
+    normalized.push(
+      typeof entry.name === 'string' && entry.name !== ''
+        ? { uri: entry.uri, name: entry.name }
+        : { uri: entry.uri },
+    );
+  }
+  return normalized;
+}
+
+function startClientRootsProbe() {
+  if (state.clientRootsDeclared === false) {
+    finishClientRootsProbe({ roots: null, error: 'the client did not advertise the roots capability' });
+    return;
+  }
+  clientRootsProbe.state = 'pending';
+  writeMessage({ jsonrpc: '2.0', id: ROOTS_PROBE_ID, method: 'roots/list' });
+  clientRootsProbe.timer = setTimeout(() => {
+    finishClientRootsProbe({ roots: null, error: `no answer within ${ROOTS_PROBE_TIMEOUT_MS} ms` });
+  }, ROOTS_PROBE_TIMEOUT_MS);
+}
+
+function clientRootsResult() {
+  if (clientRootsProbe.state === 'done') {
+    return Promise.resolve(clientRootsProbe.result);
+  }
+  return new Promise((resolve) => {
+    clientRootsProbe.waiters.push(() => resolve(clientRootsProbe.result));
+    if (clientRootsProbe.state === 'idle') {
+      startClientRootsProbe();
+    }
+  });
+}
+
+// The answer to the broker's own request, matched by id in the client line
+// reader. It is never relayed to the backend, which has no request with this id.
+function handleClientRootsAnswer(message) {
+  if (clientRootsProbe.state !== 'pending') {
+    return; // a late answer after the timeout is dropped
+  }
+  if (message.error !== undefined && message.error !== null) {
+    const error = message.error;
+    const detail =
+      typeof error.message === 'string' && error.message !== '' ? error.message : 'unknown error';
+    const code = typeof error.code === 'number' ? `${error.code}: ` : '';
+    finishClientRootsProbe({ roots: null, error: `${code}${detail}` });
+    return;
+  }
+  const roots = message.result?.roots;
+  if (!Array.isArray(roots)) {
+    finishClientRootsProbe({ roots: null, error: 'malformed roots/list response' });
+    return;
+  }
+  finishClientRootsProbe({ roots: normalizeClientRoots(roots), error: null });
 }
 
 function metaToolList() {
@@ -779,7 +949,7 @@ function systemDependencyHint() {
   return missing.map((entry) => `${entry.label} is required. ${entry.installHint}`).join(' ');
 }
 
-function capabilitiesPayload() {
+function capabilitiesPayload(clientRoots) {
   const systemDeps = systemDependencyReport();
   const counts = state.toolsListed ? toolCounts() : null;
   const supported = state.toolsListed ? supportedCounts() : null;
@@ -874,6 +1044,16 @@ function capabilitiesPayload() {
     profileFallback: state.profile.fallback,
     profileLock: state.profile.lock,
     ...(state.profile.engineLock === null ? {} : { engineProfileLock: state.profile.engineLock }),
+    // Artifact diagnostics, additive and last, so every key above keeps its
+    // position and value. serverCwd is the directory both allowlist values fall
+    // back to; outputDir is the effective artifact directory (null for an engine
+    // that does not use the setting); clientRoots is what the MCP client
+    // advertised ({ uri, name? }, an empty list when it advertises none) or null
+    // when the probe could not read it, with the short reason beside it.
+    serverCwd: SERVER_CWD,
+    outputDir: OUTPUT_DIR,
+    clientRoots: clientRoots.roots,
+    ...(clientRoots.roots === null ? { clientRootsError: clientRoots.error ?? 'unavailable' } : {}),
   };
 }
 
@@ -943,10 +1123,30 @@ function statusPayload() {
   };
 }
 
+// browser_capabilities is the only caller of the lazy roots probe: its payload
+// needs the answer, so the call is answered once the probe settles (an answer,
+// an error, or the 2 s bound). Every other request and notification keeps
+// flowing while the probe waits.
+function respondCapabilities(id) {
+  clientRootsResult().then(
+    (roots) => sendToolPayload(id, capabilitiesPayload(roots)),
+    (error) => {
+      // Unreachable in practice; a failed probe must still answer the call.
+      sendToolPayload(
+        id,
+        capabilitiesPayload({
+          roots: null,
+          error: `probe failed: ${error instanceof Error ? error.message : String(error)}`,
+        }),
+      );
+    },
+  );
+}
+
 function handleMetaCall(message) {
   const name = message.params?.name;
   if (name === 'browser_capabilities') {
-    sendToolPayload(message.id, capabilitiesPayload());
+    respondCapabilities(message.id);
     return true;
   }
   if (name === 'browser_engine_status') {
@@ -1028,7 +1228,8 @@ function synthesizeInitialize(id, reason) {
     `The ${state.engineId} backend is unavailable: ${reason} ` +
     'Call browser_engine_status for details. Only broker meta-tools are exposed until Claude Code restarts the MCP server.' +
     (state.profile.fallback === null ? '' : ` ${state.profile.fallback.reason}`) +
-    (dependencyHint === null ? '' : ` ${dependencyHint}`);
+    (dependencyHint === null ? '' : ` ${dependencyHint}`) +
+    ` ${artifactDirectorySentence()}`;
   sendResult(id, {
     protocolVersion: state.requestedProtocolVersion ?? '2025-06-18',
     capabilities: { tools: {} },
@@ -1117,6 +1318,18 @@ function beginShutdown() {
   }, SHUTDOWN_GRACE_MS);
 }
 
+// An initialize request states the client's capabilities. Only the roots fact is
+// kept: it decides whether the lazy roots/list probe may be sent at all.
+function noteInitializeRequest(message) {
+  state.requestedProtocolVersion = message.params?.protocolVersion ?? null;
+  const capabilities = message.params?.capabilities;
+  state.clientRootsDeclared =
+    capabilities !== null &&
+    typeof capabilities === 'object' &&
+    capabilities.roots !== undefined &&
+    capabilities.roots !== null;
+}
+
 function handleClientRequest(message, rawLine) {
   const method = message.method;
   const id = message.id;
@@ -1179,7 +1392,7 @@ function handleClientRequest(message, rawLine) {
       return;
     }
     if (method === 'initialize') {
-      state.requestedProtocolVersion = message.params?.protocolVersion ?? null;
+      noteInitializeRequest(message);
       synthesizeInitialize(id, backendDescription());
       return;
     }
@@ -1224,7 +1437,7 @@ function handleClientRequest(message, rawLine) {
       sentAt: Date.now(),
     });
     if (method === 'initialize') {
-      state.requestedProtocolVersion = message.params?.protocolVersion ?? null;
+      noteInitializeRequest(message);
     }
   }
   if (!forwardToBackend(rawLine)) {
@@ -1312,20 +1525,23 @@ function handleBackendMessage(message, rawLine) {
     if (state.backend.state === 'starting' || state.backend.state === 'idle') {
       state.backend.state = 'running';
     }
-    if (state.profile.fallback !== null) {
-      // The session is running on a different identity than its workspace
-      // profile; say so in the handshake, not only in the meta-tools. Every
-      // other initialise response is relayed byte-for-byte.
-      const result = message.result !== null && typeof message.result === 'object' ? message.result : {};
-      const current = typeof result.instructions === 'string' ? result.instructions.trim() : '';
-      message.result = {
-        ...result,
-        instructions:
-          current === '' ? state.profile.fallback.reason : `${current} ${state.profile.fallback.reason}`,
-      };
-      process.stdout.write(`${JSON.stringify(message)}\n`);
-      return;
-    }
+    // The artifact sentence is the one addition to a relayed handshake, and it is
+    // added on every path. A workspace fallback keeps its own sentence after the
+    // backend's text and before the artifact fact; every other initialise
+    // response is otherwise unchanged.
+    const result = message.result !== null && typeof message.result === 'object' ? message.result : {};
+    const current = typeof result.instructions === 'string' ? result.instructions.trim() : '';
+    const parts = [
+      current,
+      state.profile.fallback === null ? '' : state.profile.fallback.reason,
+      artifactDirectorySentence(),
+    ];
+    message.result = {
+      ...result,
+      instructions: parts.filter((part) => part !== '').join(' '),
+    };
+    process.stdout.write(`${JSON.stringify(message)}\n`);
+    return;
   }
 
   if (pending?.method === 'tools/list' && Array.isArray(message.result?.tools)) {
@@ -1506,6 +1722,12 @@ readline
     }
     if (message === null || typeof message !== 'object' || Array.isArray(message)) {
       log('dropped client line that is not a JSON-RPC object');
+      return;
+    }
+    // The answer to the broker's own roots/list probe is a response, and the
+    // backend has no request with this id: it is consumed here, never relayed.
+    if (message.method === undefined && message.id === ROOTS_PROBE_ID) {
+      handleClientRootsAnswer(message);
       return;
     }
     handleClientRequest(message, line);

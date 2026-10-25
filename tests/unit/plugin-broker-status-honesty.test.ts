@@ -328,7 +328,11 @@ describe('normal backend status stays byte-identical', () => {
       clientInfo: { name: 'test', version: '1' },
     });
     expect(initialize.result?.serverInfo?.name).toBe('stub-broker-status');
-    expect(initialize.result?.instructions).toBeUndefined();
+    // 2.9.5 appends one artifact sentence to every handshake; the stub sends no
+    // instructions of its own, so that sentence is the whole value.
+    expect(initialize.result?.instructions).toMatch(
+      /^Browser artifacts \(screenshots, traces, downloads\) go to /,
+    );
 
     const listed = await callStatus(session);
     expect(listed.backendState).toBe('running');
