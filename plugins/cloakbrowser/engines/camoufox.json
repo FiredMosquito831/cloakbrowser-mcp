@@ -11,7 +11,7 @@
   "requirements": [
     "uv (pinned 0.13.5): an explicit UV/UV_BIN or a working uv on PATH is used, otherwise the pinned release is downloaded into the plugin data directory and SHA-256 verified",
     "Plugin-managed CPython 3.13.17 (installed by uv under the plugin data directory; UV_PYTHON or PYTHON override)",
-    "camoufox-playwright-mcp==0.1.5 (installed into <plugin data>/venvs/camoufox on first start; CAMOUFOX_MCP_PACKAGE override)",
+    "camoufox-playwright-mcp==0.1.5 plus its Python MCP stack fastmcp==3.4.7 and mcp==1.29.0 (installed into <plugin data>/venvs/camoufox on first start; CAMOUFOX_MCP_PACKAGE overrides the wrapper pin only). The stack is pinned to the wrapper's own uv.lock because its pyproject.toml declares fastmcp>=3.4.2 with no upper bound: fastmcp 4.x serves the 2026-07-28 protocol era, where each request gets a new session id and the wrapper relaunches the browser on every tool call",
     "Camoufox build v156.0.1-beta.39 (one-time ~1.3 GB download, ~2.4 GB on disk)"
   ],
   "toolSupport": {
@@ -39,5 +39,5 @@
     "licence_key",
     "engine_version"
   ],
-  "notes": "Stealth Firefox via camoufox-playwright-mcp 0.1.5. 68 of the 72 canonical browser tools; portable by default. Needs no system Python or uv: the launcher provisions a pinned uv, a managed Python and a venv under the plugin data directory on first start. No CDP."
+  "notes": "Stealth Firefox via camoufox-playwright-mcp 0.1.5. 68 of the 72 canonical browser tools; portable by default. Needs no system Python or uv: the launcher provisions a pinned uv, a managed Python and a venv under the plugin data directory on first start. No CDP. The venv pins the Python MCP stack (fastmcp==3.4.7, mcp==1.29.0) to the wrapper's uv.lock; without that pin fastmcp 4.x answers in the 2026-07-28 protocol era, whose per-request session id makes the wrapper start a new browser on every tool call. Revisit the pin when upstream bounds fastmcp itself or keys its browser backend by a stable id."
 }

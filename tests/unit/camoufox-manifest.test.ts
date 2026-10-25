@@ -36,9 +36,19 @@ interface RegistryModule {
   ): string | null;
 }
 
+interface CamoufoxLauncherModule {
+  venvPackages(spec: string): string[];
+}
+
 const registry = (await import(
   new URL('../../plugins/cloakbrowser/engine-registry.mjs', import.meta.url).href
 )) as unknown as RegistryModule;
+
+// The launcher is imported, not spawned: it runs main() only when invoked as a
+// file, so importing the module here provisions nothing.
+const camoufoxLauncher = (await import(
+  new URL('../../plugins/cloakbrowser/launch-camoufox.mjs', import.meta.url).href
+)) as unknown as CamoufoxLauncherModule;
 
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 const pluginRoot = path.join(repoRoot, 'plugins', 'cloakbrowser');
@@ -148,5 +158,60 @@ describe('camoufox engine manifest', () => {
     expect(env.CAMOUFOX_BROWSER_BUILD).toMatch(/^v\d+\.\d+\.\d+-beta\.\d+$/);
     expect(manifest.requirements?.join(' ')).toContain(env.CAMOUFOX_MCP_PACKAGE);
     expect(manifest.requirements?.join(' ')).toContain(env.CAMOUFOX_BROWSER_BUILD);
+  });
+});
+
+// 2.9.2: the wrapper's pyproject.toml declares `fastmcp>=3.4.2` with no upper
+// bound, and an unpinned `uv pip install` therefore resolves fastmcp 4.x, whose
+// 2026-07-28 protocol era gives every request a new session id and makes the
+// wrapper relaunch the browser on each tool call. The venv pins the stack the
+// wrapper's own uv.lock resolves. This test is the pin's regression guard: it
+// fails if the pins disappear or drift to another major.
+describe('camoufox provisioned Python stack', () => {
+  const wrapperSpec = 'camoufox-playwright-mcp==0.1.5';
+
+  it('installs the wrapper with the fastmcp and mcp pins from the wrapper lock', () => {
+    expect(camoufoxLauncher.venvPackages(wrapperSpec)).toEqual([
+      wrapperSpec,
+      'fastmcp==3.4.7',
+      'mcp==1.29.0',
+    ]);
+  });
+
+  it('pins every entry exactly, so no entry can resolve to another version', () => {
+    for (const spec of camoufoxLauncher.venvPackages(wrapperSpec)) {
+      expect(spec).toMatch(/^[A-Za-z0-9][A-Za-z0-9._-]*==\d+\.\d+\.\d+$/);
+    }
+  });
+
+  it('keeps fastmcp on the 3.x line that serves the handshake era', () => {
+    const fastmcp = camoufoxLauncher.venvPackages(wrapperSpec).find((spec) => spec.startsWith('fastmcp=='))!;
+    expect(fastmcp).toBe('fastmcp==3.4.7');
+    const major = Number(fastmcp.slice('fastmcp=='.length).split('.')[0]);
+    expect(major).toBeLessThan(4);
+  });
+
+  it('keeps the pinned stack when CAMOUFOX_MCP_PACKAGE overrides the wrapper', () => {
+    expect(camoufoxLauncher.venvPackages('camoufox-playwright-mcp==0.2.0')).toEqual([
+      'camoufox-playwright-mcp==0.2.0',
+      'fastmcp==3.4.7',
+      'mcp==1.29.0',
+    ]);
+  });
+
+  it('feeds that list to the venv, so the marker changes and old venvs rebuild', () => {
+    const source = readFileSync(path.join(pluginRoot, 'launch-camoufox.mjs'), 'utf8');
+    expect(source).toContain('packages: venvPackages(spec)');
+    expect(source).not.toContain('packages: [spec]');
+  });
+
+  it('states the pinned stack and its source in the manifest requirements and notes', () => {
+    const requirements = (manifest.requirements ?? []).join(' ');
+    expect(requirements).toContain('fastmcp==3.4.7');
+    expect(requirements).toContain('mcp==1.29.0');
+    expect(requirements).toContain('uv.lock');
+    expect(requirements).toContain('CAMOUFOX_MCP_PACKAGE overrides the wrapper pin only');
+    expect(manifest.notes).toContain('fastmcp==3.4.7');
+    expect(manifest.notes).toContain('mcp==1.29.0');
   });
 });
