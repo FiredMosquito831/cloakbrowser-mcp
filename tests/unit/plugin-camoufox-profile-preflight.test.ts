@@ -720,19 +720,29 @@ async function toolNames(session: BrokerSession): Promise<string[]> {
 }
 
 describe('broker engine-lock preflight', () => {
-  function setupSynthetic(engine: string): { dataDir: string; profileDir: string; session: BrokerSession } {
+  // The broker reads the lock once, before it reads stdin, so the fixture must
+  // exist before the spawn: writing it after startBroker() is a race that a fast
+  // Linux runner loses (seen on ubuntu-latest node 22 in PR #31's first run).
+  function setupSynthetic(
+    engine: string,
+    prepare?: (profileDir: string) => void,
+  ): { dataDir: string; profileDir: string; session: BrokerSession } {
     const root = tempRoot('pr-camoufox-preflight-broker-');
     const plugin = createLockPlugin(root);
     const dataDir = createSyntheticRuntime(path.join(root, 'data'));
     const profileDir = path.join(dataDir, 'profiles', engine, 'default');
     mkdirSync(profileDir, { recursive: true });
+    if (prepare !== undefined) {
+      prepare(profileDir);
+    }
     const session = startBroker({ dataDir, engine, pluginDir: plugin });
     return { dataDir, profileDir, session };
   }
 
   it('refuses to spawn when the engine lock names a live pid and reports it', async () => {
-    const { profileDir, session } = setupSynthetic('lock-engine');
-    writeFileSync(path.join(profileDir, 'owner.lock'), `${process.pid}\n`);
+    const { profileDir, session } = setupSynthetic('lock-engine', (dir) => {
+      writeFileSync(path.join(dir, 'owner.lock'), `${process.pid}\n`);
+    });
     const instructions = await initialize(session);
     expect(instructions).toContain(profileDir);
     expect(instructions).toContain(path.join(profileDir, 'owner.lock'));
@@ -759,14 +769,15 @@ describe('broker engine-lock preflight', () => {
   });
 
   it('allows the start and reports stale when the engine lock pid is gone', async () => {
-    const { profileDir, session } = setupSynthetic('lock-engine');
-    const pid = deadPid(tempRoot('pr-camoufox-preflight-broker-dead-'));
-    writeFileSync(path.join(profileDir, 'owner.lock'), `${pid}\n`);
+    const dead = deadPid(tempRoot('pr-camoufox-preflight-broker-dead-'));
+    const { session } = setupSynthetic('lock-engine', (dir) => {
+      writeFileSync(path.join(dir, 'owner.lock'), `${dead}\n`);
+    });
     const instructions = await initialize(session);
     expect(instructions).toBe('');
     expect(await toolNames(session)).toContain('browser_navigate');
     const caps = await payload(session, 'browser_capabilities');
-    expect(caps.engineProfileLock).toMatchObject({ state: 'stale', owner: { pid } });
+    expect(caps.engineProfileLock).toMatchObject({ state: 'stale', owner: { pid: dead } });
     expect(caps.profileLock).toMatchObject({ state: 'free' });
     expect(session.stderr()).toContain('engine profile lock');
     expect(session.stderr()).toContain('is stale');
@@ -781,8 +792,9 @@ describe('broker engine-lock preflight', () => {
   });
 
   it('allows the start with a note when the engine lock is malformed', async () => {
-    const { profileDir, session } = setupSynthetic('lock-engine');
-    writeFileSync(path.join(profileDir, 'owner.lock'), 'not a pid\n');
+    const { session } = setupSynthetic('lock-engine', (dir) => {
+      writeFileSync(path.join(dir, 'owner.lock'), 'not a pid\n');
+    });
     await initialize(session);
     expect(await toolNames(session)).toContain('browser_navigate');
     const caps = await payload(session, 'browser_capabilities');
@@ -794,8 +806,9 @@ describe('broker engine-lock preflight', () => {
   });
 
   it('adds no engineProfileLock key for an engine without the descriptor', async () => {
-    const { profileDir, session } = setupSynthetic('plain-engine');
-    writeFileSync(path.join(profileDir, 'owner.lock'), `${process.pid}\n`);
+    const { session } = setupSynthetic('plain-engine', (dir) => {
+      writeFileSync(path.join(dir, 'owner.lock'), `${process.pid}\n`);
+    });
     await initialize(session);
     expect(await toolNames(session)).toContain('browser_navigate');
     const caps = await payload(session, 'browser_capabilities');
