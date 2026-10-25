@@ -11,9 +11,9 @@
 // This tool only ever creates its own destination directory. It never renames,
 // moves, overwrites or deletes a profile; a failure removes only what this run
 // created. It copies no lock, no Chromium singleton file and no cache, so the
-// copy starts cleanly. Names, paths, exclusion rules and the per-account proxy
-// file all follow lib/profile.mjs and the broker: the same account rule, the
-// same profiles/<engine>/<name> layout and the same "default" mapping.
+// copy starts cleanly. Names and paths follow lib/profile.mjs and the broker:
+// the same account rule, the same profiles/<engine>/<name> layout and the same
+// "default" mapping.
 //
 // Output never contains a file's contents. It reports paths, counts and bytes
 // only, and anything that looks like a URL credential is redacted.
@@ -24,7 +24,6 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { loadEngineConfiguration, manifestProfileApplies, resolveLauncherName } from '../engine-registry.mjs';
 import {
   accountNameError,
-  DEFAULT_PROFILE_NAME,
   PROFILE_LOCK_FILENAME,
   readProfileLock,
   redactSecrets,
