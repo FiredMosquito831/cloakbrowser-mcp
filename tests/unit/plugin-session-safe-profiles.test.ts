@@ -895,7 +895,12 @@ describe('broker profile preflight', () => {
     mkdirSync(workspace, { recursive: true });
     const session = startBroker({ dataDir, isolation: 'workspace', cwd: workspace });
     const initialized = await initialize(session);
-    expect(initialized.result?.instructions).toBeUndefined();
+    // A healthy start carries no profile text; the 2.9.5 artifact sentence is the
+    // only instruction, and it names the workspace cwd.
+    expect(initialized.result?.instructions).toContain(
+      `Browser artifacts (screenshots, traces, downloads) go to ${path.join(workspace, '.playwright-mcp')}`,
+    );
+    expect(initialized.result?.instructions).not.toContain('profile_isolation');
     expect(await toolNames(session)).toContain('browser_navigate');
     const expected = path.join(dataDir, 'profiles', 'cloak', profile.workspaceProfileName(workspace));
     const caps = await capabilities(session);

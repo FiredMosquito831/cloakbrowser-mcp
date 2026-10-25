@@ -96,8 +96,8 @@ const registry = (await import(
 
 // The 2.9.3 cloak-engine payload keys, captured from a pristine broker built from
 // origin/main 62c48cd with the same stub backend (.scratch/pr-camoufox-preflight/
-// baseline/cloak-baseline.json). An engine that declares no profileLock must
-// produce exactly this shape: the new check is opt-in.
+// baseline/cloak-baseline.json). An engine that declares no profileLock must not
+// gain an engineProfileLock key: the check is opt-in.
 const CAPABILITIES_KEYS_293 = [
   'engine',
   'label',
@@ -148,6 +148,19 @@ const CAPABILITIES_KEYS_293 = [
   'profileApplies',
   'profileFallback',
   'profileLock',
+];
+
+// 2.9.5 appends four diagnostics keys to browser_capabilities for every engine:
+// the server cwd, the effective artifact directory and the client roots, plus the
+// reason when the roots probe could not read them. browser_engine_status is
+// unchanged. The test clients declare no roots capability, so clientRootsError is
+// present on every payload here.
+const CAPABILITIES_KEYS_295 = [
+  ...CAPABILITIES_KEYS_293,
+  'serverCwd',
+  'outputDir',
+  'clientRoots',
+  'clientRootsError',
 ];
 
 const STATUS_KEYS_293 = [
@@ -774,7 +787,9 @@ describe('broker engine-lock preflight', () => {
       writeFileSync(path.join(dir, 'owner.lock'), `${dead}\n`);
     });
     const instructions = await initialize(session);
-    expect(instructions).toBe('');
+    // The stale lock adds nothing; the 2.9.5 artifact sentence is the only text.
+    expect(instructions).toContain('Browser artifacts (screenshots, traces, downloads) go to');
+    expect(instructions).not.toContain('owner.lock');
     expect(await toolNames(session)).toContain('browser_navigate');
     const caps = await payload(session, 'browser_capabilities');
     expect(caps.engineProfileLock).toMatchObject({ state: 'stale', owner: { pid: dead } });
@@ -813,13 +828,13 @@ describe('broker engine-lock preflight', () => {
     expect(await toolNames(session)).toContain('browser_navigate');
     const caps = await payload(session, 'browser_capabilities');
     const statusPayload = await payload(session, 'browser_engine_status');
-    expect(Object.keys(caps)).toEqual(CAPABILITIES_KEYS_293);
+    expect(Object.keys(caps)).toEqual(CAPABILITIES_KEYS_295);
     expect(Object.keys(statusPayload)).toEqual(STATUS_KEYS_293);
     expect('engineProfileLock' in caps).toBe(false);
     expect('engineProfileLock' in statusPayload).toBe(false);
   });
 
-  it('keeps the real cloak engine payloads byte-identical to 2.9.3', async () => {
+  it('keeps every pre-existing cloak payload key and adds only the 2.9.5 diagnostics', async () => {
     const root = tempRoot('pr-camoufox-preflight-cloak-');
     const dataDir = createCloakRuntime(path.join(root, 'data'));
     const session = startBroker({ dataDir, engine: 'cloak', pluginDir });
@@ -827,7 +842,7 @@ describe('broker engine-lock preflight', () => {
     expect(await toolNames(session)).toContain('browser_navigate');
     const caps = await payload(session, 'browser_capabilities');
     const statusPayload = await payload(session, 'browser_engine_status');
-    expect(Object.keys(caps)).toEqual(CAPABILITIES_KEYS_293);
+    expect(Object.keys(caps)).toEqual(CAPABILITIES_KEYS_295);
     expect(Object.keys(statusPayload)).toEqual(STATUS_KEYS_293);
     expect(caps.profileLock).toMatchObject({ state: 'free' });
     expect(statusPayload.profileLock).toMatchObject({ state: 'free' });
