@@ -49,6 +49,22 @@ const EMPTY_OPTIONAL_VARS = [
   'CAMOUFOX_BINARY',
 ];
 
+// mcp-camoufox has no file-path tools and no allowlist, so it never reads
+// PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS (manifest ignoredSettings says
+// so). The variable is still normalised here: the setting defaults to false and
+// Claude Code substitutes that default as "false", so dropping anything not
+// explicitly on keeps this engine's child environment byte-identical to 2.9.5.
+const UNRESTRICTED_FILE_ACCESS_VAR = 'PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS';
+
+function applyUnrestrictedFileAccess(env) {
+  const value = (env[UNRESTRICTED_FILE_ACCESS_VAR] ?? '').trim().toLowerCase();
+  if (value === 'true' || value === '1') {
+    env[UNRESTRICTED_FILE_ACCESS_VAR] = 'true';
+  } else {
+    delete env[UNRESTRICTED_FILE_ACCESS_VAR];
+  }
+}
+
 function log(message) {
   process.stderr.write(`${LOG_PREFIX} ${message}\n`);
 }
@@ -131,6 +147,7 @@ export function buildChildEnv(source, platform = process.platform) {
       delete env[name];
     }
   }
+  applyUnrestrictedFileAccess(env);
   const profile = env.CAMOUFOX_PROFILE?.trim();
   if (profile !== undefined && profile !== '' && !PROFILE_PATTERN.test(profile)) {
     fail(

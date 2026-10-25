@@ -103,6 +103,7 @@ const CLOAKBROWSER_SETTINGS = [
   'licence_key',
   'engine_version',
   'output_dir',
+  'allow_unrestricted_file_access',
 ].sort();
 
 const CAMOUFOX_SETTINGS = [
@@ -122,6 +123,7 @@ const CAMOUFOX_SETTINGS = [
   'proxy_server',
   'proxy_bypass',
   'output_dir',
+  'allow_unrestricted_file_access',
 ].sort();
 
 describe('marketplace integrity', () => {

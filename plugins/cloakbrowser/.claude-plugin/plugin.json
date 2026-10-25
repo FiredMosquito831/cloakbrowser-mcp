@@ -1,7 +1,7 @@
 {
   "name": "cloakbrowser",
   "displayName": "CloakBrowser",
-  "version": "2.9.5",
+  "version": "2.9.6",
   "description": "CloakBrowser stealth Chromium through the Playwright MCP tool contract, via cloakbrowser-mcp.",
   "author": {
     "name": "FiredMosquito831"
@@ -177,6 +177,12 @@
       "title": "Artifacts directory",
       "description": "Where Playwright MCP writes screenshots, traces and session files. It is created if it does not exist. Leave empty for the default.",
       "default": ""
+    },
+    "allow_unrestricted_file_access": {
+      "type": "boolean",
+      "title": "Unrestricted file access",
+      "description": "Remove Playwright's file-access allowlist for tool-chosen paths and unblock file:// navigation, so the model can read and write any file your operating-system user can, not only the Artifacts directory and the workspace root. A deliberate security trade-off: a prompt-injected page could make the model read or overwrite private files. Leave this off unless you need a path outside those roots. Applies to the cloak, playwright, camoufox and kameleo engines; the camoufox-native engine has no file-path tools and ignores it.",
+      "default": false
     }
   }
 }
