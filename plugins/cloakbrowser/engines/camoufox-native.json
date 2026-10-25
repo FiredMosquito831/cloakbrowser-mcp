@@ -199,5 +199,5 @@
     "groupSwitchesApply": false
   },
   "profileApplies": false,
-  "notes": "Camoufox native via PyPI mcp-camoufox 0.4.5, fetched at first start into a plugin-managed venv (never bundled; licence FSL-1.1-MIT). 27 tools; not the npm mcp-camoufox project, which is a different 133-tool package. The broker renames 16 honest aliases to canonical browser_* names and exposes 9 native-only tools under camoufox_native_. Portable (default) exposes 14 canonical + 2 meta = 16 tools; full exposes 16 canonical + 9 prefixed = 25, plus 2 meta = 27. Ten portable verbs are absent with reasons. The daemon is fixed off, the browser build is pinned in the launcher, and the app downloads the browser on the first tool call."
+  "notes": "Camoufox native via PyPI mcp-camoufox 0.4.5, fetched at first start into a plugin-managed venv (never bundled; licence FSL-1.1-MIT). 27 tools; not the npm mcp-camoufox project, which is a different 133-tool package. The broker renames 16 honest aliases to canonical browser_* names and exposes 9 native-only tools under camoufox_native_. Portable (default) exposes 14 canonical + 3 meta = 17 tools; full exposes 16 canonical + 9 prefixed = 25, plus 3 meta = 28. Ten portable verbs are absent with reasons. The daemon is fixed off, the browser build is pinned in the launcher, and the app downloads the browser on the first tool call."
 }

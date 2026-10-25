@@ -93,6 +93,7 @@ describe('shared plugin core', () => {
       'launch-kameleo.mjs',
       'launch.mjs',
       'scripts/profile-copy.mjs',
+      'scripts/profile-default.mjs',
     ]);
     for (const relative of sync.CORE_FILES) {
       expect(existsSync(path.join(coreRoot, relative))).toBe(true);

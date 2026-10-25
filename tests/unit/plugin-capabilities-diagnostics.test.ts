@@ -338,12 +338,13 @@ describe('browser_capabilities artifact diagnostics', () => {
     expect(session.serverRequests()[0]?.id).toBe(PROBE_ID);
 
     // The probe changes no tool filtering: the surface is still the three stub
-    // tools plus the two meta-tools, and a tool call still works.
+    // tools plus the three meta-tools, and a tool call still works.
     const list = await session.request('tools/list', {});
     expect(list.result?.tools?.map((tool) => tool.name)).toEqual([
       ...STUB_TOOLS,
       'browser_capabilities',
       'browser_engine_status',
+      'browser_profiles',
     ]);
     const call = await session.request('tools/call', {
       name: 'browser_navigate',
@@ -482,18 +483,44 @@ describe('browser_capabilities artifact diagnostics', () => {
     await session.request('tools/list', {});
     const actual = normalize(await capabilities(session), root) as Record<string, unknown>;
 
-    const newKeys = ['serverCwd', 'outputDir', 'clientRoots', 'clientRootsError'];
+    // 2.10.0 appends the default-profile pointer facts after the artifact keys.
+    const newKeys = [
+      'serverCwd',
+      'outputDir',
+      'clientRoots',
+      'clientRootsError',
+      'profileDefault',
+      'profileDefaultSource',
+      'profileDefaultPath',
+    ];
     expect(Object.keys(actual)).toEqual([...Object.keys(fixture), ...newKeys]);
     const payload = comparable(actual) as Record<string, unknown>;
     const baseline = comparable(fixture) as Record<string, unknown>;
     for (const record of [payload, baseline]) {
       record.engineChoices = [...(record.engineChoices as string[])].sort();
     }
+    // 2.10.0 adds one broker meta-tool. The three baseline values that count the
+    // surface change with it, so they are asserted exactly against the 2.9.4
+    // values instead of compared blindly.
+    const metaCountKeys = ['metaToolCount', 'metaTools', 'exposedToolCount'];
     for (const [key, value] of Object.entries(baseline)) {
+      if (metaCountKeys.includes(key)) {
+        continue;
+      }
       expect(payload[key], `capability "${key}" changed`).toEqual(value);
     }
+    expect(payload.metaToolCount).toBe(3);
+    expect(payload.metaTools).toEqual([
+      'browser_capabilities',
+      'browser_engine_status',
+      'browser_profiles',
+    ]);
+    expect(payload.exposedToolCount).toBe((baseline.exposedToolCount as number) + 1);
     expect(payload.serverCwd).toBe('<ROOT>/cwd');
     expect(payload.outputDir).toBe('<ROOT>/cwd/.playwright-mcp');
+    expect(payload.profileDefault).toBeNull();
+    expect(payload.profileDefaultSource).toBe('none');
+    expect(payload.profileDefaultPath).toBe('<ROOT>/data/profiles/cloak/.default');
   });
 
   it('reports no artifact directory for an engine that ignores output_dir', async () => {

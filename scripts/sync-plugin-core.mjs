@@ -37,6 +37,7 @@ export const CORE_FILES = Object.freeze([
   'launch-kameleo.mjs',
   'launch.mjs',
   'scripts/profile-copy.mjs',
+  'scripts/profile-default.mjs',
 ]);
 
 export const CORE_ROOT = 'shared/core';

@@ -343,7 +343,7 @@ describe('normal backend status stays byte-identical', () => {
     expect(Object.hasOwn(listed, 'backendAnswered')).toBe(false);
 
     const list = await session.request('tools/list', {});
-    expect(list.result?.tools).toHaveLength(STUB_TOOLS.length + 2);
+    expect(list.result?.tools).toHaveLength(STUB_TOOLS.length + 3);
 
     const call = await session.request('tools/call', {
       name: 'browser_navigate',
