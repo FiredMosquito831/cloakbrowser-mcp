@@ -21,7 +21,12 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, rmdirSync, rmSync, st
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { loadEngineConfiguration, manifestProfileApplies, resolveLauncherName } from '../engine-registry.mjs';
+import {
+  DEFAULT_ENGINE,
+  loadEngineConfiguration,
+  manifestProfileApplies,
+  resolveLauncherName,
+} from '../engine-registry.mjs';
 import {
   accountNameError,
   PROFILE_LOCK_FILENAME,
@@ -35,7 +40,7 @@ const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const PLUGIN_ROOT = path.dirname(path.dirname(SCRIPT_PATH));
 const LOG_PREFIX = '[profile-copy]';
 
-export const DEFAULT_COPY_ENGINE = 'cloak';
+export const DEFAULT_COPY_ENGINE = DEFAULT_ENGINE;
 export const FALLBACK_DATA_DIR_NAME = '.cloakbrowser-mcp-plugin';
 
 // Chromium's process-singleton files. They name a live browser instance on this
