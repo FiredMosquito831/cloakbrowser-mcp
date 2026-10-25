@@ -688,6 +688,11 @@ describe('broker default-profile pointer', () => {
       profileDir: path.join(dataDir, 'profiles', 'default'),
       proxy: null,
     });
+    // A pointer broken after the start is visible on the next call; reads add no
+    // log line (only the start reads and logs once).
+    writePointer(dataDir, 'bad/name\n');
+    expect((await profilesPayload(session)).pointer).toMatchObject({ state: 'invalid', name: null });
+    expect(session.stderr().split('does not name a valid profile').length - 1).toBe(0);
   });
 
   it('falls through an invalid pointer to the workspace profile when isolation is workspace', async () => {
@@ -716,7 +721,7 @@ describe('broker default-profile pointer', () => {
       profileDir: path.join(dataDir, 'profiles', 'cloak', 'work'),
       proxy: 'http://proxy.example:8080',
     });
-    expect(session.stderr()).toContain('beside the default-profile profile');
+    expect(session.stderr()).toContain('beside the profile named by the default-profile pointer');
   });
 });
 
@@ -805,6 +810,14 @@ describe('browser_profiles meta-tool', () => {
     expect(await effectiveEnvironment(session)).toEqual(before);
     // The list action re-reads the pointer at call time, so it sees the write.
     expect((await profilesPayload(session)).pointer).toMatchObject({ name: 'work', state: 'present' });
+    // browser_capabilities re-reads it too: the pointer report is current even
+    // though profileSource still names what THIS start used.
+    const capsAfter = await capabilities(session);
+    expect(capsAfter).toMatchObject({
+      profileSource: 'default',
+      profileDefault: 'work',
+      profileDefaultSource: 'pointer',
+    });
 
     const restarted = startBroker({ dataDir });
     await initialize(restarted);
@@ -942,6 +955,28 @@ describe('profile-default CLI', () => {
     expect(native.ok).toBe(false);
     expect(native.error?.code).toBe('engine-no-profiles');
     expect(native.error?.message).toContain('profileApplies: false');
+  });
+
+  it('uses the camoufox plugin copy with --engine camoufox, and rejects its default cloak', () => {
+    const root = tempRoot('pr-default-cli-camoufox-');
+    const dataDir = path.join(root, 'data');
+    const camoufoxPlugin = path.join(repoRoot, 'plugins', 'camoufox');
+    // The camoufox plugin ships only the camoufox engine, so the script's default
+    // engine is absent there and must be named explicitly (same rule as
+    // profile-copy.mjs).
+    const wrong = cli.runProfileDefault({ dataDir, pluginRoot: camoufoxPlugin, env: {}, home: root });
+    expect(wrong.ok).toBe(false);
+    expect(wrong.error?.code).toBe('unknown-engine');
+    const right = cli.runProfileDefault({
+      engine: 'camoufox',
+      dataDir,
+      set: 'work',
+      pluginRoot: camoufoxPlugin,
+      env: {},
+      home: root,
+    });
+    expect(right.ok).toBe(true);
+    expect(readFileSync(pointerFile(dataDir, 'camoufox'), 'utf8')).toBe('work\n');
   });
 
   it('parses arguments and rejects a conflicting pair', () => {

@@ -414,7 +414,9 @@ function resolveProxy() {
     if (profileResolution.profileSource === 'account') {
       log(`using the account proxy file for account "${profileResolution.account}"`);
     } else if (profileResolution.profileSource === 'pointer') {
-      log(`using the proxy file beside the default-profile profile "${profilePointer.name}"`);
+      log(
+        `using the proxy file beside the profile named by the default-profile pointer (${profilePointer.name})`,
+      );
     } else if (profileResolution.profileSource === 'workspace') {
       log('using the proxy file beside the workspace profile');
     } else {
@@ -1014,6 +1016,10 @@ function capabilitiesPayload(clientRoots) {
   const counts = state.toolsListed ? toolCounts() : null;
   const supported = state.toolsListed ? supportedCounts() : null;
   const accounts = availableAccounts();
+  const pointerNow =
+    state.profile.appliesToEngine && state.engine !== null
+      ? readProfileDefaultPointer(state.engineId, PLUGIN_DATA_DIR)
+      : null;
   const perToolSupport = {};
   if (state.toolsListed) {
     if (state.native) {
@@ -1114,26 +1120,26 @@ function capabilitiesPayload(clientRoots) {
     outputDir: OUTPUT_DIR,
     clientRoots: clientRoots.roots,
     ...(clientRoots.roots === null ? { clientRootsError: clientRoots.error ?? 'unavailable' } : {}),
-    // Default-profile pointer (2.10.0), additive and last. profileDefault is the
-    // name the pointer holds when the file is usable, otherwise null;
-    // profileDefaultSource says where that value stands ("pointer" is a usable
-    // file, "none" no file, "invalid" a file that is reported and ignored, null an
-    // engine whose profile the broker does not own); profileDefaultPath is the
-    // file the browser_profiles set-default action writes. Whether the pointer
-    // supplied this start's profile is profileSource === "pointer".
-    profileDefault: state.profile.pointer === null ? null : state.profile.pointer.name,
+    // Default-profile pointer (2.10.0), additive and last. It is re-read here so
+    // the report describes what the NEXT start will use, not what this start
+    // read (browser_profiles set-default can change it while the server runs).
+    // profileDefault is the name the pointer holds when the file is usable,
+    // otherwise null; profileDefaultSource says where that value stands ("pointer"
+    // is a usable file, "none" no file, "invalid" a file that is ignored, null an
+    // engine whose profile the broker does not own); profileDefaultPath is the file
+    // browser_profiles set-default writes. Whether the pointer supplied THIS
+    // start's profile is profileSource === "pointer".
+    profileDefault: pointerNow === null ? null : pointerNow.name,
     profileDefaultSource:
-      state.profile.pointer === null
+      pointerNow === null
         ? null
-        : state.profile.pointer.state === 'present'
+        : pointerNow.state === 'present'
           ? 'pointer'
-          : state.profile.pointer.state === 'missing'
+          : pointerNow.state === 'missing'
             ? 'none'
             : 'invalid',
-    profileDefaultPath: state.profile.pointer === null ? null : state.profile.pointer.path,
-    ...(state.profile.pointer === null || state.profile.pointer.error === null
-      ? {}
-      : { profileDefaultError: state.profile.pointer.error }),
+    profileDefaultPath: pointerNow === null ? null : pointerNow.path,
+    ...(pointerNow === null || pointerNow.error === null ? {} : { profileDefaultError: pointerNow.error }),
   };
 }
 
@@ -1267,13 +1273,19 @@ function pointerFacts(pointer) {
 }
 
 // The profiles that exist for this engine, from the same directory inventory and
-// the same 100-name cap browser_capabilities reports, plus the profile this
-// server is using (which a pointer may have named before its first launch).
-function availableProfiles() {
+// the same 100-name cap browser_capabilities reports, plus the name the pointer
+// holds (which may not have a directory yet: it is created on its first launch).
+function availableProfiles(pointerName = null) {
   const inventory = availableAccounts();
   const names = new Set(inventory.names);
-  if (state.profile.source === 'pointer' && state.profile.pointer !== null) {
-    names.add(state.profile.pointer.name);
+  const named =
+    typeof pointerName === 'string' && pointerName !== ''
+      ? pointerName
+      : state.profile.source === 'pointer' && state.profile.pointer !== null
+        ? state.profile.pointer.name
+        : null;
+  if (typeof named === 'string' && named !== '') {
+    names.add(named);
   }
   const sorted = [...names].filter((name) => typeof name === 'string').sort();
   return { names: sorted.slice(0, MAX_AVAILABLE_ACCOUNTS), count: sorted.length };
@@ -1306,7 +1318,7 @@ function respondProfiles(id, args) {
       state.profile.appliesToEngine && state.engine !== null
         ? readProfileDefaultPointer(state.engineId, PLUGIN_DATA_DIR)
         : null;
-    const profiles = availableProfiles();
+    const profiles = availableProfiles(pointer === null ? null : pointer.name);
     sendToolPayload(id, {
       action: 'list',
       engine: state.engineId,
@@ -1348,7 +1360,7 @@ function respondProfiles(id, args) {
     }
     const pointer = readProfileDefaultPointer(state.engineId, PLUGIN_DATA_DIR);
     const facts = pointerFacts(pointer);
-    const profiles = availableProfiles();
+    const profiles = availableProfiles(name);
     sendToolPayload(id, {
       action: 'set-default',
       ok: true,
