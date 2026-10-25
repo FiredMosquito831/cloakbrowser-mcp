@@ -123,10 +123,35 @@ A proxy can be sticky per account with a file beside the profile instead of the 
 
 ### Backup, rename and delete (manual)
 
-- **Backup:** close Claude Code (at least the browser), then copy the account directory and its `.proxy` file. A live profile contains lock files and can be copied inconsistently. The fingerprint seed sits inside the directory; keeping it keeps the fingerprint.
+- **Backup:** close Claude Code (at least the browser), then copy the account directory and its `.proxy` file. A live profile contains lock files and can be copied inconsistently. The fingerprint seed sits inside the directory; keeping it keeps the fingerprint. For a checked copy that skips locks and caches, use the copy tool below.
 - **Rename:** close the browser, rename the directory and the `.proxy` file, change Account profile (or Profile directory), and restart. Nothing is migrated for you.
 - **Delete:** close the browser, delete the directory and the `.proxy` file. Irreversible. There is no delete in the plugin.
 - To switch accounts: `/plugin` → Configure → set Account profile → restart Claude Code.
+
+### Copy a profile (safe copies)
+
+A copy branches an existing profile under a new account name with the same cookies, logins, local storage and fingerprint seed. Use it to experiment from a signed-in state, to keep a checked backup, or to start a second account from the same point. **A copy is not a new identity**: it presents the same fingerprint and the same sessions, so the one-account-per-profile rule still applies. It is not a way to move a session to a different account or to skip that account's sign-in.
+
+1. **Close the browser first.** The profile lock exists while a browser uses the directory and a live profile is not safe to copy. The tool refuses a source whose lock names a live process; a stale lock (owner gone) is ignored and is not copied. An unreadable lock also refuses the copy.
+2. Run the copy tool, from a checkout of this repository at the repository root:
+
+   ```powershell
+   node plugins/camoufox/scripts/profile-copy.mjs --engine camoufox --from default --to work2 `
+     --data-dir "$env:USERPROFILE\.claude\plugins\data\camoufox-cloakbrowser-mcp"
+   ```
+
+   An installed plugin carries the same script at `<plugin root>/scripts/profile-copy.mjs`, for example
+   `%USERPROFILE%\.claude\plugins\cache\cloakbrowser-mcp\camoufox\<version>\scripts\profile-copy.mjs`.
+   This plugin ships only the `camoufox` engine, so `--engine camoufox` is required: the tool's default engine is `cloak`, which this plugin does not contain and therefore rejects. The tool uses the same account rule and `profiles/camoufox/<name>` layout as the broker:
+   - `--data-dir <path>` names the plugin data root. In a Claude Code process it is `CLAUDE_PLUGIN_DATA`; a terminal normally does not have that variable, so pass the directory shown by `browser_capabilities.profileDir` two levels up — for this plugin `%USERPROFILE%\.claude\plugins\data\camoufox-cloakbrowser-mcp`. The fallback when nothing is set is `~/.cloakbrowser-mcp-plugin`, which is why the command above passes it explicitly.
+   - `--dry-run` lists the top-level entries and totals without creating anything; `--json` prints one machine-readable summary.
+   - `--from default --to work2` copies `profiles/camoufox/default` to `profiles/camoufox/work2`.
+3. **Set Account profile to the copy** (`work2` above) and restart Claude Code. The copy starts signed in wherever the source was signed in.
+4. **Copied:** cookies, logins, local storage, `Local State`, `Preferences`, and the fingerprint seed `.cloakbrowser-seed`. **Not copied:** the profile lock, Chromium singleton files (`SingletonLock`, `SingletonSocket`, `SingletonCookie`), caches (`Cache`, `Code Cache`, `GPUCache`, `GrShaderCache`, `GraphiteDawnCache`, `DawnCache`, `ShaderCache`, `Crashpad`), `*.tmp` entries and log directories. The engine rebuilds the caches on first use.
+5. **The optional `.proxy` file is not copied.** `profiles/camoufox/work2.proxy` does not appear: the file is a plaintext credential, so the tool never duplicates it silently. Copy it yourself (and `chmod 600` it on POSIX) only if the copy should use the same proxy.
+6. **Same identity, or a fresh one.** Because the seed is copied, the copy keeps the source fingerprint, which is what makes it useful. To give the copy a fresh fingerprint, close the browser and delete `<copy>/.cloakbrowser-seed` before the first start; the engine then writes a new seed. The copy tool never deletes or edits the seed for you.
+7. **No CloakBrowser seat is involved.** Camoufox is not Cloak-licensed; two Camoufox sessions can run on different profiles, each with its own process. The free CloakBrowser tier still allows one browser at a time, and a copy never adds a CloakBrowser seat.
+8. **Refusals are complete:** an invalid name, a missing source, an existing destination (never overwritten, never merged), a live or unreadable lock. A failed copy removes only the destination directory it created, never the source and never a directory another process made.
 
 ## Sign-in
 
@@ -191,7 +216,7 @@ This is one recorded run on this Windows host, not a general stealth validation.
 
 ## Updates and versions
 
-This plugin is version **2.8.0**, the same version as `cloakbrowser` while both share a generated core. This release adds session-safe profiles (`profile_isolation`, the lock preflight and the workspace fallback) without changing the default profile path. Update them separately:
+This plugin is version **2.9.0**, the same version as `cloakbrowser` while both share a generated core. This release adds the shared profile copy tool (`scripts/profile-copy.mjs`), which copies cookies, logins and the fingerprint seed to a new profile name while excluding the lock, Chromium singletons, caches and logs. The previous release added session-safe profiles (`profile_isolation`, the lock preflight and the workspace fallback) without changing the default profile path. Update them separately:
 
 ```bash
 claude plugin marketplace update
