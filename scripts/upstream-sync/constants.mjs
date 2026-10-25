@@ -50,6 +50,9 @@ export function gateCommands({ plugins = [] } = {}) {
     { label: 'pin guard', command: 'node', args: ['scripts/upstream-sync/run.mjs', 'pins', '--check'] },
     { label: 'static checks', command: 'npm', args: ['run', 'check:static'] },
     { label: 'unit and integration tests', command: 'npm', args: ['test'] },
+    // A sync can import fresh advisories (the 2026-10-25 sync pulled
+    // dompurify 3.4.16 through allure). Audit the whole tree, not only prod.
+    { label: 'audit dependencies', command: 'npm', args: ['audit', '--audit-level=high'] },
     { label: 'validate marketplace', command: 'claude', args: ['plugin', 'validate', '.'] },
     ...plugins.map((plugin) => ({
       label: `validate ${plugin}`,
