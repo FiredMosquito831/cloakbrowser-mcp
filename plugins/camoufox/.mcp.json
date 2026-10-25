@@ -21,7 +21,8 @@
       "PLAYWRIGHT_MCP_USER_DATA_DIR": "${user_config.profile_dir}",
       "PLAYWRIGHT_MCP_PROXY_SERVER": "${user_config.proxy_server}",
       "PLAYWRIGHT_MCP_PROXY_BYPASS": "${user_config.proxy_bypass}",
-      "PLAYWRIGHT_MCP_OUTPUT_DIR": "${user_config.output_dir}"
+      "PLAYWRIGHT_MCP_OUTPUT_DIR": "${user_config.output_dir}",
+      "PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS": "${user_config.allow_unrestricted_file_access}"
     }
   }
 }

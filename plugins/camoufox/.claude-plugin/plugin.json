@@ -1,7 +1,7 @@
 {
   "name": "camoufox",
   "displayName": "Camoufox",
-  "version": "2.9.5",
+  "version": "2.9.6",
   "description": "Camoufox stealth Firefox through the Playwright MCP tool contract. Provisions a pinned uv, a managed Python and the engine venv automatically; the pinned Camoufox browser build downloads on first use. Portable profile by default; no CDP.",
   "author": {
     "name": "FiredMosquito831"
@@ -107,6 +107,12 @@
       "title": "Artifacts directory",
       "description": "Where Playwright MCP writes screenshots, traces and session files. It is created if it does not exist. Leave empty for the default.",
       "default": ""
+    },
+    "allow_unrestricted_file_access": {
+      "type": "boolean",
+      "title": "Unrestricted file access",
+      "description": "Remove Playwright's file-access allowlist for tool-chosen paths and unblock file:// navigation, so the model can read and write any file your operating-system user can, not only the Artifacts directory and the client workspace root. A deliberate security trade-off: a prompt-injected page could make the model read or overwrite private files. Leave this off unless you need a path outside those roots.",
+      "default": false
     }
   }
 }

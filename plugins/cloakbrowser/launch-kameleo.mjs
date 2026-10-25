@@ -60,6 +60,24 @@ const DROPPED_VARS = [
 ];
 const EMPTY_OPTIONAL_VARS = ['PLAYWRIGHT_MCP_OUTPUT_DIR'];
 
+// Unrestricted file access is opt-in. The CLI reads this variable as true only
+// for "true" or "1" (playwright-core coreBundle configFromEnv/envToBoolean).
+// The plugin setting is a boolean whose default is false, and Claude Code
+// substitutes that default as the string "false", so anything not explicitly on
+// is dropped: the child environment for the default configuration stays
+// byte-identical to 2.9.5, when this variable did not exist. An explicit
+// "true"/"1" is passed as "true".
+const UNRESTRICTED_FILE_ACCESS_VAR = 'PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS';
+
+function applyUnrestrictedFileAccess(env) {
+  const value = (env[UNRESTRICTED_FILE_ACCESS_VAR] ?? '').trim().toLowerCase();
+  if (value === 'true' || value === '1') {
+    env[UNRESTRICTED_FILE_ACCESS_VAR] = 'true';
+  } else {
+    delete env[UNRESTRICTED_FILE_ACCESS_VAR];
+  }
+}
+
 function log(message) {
   process.stderr.write(`${LOG_PREFIX} ${message}\n`);
 }
@@ -136,6 +154,7 @@ export function buildChildEnv(source, endpoint) {
   for (const name of DROPPED_VARS) {
     delete env[name];
   }
+  applyUnrestrictedFileAccess(env);
   applyToolGroups(env);
   if (typeof endpoint === 'string' && endpoint !== '') {
     // Both spellings are passed: the flag is the documented CLI contract and

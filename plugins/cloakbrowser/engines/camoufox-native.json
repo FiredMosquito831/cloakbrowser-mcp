@@ -25,7 +25,8 @@
     "proxy_bypass",
     "licence_key",
     "engine_version",
-    "output_dir"
+    "output_dir",
+    "allow_unrestricted_file_access"
   ],
   "profileArgument": {
     "name": "profile",

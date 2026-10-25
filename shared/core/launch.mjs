@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { ensureNpmRuntime, resolveNpmPackage } from './lib/provision.mjs';
 
 const EMPTY_OPTIONAL_VARS = [
@@ -18,6 +19,24 @@ const EMPTY_OPTIONAL_VARS = [
   'CLOAKBROWSER_BINARY_PATH',
 ];
 
+// Unrestricted file access is opt-in. Upstream reads this variable as true only
+// for "true" or "1" (playwright-core coreBundle configFromEnv/envToBoolean; the
+// Camoufox wrapper's _env_bool accepts the same spellings). The plugin setting is
+// a boolean whose default is false, and Claude Code substitutes that default as
+// the string "false", so anything not explicitly on is dropped: the child
+// environment for the default configuration stays byte-identical to 2.9.5, when
+// this variable did not exist. An explicit "true"/"1" is passed as "true".
+const UNRESTRICTED_FILE_ACCESS_VAR = 'PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS';
+
+function applyUnrestrictedFileAccess(env) {
+  const value = (env[UNRESTRICTED_FILE_ACCESS_VAR] ?? '').trim().toLowerCase();
+  if (value === 'true' || value === '1') {
+    env[UNRESTRICTED_FILE_ACCESS_VAR] = 'true';
+  } else {
+    delete env[UNRESTRICTED_FILE_ACCESS_VAR];
+  }
+}
+
 const TOOL_GROUPS = [
   ['vision', 'CLOAK_TOOL_GROUP_VISION'],
   ['pdf', 'CLOAK_TOOL_GROUP_PDF'],
@@ -28,7 +47,7 @@ const TOOL_GROUPS = [
   ['config', 'CLOAK_TOOL_GROUP_CONFIG'],
 ];
 
-function buildChildEnv(source) {
+export function buildChildEnv(source) {
   const env = { ...source };
   for (const name of EMPTY_OPTIONAL_VARS) {
     const value = env[name];
@@ -36,6 +55,7 @@ function buildChildEnv(source) {
       delete env[name];
     }
   }
+  applyUnrestrictedFileAccess(env);
   return env;
 }
 
@@ -139,4 +159,9 @@ function main() {
   });
 }
 
-main();
+// Run only when invoked as the launcher, so the unit suite can import the pure
+// env helpers without provisioning a runtime or starting a backend.
+const invokedPath = process.argv[1] === undefined ? null : path.resolve(process.argv[1]);
+if (invokedPath !== null && import.meta.url === pathToFileURL(invokedPath).href) {
+  main();
+}

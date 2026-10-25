@@ -90,6 +90,7 @@ const IGNORED_SETTINGS = [
   'licence_key',
   'engine_version',
   'output_dir',
+  'allow_unrestricted_file_access',
 ];
 
 const NATIVE_ONLY = [
