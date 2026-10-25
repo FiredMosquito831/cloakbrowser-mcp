@@ -565,6 +565,7 @@ describe('broker account profiles', () => {
       ...STUB_TOOLS,
       'browser_capabilities',
       'browser_engine_status',
+      'browser_profiles',
     ]);
     const caps = await capabilities(session);
     expect(caps).toMatchObject({
@@ -594,6 +595,7 @@ describe('broker account profiles', () => {
       ...STUB_TOOLS,
       'browser_capabilities',
       'browser_engine_status',
+      'browser_profiles',
     ]);
     const caps = await capabilities(session);
     const expected = path.join(dataDir, 'profiles', 'cloak', 'alice');
@@ -634,6 +636,7 @@ describe('broker account profiles', () => {
     expect(list.result?.tools?.map((tool) => tool.name)).toEqual([
       'browser_capabilities',
       'browser_engine_status',
+      'browser_profiles',
     ]);
     const statusPayload = await status(session);
     expect(statusPayload.lastError).toBe(INVALID_NAME_MESSAGE);
@@ -687,6 +690,7 @@ describe('broker account profiles', () => {
     expect(list.result?.tools?.map((tool) => tool.name)).toEqual([
       'browser_capabilities',
       'browser_engine_status',
+      'browser_profiles',
     ]);
     const statusPayload = await status(session);
     expect(statusPayload.backendPid).toBeNull();

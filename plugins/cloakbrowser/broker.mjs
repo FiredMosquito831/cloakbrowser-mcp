@@ -4,7 +4,8 @@
 // One stdio MCP server in front of the existing launcher. It reads the engine id
 // from the environment, loads the matching manifest from ./engines, starts
 // launch.mjs for that engine and relays JSON-RPC in both directions. It also
-// owns the two broker meta-tools and the disabled-tools filter.
+// owns the three broker meta-tools, the default-profile pointer and the
+// disabled-tools filter.
 //
 // Protocol rules: stdout carries JSON-RPC lines only; every log goes to stderr.
 // Windows rules: no detached children, stdin EOF is the shutdown signal, and the
@@ -31,6 +32,7 @@ import {
 } from './engine-registry.mjs';
 import { enrichToolError, runtimeErrorHint, runtimeStatusFields } from './lib/attach.mjs';
 import {
+  accountNameError,
   accountProxyPath,
   backendEnvironment,
   DEFAULT_PROFILE_NAME,
@@ -38,17 +40,23 @@ import {
   engineLockBlocksStart,
   engineProfileLockFix,
   engineProfileLockMessage,
+  INVALID_ACCOUNT_HINT,
   lockBlocksStart,
+  profileDefaultPointerDir,
+  profileDefaultPointerPath,
   profileFallbackReason,
   profileLockFix,
   profileLockMessage,
   readAccountProxy,
   readEngineProfileLock,
+  readProfileDefaultPointer,
   readProfileLock,
   redactSecrets,
   resolveProfile,
   resolveProfileIsolation,
   selectFallbackProfile,
+  validateAccountName,
+  writeProfileDefaultPointer,
 } from './lib/profile.mjs';
 import {
   aliasSummary,
@@ -79,12 +87,12 @@ function protocolEraHint(reason) {
   return String(reason).includes(PROTOCOL_2026_MARKER) ? ` ${PROTOCOL_2026_HINT}` : '';
 }
 
-const META_TOOL_NAMES = new Set(['browser_capabilities', 'browser_engine_status']);
+const META_TOOL_NAMES = new Set(['browser_capabilities', 'browser_engine_status', 'browser_profiles']);
 const META_TOOLS = [
   {
     name: 'browser_capabilities',
     description:
-      'Report the selected browser engine, its Playwright MCP contract, the active tool profile, the backend tool count, per-tool support and how to change engines. It also reports the server working directory, the effective artifact directory and the MCP roots the client advertised, which together explain a file-access refusal. This is a local broker tool; it does not start a browser. When another session already uses the browser profile, it also reports the profile directory, the owning process and the fix.',
+      'Report the selected browser engine, its Playwright MCP contract, the active tool profile, the backend tool count, per-tool support and how to change engines. It also reports the default-profile pointer, the server working directory, the effective artifact directory and the MCP roots the client advertised, which together explain a file-access refusal. This is a local broker tool; it does not start a browser. When another session already uses the browser profile, it also reports the profile directory, the owning process and the fix.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
@@ -92,6 +100,26 @@ const META_TOOLS = [
     description:
       'Report the selected engine, backend process state, backend version when the handshake has completed, startup timing and the last error. A backend that rejected the initialize handshake but still answers tools reports `initializeRejected: true` and stays running. This is a local broker tool; it does not start a browser. When another session already uses the browser profile, it also reports the profile directory, the owning process and the fix.',
     inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'browser_profiles',
+    description:
+      'List the browser profiles of the selected engine and set the default profile for the next server start. "list" reports the engine, the available profiles (existing directories plus the pointer name), the current profile and its source, the default-profile pointer, the effective profile directory and the profile lock. "set-default" validates a profile name and writes it to the default-profile pointer next to the profiles; the change applies at the next server start, this session keeps its profile, and no browser is started. This is a local broker tool.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['list', 'set-default'],
+          description: 'What to do: "list" (the default) reports profiles, "set-default" writes the pointer.',
+        },
+        name: {
+          type: 'string',
+          description:
+            'Profile name for "set-default": letters, digits, ".", "_" or "-", starting with a letter or digit, up to 64 characters; "default" means the engine default. The change applies at the next server start.',
+        },
+      },
+    },
   },
 ];
 
@@ -221,6 +249,17 @@ if (profileIsolation.ignored !== null) {
 // profileApplies: false; the whole profile model is inert for it.
 const profileApplies = engine !== null && manifestProfileApplies(engine);
 
+// The default-profile pointer (2.10.0). It is read once here, next to the
+// profiles, and is only a candidate: resolveProfile applies it after profile_dir
+// and account, so an explicit setting always wins. A missing pointer is the
+// normal state; a broken one is reported and ignored, never fatal. The pointer
+// itself is reported by browser_capabilities and browser_profiles whether or not
+// it supplies this start's profile.
+const profilePointer = profileApplies ? readProfileDefaultPointer(engine.id, PLUGIN_DATA_DIR) : null;
+if (profilePointer !== null && profilePointer.error !== null) {
+  log(profilePointer.error);
+}
+
 // One profile per account. Resolution runs once, before the backend starts, and
 // its result feeds both the spawn environment and the meta-tools. With the
 // account, profile_dir and profile_isolation settings unset it resolves to
@@ -244,6 +283,7 @@ const profileResolution =
     : resolveProfile({
         account: rawAccount,
         profileDir: process.env.PLAYWRIGHT_MCP_USER_DATA_DIR,
+        pointer: profilePointer === null ? null : profilePointer.name,
         engineId: engine.id,
         dataDir: PLUGIN_DATA_DIR,
         launcherName: resolveLauncherName(engine),
@@ -252,6 +292,9 @@ const profileResolution =
         isolation: profileIsolation.mode,
         cwd: process.cwd(),
       });
+if (profileResolution.profileSource === 'pointer') {
+  log(`using the default profile "${profilePointer.name}" from ${profilePointer.path}`);
+}
 if (rawAccount.trim() !== '' && !rawAccount.includes('${') && profileResolution.accountApplies === false) {
   const ownSetting = engine?.profileArgument?.setting;
   log(
@@ -337,7 +380,7 @@ if (engineError === null && profileApplies) {
 // workspace profile, or the default profile when the broker sets nothing.
 function proxyCandidate() {
   const source = profileResolution.profileSource;
-  if (source === 'account' || source === 'workspace') {
+  if (source === 'account' || source === 'workspace' || source === 'pointer') {
     return profileResolution.profileDir;
   }
   return source === 'default' ? profileResolution.defaultProfileDir : null;
@@ -370,6 +413,10 @@ function resolveProxy() {
   if (result.value !== null) {
     if (profileResolution.profileSource === 'account') {
       log(`using the account proxy file for account "${profileResolution.account}"`);
+    } else if (profileResolution.profileSource === 'pointer') {
+      log(
+        `using the proxy file beside the profile named by the default-profile pointer (${profilePointer.name})`,
+      );
     } else if (profileResolution.profileSource === 'workspace') {
       log('using the proxy file beside the workspace profile');
     } else {
@@ -386,17 +433,26 @@ if (engineError === null && proxyResolution.error !== null) {
   engineError = proxyResolution.error;
 }
 
-// The broker creates the resolved account or workspace directory (it never
-// deletes, copies or migrates one). An explicit profile_dir is not created here:
-// launch.mjs has always created it, and its bytes are unchanged.
+// The broker creates the resolved account, pointer or workspace directory (it
+// never deletes, copies or migrates one). An explicit profile_dir is not created
+// here: launch.mjs has always created it, and its bytes are unchanged. A pointer
+// profile is created exactly like an account, so a pointer set before its first
+// launch works on that launch.
 if (
   engineError === null &&
-  (profileResolution.profileSource === 'account' || profileResolution.profileSource === 'workspace')
+  (profileResolution.profileSource === 'account' ||
+    profileResolution.profileSource === 'workspace' ||
+    profileResolution.profileSource === 'pointer')
 ) {
   try {
     mkdirSync(profileResolution.profileDir, { recursive: true });
   } catch (error) {
-    const label = profileResolution.profileSource === 'workspace' ? 'workspace' : 'account';
+    const label =
+      profileResolution.profileSource === 'workspace'
+        ? 'workspace'
+        : profileResolution.profileSource === 'pointer'
+          ? 'default-profile'
+          : 'account';
     engineError = `Cannot create the ${label} profile directory ${profileResolution.profileDir}: ${error.message}`;
   }
 }
@@ -496,7 +552,9 @@ const state = {
   profile: {
     account: profileResolution.account,
     dir:
-      profileResolution.profileSource === 'account' || profileResolution.profileSource === 'workspace'
+      profileResolution.profileSource === 'account' ||
+      profileResolution.profileSource === 'workspace' ||
+      profileResolution.profileSource === 'pointer'
         ? profileResolution.profileDir
         : null,
     source: profileResolution.profileSource,
@@ -511,6 +569,10 @@ const state = {
     // that declares none, and then no payload key is added.
     engineLock: engineProfileLock,
     fallback: profileFallback,
+    // The default-profile pointer as read at start: { path, exists, name, state,
+    // error }, or null for an engine whose profile the broker does not own. It is
+    // reported whether or not it supplied this start's profile.
+    pointer: profilePointer,
   },
   proxy: {
     source: proxyResolution.source,
@@ -954,6 +1016,10 @@ function capabilitiesPayload(clientRoots) {
   const counts = state.toolsListed ? toolCounts() : null;
   const supported = state.toolsListed ? supportedCounts() : null;
   const accounts = availableAccounts();
+  const pointerNow =
+    state.profile.appliesToEngine && state.engine !== null
+      ? readProfileDefaultPointer(state.engineId, PLUGIN_DATA_DIR)
+      : null;
   const perToolSupport = {};
   if (state.toolsListed) {
     if (state.native) {
@@ -1054,6 +1120,26 @@ function capabilitiesPayload(clientRoots) {
     outputDir: OUTPUT_DIR,
     clientRoots: clientRoots.roots,
     ...(clientRoots.roots === null ? { clientRootsError: clientRoots.error ?? 'unavailable' } : {}),
+    // Default-profile pointer (2.10.0), additive and last. It is re-read here so
+    // the report describes what the NEXT start will use, not what this start
+    // read (browser_profiles set-default can change it while the server runs).
+    // profileDefault is the name the pointer holds when the file is usable,
+    // otherwise null; profileDefaultSource says where that value stands ("pointer"
+    // is a usable file, "none" no file, "invalid" a file that is ignored, null an
+    // engine whose profile the broker does not own); profileDefaultPath is the file
+    // browser_profiles set-default writes. Whether the pointer supplied THIS
+    // start's profile is profileSource === "pointer".
+    profileDefault: pointerNow === null ? null : pointerNow.name,
+    profileDefaultSource:
+      pointerNow === null
+        ? null
+        : pointerNow.state === 'present'
+          ? 'pointer'
+          : pointerNow.state === 'missing'
+            ? 'none'
+            : 'invalid',
+    profileDefaultPath: pointerNow === null ? null : pointerNow.path,
+    ...(pointerNow === null || pointerNow.error === null ? {} : { profileDefaultError: pointerNow.error }),
   };
 }
 
@@ -1143,6 +1229,159 @@ function respondCapabilities(id) {
   );
 }
 
+// --- browser_profiles (2.10.0) ---------------------------------------------
+// A local broker tool. It never starts, stops or reconfigures the backend, and it
+// writes exactly one file: the default-profile pointer. That pointer applies at
+// the next server start (decision A2), so this session's profile never changes
+// under a running browser. Every read here is fresh, because this tool is the one
+// thing that can change the pointer while the server runs.
+
+// The engine's own profile directory for this start: what the lock preflight
+// read at start, recomputed from the same three values.
+function currentProfileDir() {
+  return effectiveProfileDir({
+    profileDir: state.profile.dir,
+    defaultProfileDir: state.profile.defaultDir,
+    profileSource: state.profile.source,
+  });
+}
+
+// The pointer facts the meta-tools report, with its target directory resolved
+// through the active launcher (so "default" is the engine default).
+function pointerFacts(pointer) {
+  if (pointer === null || state.engine === null) {
+    return null;
+  }
+  const targetDir =
+    pointer.name === null
+      ? null
+      : profileDefaultPointerDir(
+          state.engineId,
+          PLUGIN_DATA_DIR,
+          pointer.name,
+          resolveLauncherName(state.engine),
+        );
+  return {
+    path: pointer.path,
+    exists: pointer.exists,
+    name: pointer.name,
+    state: pointer.state,
+    error: pointer.error,
+    targetDir,
+    targetExists: targetDir === null ? null : isDirectory(targetDir),
+  };
+}
+
+// The profiles that exist for this engine, from the same directory inventory and
+// the same 100-name cap browser_capabilities reports, plus the name the pointer
+// holds (which may not have a directory yet: it is created on its first launch).
+function availableProfiles(pointerName = null) {
+  const inventory = availableAccounts();
+  const names = new Set(inventory.names);
+  const named =
+    typeof pointerName === 'string' && pointerName !== ''
+      ? pointerName
+      : state.profile.source === 'pointer' && state.profile.pointer !== null
+        ? state.profile.pointer.name
+        : null;
+  if (typeof named === 'string' && named !== '') {
+    names.add(named);
+  }
+  const sorted = [...names].filter((name) => typeof name === 'string').sort();
+  return { names: sorted.slice(0, MAX_AVAILABLE_ACCOUNTS), count: sorted.length };
+}
+
+// `current` is the profile this running server uses; `pointer` is the default for
+// the next start. They differ exactly when set-default has been called in this
+// session or when the pointer is overridden by profile_dir/account.
+function profileStatePayload() {
+  const effective = currentProfileDir();
+  const lock = effective === null ? null : readProfileLock(effective);
+  return {
+    account: state.profile.account,
+    profileSource: state.profile.source,
+    profileDir: effective,
+    defaultProfileDir: state.profile.defaultDir,
+    profileIsolation: state.profile.isolation,
+    profileIsolationSource: state.profile.isolationSource,
+    profileLock: lock === null ? null : { ...lock, fix: lockBlocksStart(lock) ? profileLockFix(lock) : null },
+  };
+}
+
+function respondProfiles(id, args) {
+  const action =
+    args !== null && typeof args === 'object' && typeof args.action === 'string' && args.action.trim() !== ''
+      ? args.action.trim()
+      : 'list';
+  if (action === 'list') {
+    const pointer =
+      state.profile.appliesToEngine && state.engine !== null
+        ? readProfileDefaultPointer(state.engineId, PLUGIN_DATA_DIR)
+        : null;
+    const profiles = availableProfiles(pointer === null ? null : pointer.name);
+    sendToolPayload(id, {
+      action: 'list',
+      engine: state.engineId,
+      label: state.engine?.label ?? null,
+      profileApplies: state.profile.appliesToEngine,
+      availableProfiles: profiles,
+      current: profileStatePayload(),
+      pointer: pointerFacts(pointer),
+      // A set-default call changes the next start only; this session keeps its
+      // profile, so the two are reported separately.
+      applies: 'next server start',
+      brokerVersion: BROKER_VERSION,
+    });
+    return;
+  }
+  if (action === 'set-default') {
+    if (!state.profile.appliesToEngine || state.engine === null) {
+      sendToolError(
+        id,
+        `The "${state.engineId}" engine does not use broker profiles (profileApplies: false), ` +
+          'so there is no default profile to set.',
+      );
+      return;
+    }
+    const rawName = args !== null && typeof args === 'object' ? args.name : undefined;
+    if (typeof rawName !== 'string' || rawName.trim() === '') {
+      sendToolError(id, `browser_profiles set-default requires a profile "name". ${INVALID_ACCOUNT_HINT}`);
+      return;
+    }
+    const name = rawName.trim();
+    if (!validateAccountName(name)) {
+      sendToolError(id, `browser_profiles set-default: ${accountNameError(rawName)}`);
+      return;
+    }
+    const written = writeProfileDefaultPointer(state.engineId, PLUGIN_DATA_DIR, name);
+    if (!written.written) {
+      sendToolError(id, written.error);
+      return;
+    }
+    const pointer = readProfileDefaultPointer(state.engineId, PLUGIN_DATA_DIR);
+    const facts = pointerFacts(pointer);
+    const profiles = availableProfiles(name);
+    sendToolPayload(id, {
+      action: 'set-default',
+      ok: true,
+      engine: state.engineId,
+      name,
+      pointer: facts,
+      availableProfiles: profiles,
+      // The write does not touch the running browser; say so explicitly so a
+      // caller does not expect the profile to change in this session.
+      current: profileStatePayload(),
+      applies: 'next server start',
+      note:
+        'The default profile is written and applies at the next server start; this session keeps its ' +
+        'current profile and no browser was started or restarted. Restart Claude Code to use it.',
+      brokerVersion: BROKER_VERSION,
+    });
+    return;
+  }
+  sendToolError(id, `Unknown browser_profiles action "${action}". Use "list" or "set-default".`);
+}
+
 function handleMetaCall(message) {
   const name = message.params?.name;
   if (name === 'browser_capabilities') {
@@ -1151,6 +1390,10 @@ function handleMetaCall(message) {
   }
   if (name === 'browser_engine_status') {
     sendToolPayload(message.id, statusPayload());
+    return true;
+  }
+  if (name === 'browser_profiles') {
+    respondProfiles(message.id, message.params?.arguments);
     return true;
   }
   return false;

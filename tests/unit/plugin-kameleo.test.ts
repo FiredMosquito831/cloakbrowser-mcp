@@ -238,7 +238,7 @@ describe('kameleo manifest', () => {
     });
     expect(manifest.notes).toContain('UNVERIFIED');
     expect(manifest.notes).toContain('Junglefox');
-    expect(manifest.notes).toContain('74');
+    expect(manifest.notes).toContain('75');
   });
 
   it('ships the settings, the env references and the generated engine option', () => {
@@ -547,7 +547,7 @@ describe('documentation', () => {
     expect(readme).toContain('Junglefox');
     expect(readme).toContain('UNVERIFIED');
     expect(readme).toContain('connect ECONNREFUSED 127.0.0.1:5050');
-    expect(readme).toContain('| `kameleo` | `portable` | 74 | 26');
+    expect(readme).toContain('| `kameleo` | `portable` | 75 | 27');
     expect(readme).toContain(plugin.version);
     for (const line of readme.split(/\r?\n/)) {
       if (line.toLowerCase().includes('kameleo') && line.includes('isBot: false')) {

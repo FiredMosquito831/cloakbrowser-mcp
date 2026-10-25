@@ -15,7 +15,7 @@ an engine means adding a manifest, not editing broker code.
   generated `browser_engine` setting.
 - Every manifest is validated on every start. An invalid manifest is logged to
   stderr and excluded from the supported engine list. Selecting an invalid
-  manifest stops the backend and exposes only the two broker meta-tools, with
+  manifest stops the backend and exposes only the three broker meta-tools, with
   the exact validation error in `browser_capabilities.engineError`.
 - An unknown `browser_engine` value is rejected with the discovered ids, for
   example: `Unknown engine "nope". Supported engines: camoufox-native, camoufox, cloak, playwright.`
@@ -38,7 +38,7 @@ an engine means adding a manifest, not editing broker code.
 | `runtime` | no | Object describing an attached/remote runtime: `endpointEnv`, `profileEnv`, `defaultEndpoint` (must contain `{profileId}`), `errorHint` (may contain `{endpoint}`), `statusKeys` (`endpoint`/`profileId` → field names). The broker uses it for the extra `browser_engine_status` fields and to append `errorHint` to an `isError` tool result until the first successful tool call. Omit it for a normal launch engine; nothing is added |
 | `capabilities` | no | Object with only `groupSwitchesApply` and `cdpAttach` (booleans). The broker copies these into `browser_capabilities` for the engine that declares them |
 | `systemDependencies` | no | Array of external software the engine needs but the plugin never installs (see below). Reported generically in `browser_capabilities`; omitted engines gain no key |
-| `profileApplies` | no | Boolean, default `true`. Whether the plugin's profile model applies to this engine: `profile_dir`, `account`, `profile_isolation`, the workspace derivation and the lock preflight. Declare `false` for an engine that owns its profile elsewhere or attaches to a browser it did not start. Reported by both meta-tools |
+| `profileApplies` | no | Boolean, default `true`. Whether the plugin's profile model applies to this engine: `profile_dir`, `account`, the default-profile pointer, `profile_isolation`, the workspace derivation and the lock preflight. Declare `false` for an engine that owns its profile elsewhere or attaches to a browser it did not start. Reported by the broker meta-tools |
 | `profileLock` | no | Object with exactly `file` and `owner`, describing the engine's own lock file inside the profile directory (see below). Omit it for an engine whose only lock is the bridge's `.cloakbrowser-mcp-profile.lock`; nothing changes for it |
 | `ignoredSettings` | no | Array of non-empty strings naming plugin settings the engine cannot honour (reported by `browser_capabilities`) |
 | `notes` | yes | String summarising the backend and its limitations |
@@ -190,7 +190,8 @@ instead of a clear start. A manifest can declare that file:
     means the owner is gone.
 
 The broker never writes, moves or deletes a lock. Before spawning it reports one
-of four states in the additive `engineProfileLock` key of both meta-tools:
+of four states in the additive `engineProfileLock` key of `browser_capabilities`
+and `browser_engine_status`:
 `free` (no file), `live` (a live owner: meta-only start, the owner named when the
 file carries a pid, and one actionable fix in `initialize.instructions`),
 `stale` (the file exists but nobody holds it: the start proceeds and the browser

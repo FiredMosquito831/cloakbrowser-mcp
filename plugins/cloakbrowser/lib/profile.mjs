@@ -7,16 +7,20 @@
 // wins whenever it is set. profile_isolation=workspace adds one profile per
 // project folder (profiles/<engine>/ws-<sha256(cwd)[:7]>) and a numbered-sibling
 // fallback; the lock helpers read the bridge's own lock file so the broker can
-// refuse a start that would fail. The functions here are explicitly parameterised
-// (no path is read from a global setting) and read only the files named by their
-// arguments, so the unit suite can exercise every rule without a backend.
+// refuse a start that would fail. A one-line default-profile pointer
+// (profiles/<engine>/.default) names the profile a start uses when neither
+// profile_dir nor account is set. The functions here are explicitly
+// parameterised (no path is read from a global setting) and read only the files
+// named by their arguments, so the unit suite can exercise every rule without a
+// backend.
 //
 // The account name is joined into a path, so it is validated before any join:
 // letters, digits, ".", "_" and "-", starting with a letter or digit, at most 64
 // characters, no trailing dot, and no Windows device name. A dot-dot or slash can
-// therefore never appear.
+// therefore never appear. The default-profile pointer is validated with the same
+// rule before it is joined or applied.
 import { createHash } from 'node:crypto';
-import { readFileSync, statSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 export const ACCOUNT_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -41,6 +45,10 @@ export const INVALID_ACCOUNT_PREFIX = 'Invalid account name';
 export const INVALID_ACCOUNT_HINT =
   'Use letters, digits, ".", "_" or "-", starting with a letter or digit, up to 64 characters, no trailing dot or space.';
 export const ACCOUNT_PROXY_SUFFIX = '.proxy';
+// The one-line default-profile pointer that sits beside the engine's account
+// directories. It is a file, never a directory, so it can never be mistaken for
+// a profile of its own.
+export const PROFILE_DEFAULT_POINTER_FILENAME = '.default';
 // Windows reserves these device names in every directory, any case and with any
 // extension ("CON", "con.txt"). Joining one as a directory name would create a
 // device path instead of a profile.
@@ -135,6 +143,128 @@ export function accountProfileDir(engineId, account, dataDir) {
   return path.join(path.resolve(dataDir), 'profiles', engineId, account);
 }
 
+// --- default-profile pointer ----------------------------------------------
+// One line beside the engine's account profiles names the profile a start uses
+// when neither `profile_dir` nor `account` is set. The file is read at start and
+// never created there: a missing pointer is the normal "no default configured"
+// state, and a broken one is reported and ignored rather than made fatal.
+
+// The pointer file for one engine: <plugin data>/profiles/<engine>/.default.
+export function profileDefaultPointerPath(engineId, dataDir) {
+  return path.join(path.resolve(dataDir), 'profiles', engineId, PROFILE_DEFAULT_POINTER_FILENAME);
+}
+
+// The profile directory a pointer name maps to: "default" is the engine default
+// the launcher would use anyway; any other valid name is an account-like profile
+// directory under profiles/<engine>/. Returns null for an invalid name.
+export function profileDefaultPointerDir(engineId, dataDir, name, launcherName = DEFAULT_LAUNCHER) {
+  const trimmed = typeof name === 'string' ? name.trim() : '';
+  if (!validateAccountName(trimmed)) {
+    return null;
+  }
+  return trimmed === DEFAULT_PROFILE_NAME
+    ? defaultProfileDir(engineId, dataDir, launcherName)
+    : accountProfileDir(engineId, trimmed, dataDir);
+}
+
+function invalidPointer(pointerPath, error) {
+  return { path: pointerPath, exists: true, name: null, state: 'invalid', error };
+}
+
+// Read the default-profile pointer without creating, moving or deleting
+// anything. Returns { path, exists, name, state, error } where state is:
+//   missing  no pointer file; nothing to apply
+//   present  exactly one valid profile name; `name` holds it
+//   invalid  the file exists but cannot be used; `error` explains why and how to
+//            fix it, and the caller ignores the pointer for this start
+// A missing file is not an error. A file that is not a regular file, cannot be
+// read, is not valid UTF-8, holds no name, holds more than one line, or holds a
+// name the account rule rejects is invalid.
+export function readProfileDefaultPointer(engineId, dataDir) {
+  const pointerPath = profileDefaultPointerPath(engineId, dataDir);
+  const base = { path: pointerPath, exists: false, name: null, state: 'missing', error: null };
+  let bytes;
+  try {
+    if (!statSync(pointerPath).isFile()) {
+      return invalidPointer(
+        pointerPath,
+        `The default profile pointer ${pointerPath} is not a regular file; it is ignored.`,
+      );
+    }
+    bytes = readFileSync(pointerPath);
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return base;
+    }
+    return invalidPointer(
+      pointerPath,
+      `Cannot read the default profile pointer ${pointerPath}: ${error.message}. It is ignored.`,
+    );
+  }
+  let text;
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return invalidPointer(
+      pointerPath,
+      `The default profile pointer ${pointerPath} is not valid UTF-8; it is ignored.`,
+    );
+  }
+  const lines = text
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line !== '');
+  if (lines.length === 0) {
+    return invalidPointer(pointerPath, `The default profile pointer ${pointerPath} is empty; it is ignored.`);
+  }
+  if (lines.length > 1) {
+    return invalidPointer(
+      pointerPath,
+      `The default profile pointer ${pointerPath} must contain exactly one profile name; it is ignored.`,
+    );
+  }
+  if (!validateAccountName(lines[0])) {
+    return invalidPointer(
+      pointerPath,
+      `The default profile pointer ${pointerPath} does not name a valid profile ` +
+        `(${quotedValue(lines[0])}). ${INVALID_ACCOUNT_HINT} It is ignored.`,
+    );
+  }
+  return { path: pointerPath, exists: true, name: lines[0], state: 'present', error: null };
+}
+
+// Write the default-profile pointer atomically: one line to a sibling temporary
+// file, then a rename over the pointer. A failed write removes only its own
+// temporary file and leaves any existing pointer in place. Returns
+// { path, written, error }: error is null on success.
+export function writeProfileDefaultPointer(engineId, dataDir, name) {
+  const trimmed = typeof name === 'string' ? name.trim() : '';
+  const pointerPath = profileDefaultPointerPath(engineId, dataDir);
+  if (!validateAccountName(trimmed)) {
+    return { path: pointerPath, written: false, error: accountNameError(name) };
+  }
+  const directory = path.dirname(pointerPath);
+  const temporary = path.join(directory, `${PROFILE_DEFAULT_POINTER_FILENAME}.${process.pid}.tmp`);
+  try {
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(temporary, `${trimmed}\n`, 'utf8');
+    renameSync(temporary, pointerPath);
+  } catch (error) {
+    try {
+      rmSync(temporary, { force: true });
+    } catch {
+      // The temporary file is beside the pointer; leaving it behind changes no
+      // behaviour and the next write replaces it.
+    }
+    return {
+      path: pointerPath,
+      written: false,
+      error: `Cannot write the default profile pointer ${pointerPath}: ${error.message}`,
+    };
+  }
+  return { path: pointerPath, written: true, error: null };
+}
+
 // The profile name a workspace gets: Playwright's own derivation
 // (sha256(cwd) truncated to seven hex characters), with a "ws-" prefix so a
 // workspace profile can never collide with a named account or with "default".
@@ -173,18 +303,23 @@ export function resolveProfileIsolation(value) {
 //   profileDir        absolute directory the broker must set, or null when the
 //                     broker sets nothing and the engine/launcher default applies
 //   defaultProfileDir the engine's default profile (absolute), always known
-//   profileSource     "profile_dir" | "account" | "workspace" | "engine" |
-//                     "default" | null
+//   profileSource     "profile_dir" | "account" | "pointer" | "workspace" |
+//                     "engine" | "default" | null
 //   account           the resolved account name, or null
 //   accountApplies    false when the manifest ignores profile_dir (the engine
 //                     has its own profile setting; do not add a second control)
 //   error             the exact start-up error, or null
 //
-// Precedence: profile_dir, then account, then the workspace profile when
-// profile_isolation is "workspace", then the engine default.
+// Precedence: profile_dir, then account, then the default-profile pointer, then
+// the workspace profile when profile_isolation is "workspace", then the engine
+// default. The pointer is passed in already read (null when absent or invalid);
+// an invalid name here is ignored rather than turned into an error, because a
+// broken pointer is never fatal. With no pointer the result is byte-identical to
+// the behaviour before the pointer existed.
 export function resolveProfile({
   account,
   profileDir,
+  pointer = null,
   engineId,
   dataDir,
   launcherName = DEFAULT_LAUNCHER,
@@ -227,6 +362,23 @@ export function resolveProfile({
       profileDir: resolved,
       profileSource: 'account',
       account: trimmed,
+      accountApplies: true,
+    };
+  }
+  const pointerName =
+    typeof pointer === 'string' && pointer.trim() !== '' && !isPlaceholder(pointer) ? pointer.trim() : '';
+  if (pointerName !== '' && validateAccountName(pointerName)) {
+    const resolved =
+      pointerName === DEFAULT_PROFILE_NAME
+        ? engineDefault
+        : accountProfileDir(engineId, pointerName, dataDir);
+    return {
+      ...base,
+      profileDir: resolved,
+      profileSource: 'pointer',
+      // `account` stays the account setting's value; the pointer is a separate
+      // source and is reported as profileSource "pointer".
+      account: null,
       accountApplies: true,
     };
   }

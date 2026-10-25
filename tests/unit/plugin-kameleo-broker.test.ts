@@ -277,6 +277,7 @@ describe('kameleo broker configuration errors', () => {
     expect(list.result?.tools?.map((tool) => tool.name)).toEqual([
       'browser_capabilities',
       'browser_engine_status',
+      'browser_profiles',
     ]);
     const status = await session.request('tools/call', {
       name: 'browser_engine_status',
@@ -330,7 +331,7 @@ describe('kameleo broker configuration errors', () => {
     expect(initialize.result?.instructions).toContain('kameleo_endpoint must use the ws:// or wss:// scheme');
     expect(initialize.result?.instructions).toContain('Backend exited (code 1)');
     const list = await session.request('tools/list', {});
-    expect(list.result?.tools).toHaveLength(2);
+    expect(list.result?.tools).toHaveLength(3);
     const status = await session.request('tools/call', {
       name: 'browser_engine_status',
       arguments: {},
@@ -366,7 +367,7 @@ describe('kameleo broker with a lazy backend', () => {
 
     const list = await session.request('tools/list', {});
     const names = list.result?.tools?.map((tool) => tool.name) ?? [];
-    expect(names).toHaveLength(PORTABLE_TOOLS.length + 2);
+    expect(names).toHaveLength(PORTABLE_TOOLS.length + 3);
     for (const toolName of PORTABLE_TOOLS) {
       expect(names).toContain(toolName);
     }
@@ -432,7 +433,7 @@ describe('kameleo broker with a lazy backend', () => {
     });
     const caps = structuredContent(capabilities);
     expect(caps.toolProfile).toBe('portable');
-    expect(caps.exposedToolCount).toBe(PORTABLE_TOOLS.length + 2);
+    expect(caps.exposedToolCount).toBe(PORTABLE_TOOLS.length + 3);
     expect(caps.groupSwitchesApply).toBe(true);
     expect(caps.cdpAttach).toBe(true);
     const dependencies = caps.systemDependencies as Record<string, unknown>[];
@@ -456,7 +457,7 @@ describe('kameleo broker with a lazy backend', () => {
     });
     const list = await session.request('tools/list', {});
     const names = list.result?.tools?.map((tool) => tool.name) ?? [];
-    expect(names).toHaveLength(STUB_TOOLS.length + 2);
+    expect(names).toHaveLength(STUB_TOOLS.length + 3);
     expect(names).toContain('browser_pdf_save');
     expect(names).toContain('browser_annotate');
     expect(names).toContain('browser_capabilities');

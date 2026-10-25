@@ -155,12 +155,18 @@ const CAPABILITIES_KEYS_293 = [
 // reason when the roots probe could not read them. browser_engine_status is
 // unchanged. The test clients declare no roots capability, so clientRootsError is
 // present on every payload here.
+// 2.10.0 appends the default-profile pointer facts last: the name, its source, the
+// pointer file, and (only for a broken pointer) the reason. These synthetic
+// engines have no pointer file, so profileDefaultError is absent here.
 const CAPABILITIES_KEYS_295 = [
   ...CAPABILITIES_KEYS_293,
   'serverCwd',
   'outputDir',
   'clientRoots',
   'clientRootsError',
+  'profileDefault',
+  'profileDefaultSource',
+  'profileDefaultPath',
 ];
 
 const STATUS_KEYS_293 = [
@@ -761,7 +767,11 @@ describe('broker engine-lock preflight', () => {
     expect(instructions).toContain(path.join(profileDir, 'owner.lock'));
     expect(instructions).toContain(`pid ${process.pid}`);
     expect(instructions).toContain('The backend was not started.');
-    expect(await toolNames(session)).toEqual(['browser_capabilities', 'browser_engine_status']);
+    expect(await toolNames(session)).toEqual([
+      'browser_capabilities',
+      'browser_engine_status',
+      'browser_profiles',
+    ]);
     const statusPayload = await payload(session, 'browser_engine_status');
     expect(statusPayload.backendState).toBe('failed');
     expect(statusPayload.backendPid).toBeNull();

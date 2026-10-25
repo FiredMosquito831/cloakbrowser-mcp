@@ -805,6 +805,7 @@ describe('broker profile preflight', () => {
       ...STUB_TOOLS,
       'browser_capabilities',
       'browser_engine_status',
+      'browser_profiles',
     ]);
     const caps = await capabilities(session);
     expect(caps).toMatchObject({
@@ -856,7 +857,11 @@ describe('broker profile preflight', () => {
     expect(instructions).toContain('2026-10-25T01:09:50.197Z');
     expect(instructions).toContain('The backend was not started');
     expect(instructions).toContain('profile_isolation');
-    expect(await toolNames(session)).toEqual(['browser_capabilities', 'browser_engine_status']);
+    expect(await toolNames(session)).toEqual([
+      'browser_capabilities',
+      'browser_engine_status',
+      'browser_profiles',
+    ]);
     const statusPayload = await status(session);
     expect(statusPayload.backendState).toBe('failed');
     expect(statusPayload.backendPid).toBeNull();
@@ -956,7 +961,11 @@ describe('broker profile preflight', () => {
     const session = startBroker({ dataDir, isolation: 'workspace', cwd: workspace });
     const initialized = await initialize(session);
     expect(initialized.result?.instructions).toContain('numbered workspace fallbacks');
-    expect(await toolNames(session)).toEqual(['browser_capabilities', 'browser_engine_status']);
+    expect(await toolNames(session)).toEqual([
+      'browser_capabilities',
+      'browser_engine_status',
+      'browser_profiles',
+    ]);
     const caps = await capabilities(session);
     expect(caps.profileFallback).toBeNull();
     expect(caps.profileLock).toMatchObject({ state: 'live', profileDir: base });
@@ -972,7 +981,11 @@ describe('broker profile preflight', () => {
     const session = startBroker({ dataDir, isolation: 'workspace', cwd: workspace, account: 'alice' });
     const initialized = await initialize(session);
     expect(initialized.result?.instructions).toContain(accountDir);
-    expect(await toolNames(session)).toEqual(['browser_capabilities', 'browser_engine_status']);
+    expect(await toolNames(session)).toEqual([
+      'browser_capabilities',
+      'browser_engine_status',
+      'browser_profiles',
+    ]);
     const caps = await capabilities(session);
     expect(caps).toMatchObject({
       account: 'alice',
@@ -997,7 +1010,11 @@ describe('broker profile preflight', () => {
     });
     const initialized = await initialize(session);
     expect(initialized.result?.instructions).toContain(explicit);
-    expect(await toolNames(session)).toEqual(['browser_capabilities', 'browser_engine_status']);
+    expect(await toolNames(session)).toEqual([
+      'browser_capabilities',
+      'browser_engine_status',
+      'browser_profiles',
+    ]);
     const caps = await capabilities(session);
     expect(caps).toMatchObject({ profileSource: 'profile_dir', profileFallback: null });
     expect(caps.profileLock).toMatchObject({ state: 'live', profileDir: explicit });
@@ -1070,6 +1087,7 @@ describe('broker manifest applicability', () => {
       ...STUB_TOOLS,
       'browser_capabilities',
       'browser_engine_status',
+      'browser_profiles',
     ]);
     expect(await effectiveEnvironment(session)).toEqual({ profileDir: null, proxy: null });
   });
