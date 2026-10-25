@@ -900,10 +900,11 @@ describe('broker profile preflight', () => {
     mkdirSync(workspace, { recursive: true });
     const session = startBroker({ dataDir, isolation: 'workspace', cwd: workspace });
     const initialized = await initialize(session);
-    // A healthy start carries no profile text; the 2.9.5 artifact sentence is the
-    // only instruction, and it names the workspace cwd.
+    // A healthy start carries no profile text; the artifact sentence is the only
+    // instruction. This harness declares no roots capability, so since 2.10.1 the
+    // empty output_dir takes the plugin-data default (not the workspace cwd).
     expect(initialized.result?.instructions).toContain(
-      `Browser artifacts (screenshots, traces, downloads) go to ${path.join(workspace, '.playwright-mcp')}`,
+      `Browser artifacts (screenshots, traces, downloads) go to ${path.join(dataDir, 'output', 'cloak')}`,
     );
     expect(initialized.result?.instructions).not.toContain('profile_isolation');
     expect(await toolNames(session)).toContain('browser_navigate');

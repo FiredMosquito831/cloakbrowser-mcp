@@ -825,14 +825,22 @@ export function redactSecrets(text) {
 // The child environment for the selected engine. With no account resolved and no
 // file proxy this is exactly process.env plus the engine id, which is what the
 // broker has always passed. Values are never derived from the account setting
-// unless resolveProfile returned a directory.
-export function backendEnvironment(baseEnv, { engineId, profileDir = null, proxyServer = null } = {}) {
+// unless resolveProfile returned a directory. `outputDir` is the broker's
+// resolved default artifact directory (2.10.1); when null nothing is added, so an
+// explicit output_dir setting keeps flowing through the plugin env untouched.
+export function backendEnvironment(
+  baseEnv,
+  { engineId, profileDir = null, proxyServer = null, outputDir = null } = {},
+) {
   const env = { ...(isPlainObject(baseEnv) ? baseEnv : {}), PLAYWRIGHT_MCP_BROWSER_ENGINE: engineId };
   if (nonEmptyString(profileDir)) {
     env.PLAYWRIGHT_MCP_USER_DATA_DIR = profileDir;
   }
   if (nonEmptyString(proxyServer)) {
     env.PLAYWRIGHT_MCP_PROXY_SERVER = proxyServer;
+  }
+  if (nonEmptyString(outputDir)) {
+    env.PLAYWRIGHT_MCP_OUTPUT_DIR = outputDir;
   }
   return env;
 }

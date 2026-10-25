@@ -1,7 +1,7 @@
 {
   "name": "cloakbrowser",
   "displayName": "CloakBrowser",
-  "version": "2.10.0",
+  "version": "2.10.1",
   "description": "CloakBrowser stealth Chromium through the Playwright MCP tool contract, via cloakbrowser-mcp.",
   "author": {
     "name": "FiredMosquito831"
@@ -175,7 +175,7 @@
     "output_dir": {
       "type": "string",
       "title": "Artifacts directory",
-      "description": "Where Playwright MCP writes screenshots, traces and session files. It is created if it does not exist. Leave empty for the default.",
+      "description": "Where Playwright MCP writes screenshots, traces and session files. It is created if it does not exist. Leave empty to write them to .playwright-mcp in the folder the client opened (its first file root), or, when the client advertises no usable file root, to the plugin data folder under output/<engine>.",
       "default": ""
     },
     "allow_unrestricted_file_access": {
