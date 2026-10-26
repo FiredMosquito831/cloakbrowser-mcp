@@ -97,11 +97,14 @@ Engine-specific exclusions (every engine also loses the bridge profile lock,
   Firefox    parent.lock, cache2, startupCache, thumbnails
 Every *.sqlite-wal and *.sqlite-shm file is kept: it is part of the database.
 
-With --prune, list the temporary session copies that profile_isolation "copy"
-leaves under <plugin data>/profiles/<engine>/.sessions and remove the ones no
-live process owns. A copy whose broker or browser is still running is kept and
-reported. Pruning is explicit: the plugin never removes a session copy on its
-own, and this command never touches an account profile or the engine default.
+With --prune, list the temporary session copies that profile_isolation "copy" and
+"copy-keep" leave under <plugin data>/profiles/<engine>/.sessions and remove the
+ones no live process owns. A copy whose broker or browser is still running is
+kept and reported. Pruning is explicit: the plugin never removes a session copy on
+its own, and this command never touches an account profile or the engine default.
+It also never removes a retained <base>.previous-<stamp> tree: profile_isolation
+"copy-keep" keeps the old base there after a clean close, and those trees are
+user data that stay until you remove them yourself.
 
 Options:
   --engine <id>      Engine whose profiles are copied or pruned (default: ${DEFAULT_COPY_ENGINE}).
@@ -648,8 +651,9 @@ export function formatPruneSummary(summary) {
     lines.push(`  could not remove ${failure.path}: ${failure.error}`);
   }
   lines.push(
-    'A session copy is the temporary working directory of profile_isolation "copy"; pruning never touches ' +
-      'an account profile or the engine default.',
+    'A session copy is the temporary working directory of profile_isolation "copy" or "copy-keep"; ' +
+      'pruning never touches an account profile, the engine default, or a retained ' +
+      '<base>.previous-<stamp> tree from copy-keep.',
   );
   return `${lines.join('\n')}\n`;
 }
