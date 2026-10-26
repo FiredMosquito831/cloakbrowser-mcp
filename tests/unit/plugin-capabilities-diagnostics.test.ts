@@ -500,7 +500,9 @@ describe('browser_capabilities artifact diagnostics', () => {
     // that key is compared separately below against the new policy. 2.11.1 adds
     // the additive `engineProfileLock` key right after `profileLock` for the
     // Chromium engines, which now declare their own lock file. 2.14.0 adds the
-    // six device-identity keys after the profile block for every engine.
+    // six device-identity keys after the profile block for every engine. 2.14.1
+    // adds the five server-heartbeat keys after them; the cloak engine cannot
+    // use the setting, so it reports null and a not-applicable note.
     const newKeys = [
       'identityMode',
       'identityApplies',
@@ -508,6 +510,11 @@ describe('browser_capabilities artifact diagnostics', () => {
       'identityFile',
       'identityCreatedAt',
       'identityNote',
+      'pingTimeoutApplies',
+      'pingTimeoutMs',
+      'pingTimeoutSource',
+      'heartbeatEnabled',
+      'pingTimeoutNote',
       'serverCwd',
       'outputDir',
       'clientRoots',

@@ -84,12 +84,12 @@ describe('the setting is declared and documented as a security trade-off', () =>
 
   it('keeps the userConfig and env-reference counts in step', () => {
     const cloakKeys = Object.keys(readPlugin('cloakbrowser').userConfig);
-    expect(cloakKeys).toHaveLength(29);
-    expect(envReferences(readEnv('cloakbrowser'))).toHaveLength(30);
+    expect(cloakKeys).toHaveLength(30);
+    expect(envReferences(readEnv('cloakbrowser'))).toHaveLength(31);
 
     const camoufoxKeys = Object.keys(readPlugin('camoufox').userConfig);
-    expect(camoufoxKeys).toHaveLength(18);
-    expect(envReferences(readEnv('camoufox'))).toHaveLength(18);
+    expect(camoufoxKeys).toHaveLength(19);
+    expect(envReferences(readEnv('camoufox'))).toHaveLength(19);
   });
 
   it('documents the trade-off in both plugin READMEs', () => {
@@ -135,6 +135,10 @@ describe('launcher child environment', () => {
         CLAUDE_PLUGIN_DATA: 'D:/scratch/plugin-data',
         PLAYWRIGHT_MCP_HEADLESS: 'false',
         PATH: 'C:/Windows/System32',
+        // 2.14.1 always writes the server-heartbeat deadline (0 = disabled):
+        // the wrapper's own 5 s default must never apply by omission. Every
+        // other key here is the 2.9.5 reference, unchanged.
+        PLAYWRIGHT_MCP_PING_TIMEOUT_MS: '0',
       },
       kameleo: {
         CLAUDE_PLUGIN_DATA: 'D:/scratch/plugin-data',

@@ -1,7 +1,7 @@
 {
   "name": "cloakbrowser",
   "displayName": "CloakBrowser",
-  "version": "2.14.0",
+  "version": "2.14.1",
   "description": "CloakBrowser stealth Chromium through the Playwright MCP tool contract, via cloakbrowser-mcp.",
   "author": {
     "name": "FiredMosquito831"
@@ -141,6 +141,12 @@
       "description": "How the Camoufox engine presents its device identity. profile gives each persistent Camoufox profile one generated identity: the first launch draws a fingerprint for this computer's operating system, stores it in <profile>/.camoufox-identity.json and reuses it on every later launch, so a site that keeps cookies also sees the same device (Camoufox otherwise draws a new one on every launch). Delete that file to draw a new identity on the next start; a copied profile carries it, so delete it inside the copy to give the copy a different device. random restores the per-launch draw. An isolated start has no profile to store anything in, so it always draws a new identity. This setting is inert for the other engines: cloak pins its own Chromium seed, playwright and camoufox-native have no fingerprint input, and Kameleo manages its own profiles; browser_capabilities says so and reports the active source, the identity file and when it was created.",
       "options": ["profile", "random"],
       "default": "profile"
+    },
+    "ping_timeout_ms": {
+      "type": "number",
+      "title": "Server heartbeat timeout (Camoufox)",
+      "description": "Applies to the camoufox engine only: how long its backend waits for an answer to its own heartbeat ping before it closes the browser and ends the session, in milliseconds. 0 is the default and disables the wrapper's heartbeat entirely. The backend pings every 3 s and closes the browser when an answer is more than 5 s late; one late answer (a stalled Claude Code event loop, a busy machine, sleep or resume) was enough to lose the browser, and a dead client is still detected through the MCP pipe itself. A positive value re-enables the heartbeat with that deadline, so a client that does not answer within it still loses the browser and the session. A non-negative integer; anything else is ignored with one log line and the heartbeat stays disabled. The other engines send no server heartbeat and ignore this setting, and browser_capabilities and browser_engine_status say so. An explicit PLAYWRIGHT_MCP_PING_TIMEOUT_MS in the environment wins over this setting.",
+      "default": 0
     },
     "account": {
       "type": "string",

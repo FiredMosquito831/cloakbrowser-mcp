@@ -29,6 +29,7 @@ export const CORE_FILES = Object.freeze([
   'engine-registry.mjs',
   'engines/profiles.json',
   'lib/attach.mjs',
+  'lib/ping-timeout.mjs',
   'lib/profile.mjs',
   'lib/provision.mjs',
   'lib/surface.mjs',
