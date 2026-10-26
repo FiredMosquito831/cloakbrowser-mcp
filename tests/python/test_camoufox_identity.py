@@ -127,14 +127,15 @@ class Cases:
             assert first['engine'] == 'camoufox'
             assert ISO.match(first['createdAt']), first['createdAt']
             assert first['build'] == 'v156.0.1-beta.39'
-            assert first['os'] == 'windows'
+            assert first['os'] == self.entry.host_os(), first['os']
+            assert first['os'] is not None
             assert first['fingerprint']['navigator']['userAgent'].endswith('146.one) Gecko/20100101 Firefox/146.0')
             assert 'regeneratedAt' not in first
             assert calls == ['windows']
             assert env['CAMOUFOX_MCP_CONFIG'] == self.entry.launch_config_path(profile, env)
             config = json.loads(pathlib.Path(env['CAMOUFOX_MCP_CONFIG']).read_text(encoding='utf-8'))
             assert config['browser']['camoufoxOptions']['fingerprint'] == first['fingerprint']
-            assert config['browser']['camoufoxOptions']['os'] == 'windows'
+            assert config['browser']['camoufoxOptions']['os'] == self.entry.host_os()
 
             status2, logs2 = self.applying(
                 self.env(root, PLAYWRIGHT_MCP_USER_DATA_DIR=profile),
@@ -313,7 +314,7 @@ class Cases:
             assert merged['browser']['camoufoxOptions']['humanize'] is True
             assert merged['browser']['userDataDir'] == 'x'
             assert merged['server'] == {'port': 0}
-            assert merged['browser']['camoufoxOptions']['os'] == 'windows'
+            assert merged['browser']['camoufoxOptions']['os'] == self.entry.host_os()
             assert 'fingerprint' in merged['browser']['camoufoxOptions']
 
     def test_user_pinned_fingerprint_is_overridden_in_our_copy_only(self):
