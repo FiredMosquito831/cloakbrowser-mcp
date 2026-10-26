@@ -974,13 +974,37 @@ export function createProfileLock(
         error: `Cannot create the profile lock ${lockPath}: ${error.message}`,
       };
     }
+    let identity;
     try {
-      const identity = fstatSync(descriptor);
+      identity = fstatSync(descriptor);
       writeFileSync(descriptor, record);
-      return { ok: true, path: lockPath, owner, identity, contents: record, reclaimed, error: null };
     } catch (error) {
-      // Only the file this call created is removed; identity is unknown, so the
-      // file is left for the crash path (a stale lock is reclaimed by pid).
+      // Close first: on Windows an open handle makes the unlink below fail.
+      try {
+        closeSync(descriptor);
+      } catch {
+        // The descriptor ends with the process.
+      }
+      // Remove only the file this call just created, by its identity, so a
+      // half-written lock cannot block every later start (an empty or partial
+      // file reads as `invalid`, which the preflight refuses). A file another
+      // process replaced is left in place.
+      let cleanup;
+      if (identity === undefined) {
+        cleanup = ' The partially created lock file was left in place.';
+      } else {
+        try {
+          const current = lstatSync(lockPath);
+          if (sameLockFileId(identity, current)) {
+            unlinkSync(lockPath);
+            cleanup = ' The partially created lock file was removed.';
+          } else {
+            cleanup = ' The lock file changed during the write and was left in place.';
+          }
+        } catch {
+          cleanup = ' The partially created lock file could not be removed.';
+        }
+      }
       return {
         ok: false,
         path: lockPath,
@@ -988,15 +1012,15 @@ export function createProfileLock(
         identity: null,
         contents: null,
         reclaimed,
-        error: `Cannot write the profile lock ${lockPath}: ${error.message}`,
+        error: `Cannot write the profile lock ${lockPath}: ${error.message}.${cleanup}`,
       };
-    } finally {
-      try {
-        closeSync(descriptor);
-      } catch {
-        // Closing cannot change the result; the descriptor ends with the process.
-      }
     }
+    try {
+      closeSync(descriptor);
+    } catch {
+      // Closing cannot change the result; the descriptor ends with the process.
+    }
+    return { ok: true, path: lockPath, owner, identity, contents: record, reclaimed, error: null };
   }
   return {
     ok: false,
