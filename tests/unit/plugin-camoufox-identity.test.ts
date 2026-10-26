@@ -133,7 +133,14 @@ function createStubPlugin(root: string): string {
   for (const file of ['broker.mjs', 'engine-registry.mjs']) {
     copyFileSync(path.join(universalDir, file), path.join(plugin, file));
   }
-  for (const file of ['attach.mjs', 'ping-timeout.mjs', 'profile.mjs', 'provision.mjs', 'surface.mjs']) {
+  for (const file of [
+    'attach.mjs',
+    'password-manager.mjs',
+    'ping-timeout.mjs',
+    'profile.mjs',
+    'provision.mjs',
+    'surface.mjs',
+  ]) {
     copyFileSync(path.join(universalDir, 'lib', file), path.join(lib, file));
   }
   for (const file of ['camoufox.json', 'cloak.json', 'camoufox-native.json']) {
@@ -309,7 +316,7 @@ describe('identity_mode in the shipped manifests', () => {
       expect(setting.description).toContain('.camoufox-identity.json');
       expect(setting.description).toContain('random');
       expect(setting.description).toContain('isolated');
-      expect(plugin.version).toBe('2.14.1');
+      expect(plugin.version).toBe('2.15.0');
     }
     const universal = JSON.parse(
       readFileSync(path.join(universalDir, '.claude-plugin', 'plugin.json'), 'utf8'),

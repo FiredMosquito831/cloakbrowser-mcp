@@ -123,13 +123,15 @@ function timestamp() {
   return new Date().toISOString().replace(/\.\d{3}Z$/u, 'Z');
 }
 
-// Windows paths are compared with win32 semantics on every platform, so the unit
-// suite can exercise the Windows decision on Linux CI. The feature only runs on
-// win32: the per-user directory is a Windows KnownFolder.
-const winPath = path.win32;
+// Host path semantics (the feature only runs on win32). Paths are compared
+// case-insensitively because Windows is: the Camoufox cache root is
+// `<LocalAppData>\camoufox\camoufox` while Firefox's per-user directory is
+// `<LocalAppData>\Camoufox\Camoufox` (vendor/name), and those are the same
+// directory on Windows. Using the host module keeps the unit suite on Linux CI
+// running against real temporary directories.
 
 export function expectedPerUserDir(localAppData) {
-  return winPath.join(localAppData, 'Camoufox', 'Camoufox');
+  return path.join(localAppData, 'Camoufox', 'Camoufox');
 }
 
 // The resolved build lives at <cacheRoot>\Cache\browsers\official\<build>\camoufox.exe.
@@ -139,15 +141,15 @@ export function buildLayout(binary) {
   if (!nonEmptyString(binary)) {
     return null;
   }
-  const buildDir = winPath.dirname(winPath.resolve(binary));
-  const official = winPath.dirname(buildDir);
-  const browsers = winPath.dirname(official);
-  const cache = winPath.dirname(browsers);
-  const cacheRoot = winPath.dirname(cache);
+  const buildDir = path.dirname(path.resolve(binary));
+  const official = path.dirname(buildDir);
+  const browsers = path.dirname(official);
+  const cache = path.dirname(browsers);
+  const cacheRoot = path.dirname(cache);
   if (
-    winPath.basename(official).toLowerCase() !== 'official' ||
-    winPath.basename(browsers).toLowerCase() !== 'browsers' ||
-    winPath.basename(cache).toLowerCase() !== 'cache'
+    path.basename(official).toLowerCase() !== 'official' ||
+    path.basename(browsers).toLowerCase() !== 'browsers' ||
+    path.basename(cache).toLowerCase() !== 'cache'
   ) {
     return null;
   }
@@ -158,7 +160,7 @@ export function sameWindowsPath(left, right) {
   if (typeof left !== 'string' || typeof right !== 'string' || left === '' || right === '') {
     return false;
   }
-  return winPath.resolve(left).toLowerCase() === winPath.resolve(right).toLowerCase();
+  return path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase();
 }
 
 export function cloneJson(value) {
@@ -469,7 +471,7 @@ export function runPasswordProbe(options) {
     child.on('error', (error) => {
       finish({ state: 'error', detail: error.message });
     });
-    child.on('exit', (code) => {
+    child.on('close', (code) => {
       const line = lastNonEmptyLine(stdout);
       if (line !== null) {
         try {
@@ -490,7 +492,7 @@ export function runPasswordProbe(options) {
   });
 }
 
-function blockedResult({ env, pluginDataDir, build, status, note, policyFile, log }) {
+function blockedResult({ env, pluginDataDir, build, status, note, policyFile, log, extra }) {
   delete env[PASSWORD_MANAGER_STATE_VAR];
   const record = {
     version: PASSWORD_MANAGER_RECORD_VERSION,
@@ -500,6 +502,7 @@ function blockedResult({ env, pluginDataDir, build, status, note, policyFile, lo
     policyFile: nonEmptyString(policyFile) ? policyFile : null,
     note,
     checkedAt: timestamp(),
+    ...(isPlainObject(extra) ? extra : {}),
   };
   try {
     writePasswordPolicyRecord(pluginDataDir, record);
@@ -598,7 +601,7 @@ export async function applyPasswordManager(options) {
     });
   }
   const expectedDir = expectedPerUserDir(localAppData);
-  const target = winPath.join(expectedDir, PASSWORD_MANAGER_POLICY_FILENAME);
+  const target = path.join(expectedDir, PASSWORD_MANAGER_POLICY_FILENAME);
 
   const layout = buildLayout(binary);
   if (layout === null || !sameWindowsPath(layout.cacheRoot, expectedDir)) {
@@ -615,7 +618,7 @@ export async function applyPasswordManager(options) {
     });
   }
 
-  const sourceFile = winPath.join(layout.buildDir, ...PASSWORD_MANAGER_SOURCE_POLICY_PARTS);
+  const sourceFile = path.join(layout.buildDir, ...PASSWORD_MANAGER_SOURCE_POLICY_PARTS);
   const sourceText = readTextFile(sourceFile);
   let buildPolicy = null;
   if (sourceText !== null) {
@@ -663,6 +666,34 @@ export async function applyPasswordManager(options) {
     }
   }
 
+  // A verification failure is cached for the same build and policy document, so a
+  // machine where Firefox does not read the resolved per-user path does not pay
+  // for a browser start on every launch. Turning the setting off removes the
+  // record and therefore retries when it is turned on again.
+  if (
+    record !== null &&
+    record.status === 'blocked-by-build-policy' &&
+    record.verified !== true &&
+    record.build === build &&
+    record.sourcePolicyHash === sourcePolicyHash &&
+    record.contentHash === contentHash &&
+    record.policyFile === null &&
+    !existsSync(target)
+  ) {
+    return blockedResult({
+      env,
+      pluginDataDir,
+      build,
+      status: 'blocked-by-build-policy',
+      note: nonEmptyString(record.note)
+        ? record.note
+        : 'Saved logins: the verification start previously failed.',
+      policyFile: null,
+      log,
+      extra: { sourcePolicyHash, contentHash, probeHash, verified: false, failure: 'probe' },
+    });
+  }
+
   const needsProbe =
     record === null ||
     record.verified !== true ||
@@ -675,6 +706,7 @@ export async function applyPasswordManager(options) {
   try {
     if (needsProbe) {
       writeFileAtomic(target, probeText);
+      log(`saved logins: verifying that Firefox reads ${target} (one short headless start).`);
       const probeResult = await probe({ env, python, bootstrap, binary });
       if (probeResult === null || typeof probeResult !== 'object' || probeResult.state !== 'denied') {
         removeOwnedPolicyFile(
@@ -698,9 +730,11 @@ export async function applyPasswordManager(options) {
           status: 'blocked-by-build-policy',
           note:
             `Saved logins: the verification start could not confirm that Firefox reads ${target} (${detail}), so ` +
-            'the per-user policy file was removed and the setting is reverted for this start.',
+            'the per-user policy file was removed and the setting stays off. This result is cached for this build ' +
+            'and policy document; turn the setting off and on to retry after a Firefox or cache change.',
           policyFile: null,
           log,
+          extra: { sourcePolicyHash, contentHash, probeHash, verified: false, failure: 'probe' },
         });
       }
     }
