@@ -19,6 +19,7 @@
       "STEALTH_PROFILE_ISOLATION": "${user_config.profile_isolation}",
       "STEALTH_IDENTITY_MODE": "${user_config.identity_mode}",
       "STEALTH_PING_TIMEOUT_MS": "${user_config.ping_timeout_ms}",
+      "STEALTH_PASSWORD_MANAGER": "${user_config.password_manager}",
       "PLAYWRIGHT_MCP_HEADLESS": "${user_config.headless}",
       "PLAYWRIGHT_MCP_USER_DATA_DIR": "${user_config.profile_dir}",
       "PLAYWRIGHT_MCP_PROXY_SERVER": "${user_config.proxy_server}",

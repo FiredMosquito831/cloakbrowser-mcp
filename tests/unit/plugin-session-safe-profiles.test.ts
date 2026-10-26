@@ -458,7 +458,14 @@ function createScratchPlugin(root: string): string {
   for (const file of ['broker.mjs', 'engine-registry.mjs']) {
     copyFileSync(path.join(pluginDir, file), path.join(plugin, file));
   }
-  for (const file of ['attach.mjs', 'ping-timeout.mjs', 'profile.mjs', 'provision.mjs', 'surface.mjs']) {
+  for (const file of [
+    'attach.mjs',
+    'password-manager.mjs',
+    'ping-timeout.mjs',
+    'profile.mjs',
+    'provision.mjs',
+    'surface.mjs',
+  ]) {
     copyFileSync(path.join(pluginDir, 'lib', file), path.join(lib, file));
   }
   copyFileSync(path.join(pluginDir, 'engines', 'profiles.json'), path.join(engines, 'profiles.json'));

@@ -84,12 +84,12 @@ describe('the setting is declared and documented as a security trade-off', () =>
 
   it('keeps the userConfig and env-reference counts in step', () => {
     const cloakKeys = Object.keys(readPlugin('cloakbrowser').userConfig);
-    expect(cloakKeys).toHaveLength(30);
-    expect(envReferences(readEnv('cloakbrowser'))).toHaveLength(31);
+    expect(cloakKeys).toHaveLength(31);
+    expect(envReferences(readEnv('cloakbrowser'))).toHaveLength(32);
 
     const camoufoxKeys = Object.keys(readPlugin('camoufox').userConfig);
-    expect(camoufoxKeys).toHaveLength(19);
-    expect(envReferences(readEnv('camoufox'))).toHaveLength(19);
+    expect(camoufoxKeys).toHaveLength(20);
+    expect(envReferences(readEnv('camoufox'))).toHaveLength(20);
   });
 
   it('documents the trade-off in both plugin READMEs', () => {

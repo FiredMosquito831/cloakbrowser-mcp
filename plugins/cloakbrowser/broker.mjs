@@ -31,6 +31,18 @@ import {
   systemDependencies,
 } from './engine-registry.mjs';
 import { enrichToolError, runtimeErrorHint, runtimeStatusFields } from './lib/attach.mjs';
+import {
+  hasFirefoxLoginStore,
+  PASSWORD_MANAGER_APPLIED_SENTENCE,
+  PASSWORD_MANAGER_ENGINE_ID,
+  PASSWORD_MANAGER_NATIVE_NOTE,
+  PASSWORD_MANAGER_NOT_APPLICABLE_NOTE,
+  PASSWORD_MANAGER_PENDING_NOTE,
+  passwordUserConfigProblem,
+  readPasswordPolicyRecord,
+  resolvePasswordManager,
+  sha256File,
+} from './lib/password-manager.mjs';
 import { PING_TIMEOUT_ENGINE_ID, pingTimeoutProblemNote, resolvePingTimeout } from './lib/ping-timeout.mjs';
 import {
   accountNameError,
@@ -971,6 +983,156 @@ function pingTimeoutReport() {
     heartbeatEnabled: pingTimeoutState.ms > 0,
     ...(problemNote === null ? {} : { pingTimeoutNote: problemNote }),
   };
+}
+
+// --- saved logins and autofill (2.15.0) --------------------------------------
+// The `password_manager` setting. The pinned Camoufox build locks Firefox's
+// login manager off through its own enterprise policy, so enabling it needs a
+// managed per-user policy file written by the camoufox launcher (the only
+// surgical route; see lib/password-manager.mjs). The broker never writes it: it
+// reports the launcher's ownership record and the store's *file existence* only.
+// Off (the default) adds no key to any payload, so every engine stays
+// byte-identical; on, the applying engine reports what happened and the engines
+// that cannot apply it say so.
+const passwordManagerResolution = resolvePasswordManager(process.env);
+
+// The profile's Firefox login store: file existence only, never opened. A copy
+// start reports the session copy's store (it is copied with the profile); an
+// isolated start has no profile and reports missing.
+function passwordStoreState() {
+  if (!profileApplies || profileResolution.profileSource === 'isolated') {
+    return 'missing';
+  }
+  const dir = identityProfileDirForStart();
+  return dir !== null && hasFirefoxLoginStore(dir) ? 'firefox-logins-db-present' : 'missing';
+}
+
+function passwordBlockedNote(status) {
+  if (status === 'blocked-by-existing-policy') {
+    return 'Saved logins: a per-user policy file written by something else is present at the Firefox policy path, so it is left untouched and the setting stays off for this start.';
+  }
+  return 'Saved logins: the per-user policy file could not be derived from the Camoufox build policy, so the setting stays off for this start.';
+}
+
+// The additive keys, only when the setting is on. `passwordManagerEnabled` is
+// the effective value for this start, `passwordManagerApplies` says whether the
+// engine can honour it, and `passwordManagerSource` says what happened:
+// "setting" (the managed file is in use), "default" (nothing applied yet or an
+// engine without the mechanism), "native-unavailable" (mcp-camoufox has no prefs
+// input), "blocked-by-existing-policy" or "blocked-by-build-policy". The note
+// appears only when there is something honest to say.
+function passwordManagerFacts() {
+  if (!passwordManagerResolution.enabled) {
+    return null;
+  }
+  if (native) {
+    return {
+      passwordManagerEnabled: false,
+      passwordManagerApplies: false,
+      passwordManagerSource: 'native-unavailable',
+      passwordManagerPolicyFile: null,
+      passwordManagerStore: null,
+      passwordManagerNote: PASSWORD_MANAGER_NATIVE_NOTE,
+    };
+  }
+  if (engine === null || engine.id !== PASSWORD_MANAGER_ENGINE_ID) {
+    return {
+      passwordManagerEnabled: false,
+      passwordManagerApplies: false,
+      passwordManagerSource: 'default',
+      passwordManagerPolicyFile: null,
+      passwordManagerStore: null,
+      passwordManagerNote: PASSWORD_MANAGER_NOT_APPLICABLE_NOTE,
+    };
+  }
+  const facts = {
+    passwordManagerEnabled: false,
+    passwordManagerApplies: true,
+    passwordManagerSource: 'default',
+    passwordManagerPolicyFile: null,
+    passwordManagerStore: passwordStoreState(),
+  };
+  const configProblem = passwordUserConfigProblem(process.env);
+  if (configProblem !== null) {
+    return { ...facts, passwordManagerNote: configProblem };
+  }
+  const record = readPasswordPolicyRecord(PLUGIN_DATA_DIR);
+  if (record === null) {
+    return { ...facts, passwordManagerNote: PASSWORD_MANAGER_PENDING_NOTE };
+  }
+  if (record.status === 'blocked-by-existing-policy' || record.status === 'blocked-by-build-policy') {
+    return {
+      ...facts,
+      passwordManagerSource: record.status,
+      passwordManagerPolicyFile:
+        record.status === 'blocked-by-existing-policy' && typeof record.policyFile === 'string'
+          ? record.policyFile
+          : null,
+      passwordManagerNote:
+        typeof record.note === 'string' && record.note !== ''
+          ? record.note
+          : passwordBlockedNote(record.status),
+    };
+  }
+  if (record.status !== 'applied') {
+    return { ...facts, passwordManagerNote: PASSWORD_MANAGER_PENDING_NOTE };
+  }
+  const file = typeof record.policyFile === 'string' && record.policyFile !== '' ? record.policyFile : null;
+  if (file !== null && existsSync(file)) {
+    const hash = sha256File(file);
+    if (typeof record.contentHash === 'string' && hash === record.contentHash) {
+      return {
+        ...facts,
+        passwordManagerEnabled: true,
+        passwordManagerSource: 'setting',
+        passwordManagerPolicyFile: file,
+      };
+    }
+    if (typeof record.probeHash === 'string' && hash === record.probeHash) {
+      return {
+        ...facts,
+        passwordManagerNote:
+          'Saved logins: the per-user policy file holds the temporary verification document of an interrupted ' +
+          'start; the next Camoufox start rewrites it before the setting is used.',
+      };
+    }
+    return {
+      ...facts,
+      passwordManagerSource: 'blocked-by-existing-policy',
+      passwordManagerNote:
+        `Saved logins: ${file} no longer matches the file this plugin wrote, so it is left untouched and the ` +
+        'setting stays off for this start.',
+    };
+  }
+  return { ...facts, passwordManagerNote: PASSWORD_MANAGER_PENDING_NOTE };
+}
+
+function passwordManagerReport() {
+  const facts = passwordManagerFacts();
+  return facts === null ? {} : facts;
+}
+
+// One sentence for initialize.instructions, only for the applying engine and only
+// when the setting is on, so every other engine's handshake text stays
+// byte-identical.
+function passwordManagerSentence() {
+  if (!passwordManagerResolution.enabled || engine === null || engine.id !== PASSWORD_MANAGER_ENGINE_ID) {
+    return '';
+  }
+  const facts = passwordManagerFacts();
+  if (facts === null) {
+    return '';
+  }
+  if (facts.passwordManagerSource === 'setting') {
+    return PASSWORD_MANAGER_APPLIED_SENTENCE;
+  }
+  if (
+    facts.passwordManagerSource === 'blocked-by-existing-policy' ||
+    facts.passwordManagerSource === 'blocked-by-build-policy'
+  ) {
+    return facts.passwordManagerNote ?? '';
+  }
+  return '';
 }
 
 // Artifact directory policy (2.10.1). Upstream's file-access allowlist is
@@ -1996,6 +2158,11 @@ function capabilitiesPayload(clientRoots) {
     // meta-tools: whether ping_timeout_ms applies to this engine, the effective
     // deadline, its source and whether the wrapper heartbeat runs at all.
     ...pingTimeoutReport(),
+    // Saved logins (2.15.0), additive and only when password_manager is on. The
+    // values match browser_engine_status; the policy file path is reported only
+    // when this plugin's managed file is in use, and passwordManagerStore is the
+    // profile's logins.db *file existence* only (never opened).
+    ...passwordManagerReport(),
     // Artifact diagnostics, additive and last, so every key above keeps its
     // position and value. serverCwd is the directory both allowlist values fall
     // back to; outputDir is the effective artifact directory (null for an engine
@@ -2132,6 +2299,11 @@ function statusPayload() {
     // Server heartbeat (2.14.1), additive and the same values browser_capabilities
     // reports, so a status read alone shows whether the wrapper heartbeat runs.
     ...pingTimeoutReport(),
+    // Saved logins (2.15.0), additive and only when password_manager is on. The
+    // values match browser_engine_status; the policy file path is reported only
+    // when this plugin's managed file is in use, and passwordManagerStore is the
+    // profile's logins.db *file existence* only (never opened).
+    ...passwordManagerReport(),
   };
 }
 
@@ -2993,6 +3165,7 @@ function handleBackendMessage(message, rawLine) {
       state.profile.copy === null || state.profile.copy === undefined ? '' : (copyReportNote() ?? ''),
       state.profile.isolated && state.profile.appliesToEngine ? PROFILE_ISOLATED_NOTE : '',
       identitySentence(),
+      passwordManagerSentence(),
       artifactDirectorySentence(),
     ];
     message.result = {
