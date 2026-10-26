@@ -321,8 +321,14 @@ def launch_config(profile_dir, fingerprint, os_name, user_config, user_path, env
     source = os.environ if env is None else env
     if user_config is not None:
         config = user_config
-        browser = config.setdefault('browser', {})
-        options = browser.setdefault('camoufoxOptions', {})
+        browser = config.get('browser')
+        if browser is None:
+            browser = {}
+            config['browser'] = browser
+        options = browser.get('camoufoxOptions')
+        if options is None:
+            options = {}
+            browser['camoufoxOptions'] = options
         if any(name in options for name in ('fingerprint', 'fingerprint_preset', 'os')):
             log(
                 f'the config file {user_path} already sets a fingerprint; this session uses the profile identity instead '

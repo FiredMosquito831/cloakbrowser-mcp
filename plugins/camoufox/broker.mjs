@@ -759,12 +759,19 @@ function usableIdentityConfig(file) {
     return false;
   }
   const browser = config.browser;
-  if (browser !== undefined && (browser === null || typeof browser !== 'object' || Array.isArray(browser))) {
+  // null is "absent" for the entry too, so it is usable and gets filled in.
+  if (
+    browser !== undefined &&
+    browser !== null &&
+    (typeof browser !== 'object' || Array.isArray(browser))
+  ) {
     return false;
   }
-  const options = browser === undefined ? undefined : browser.camoufoxOptions;
+  const options = browser === undefined || browser === null ? undefined : browser.camoufoxOptions;
   return (
-    options === undefined || (options !== null && typeof options === 'object' && !Array.isArray(options))
+    options === undefined ||
+    options === null ||
+    (typeof options === 'object' && !Array.isArray(options))
   );
 }
 

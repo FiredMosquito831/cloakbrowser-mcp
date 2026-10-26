@@ -195,6 +195,60 @@ class Cases:
             assert 'CAMOUFOX_MCP_CONFIG' not in env
             assert any('model unavailable' in line for line in logs), logs
 
+    def test_identity_write_failure_is_soft(self):
+        with tempfile.TemporaryDirectory() as root:
+            profile = self.profile(root)
+            env = self.env(root, PLAYWRIGHT_MCP_USER_DATA_DIR=profile)
+            original_open = self.entry.os.open
+
+            def deny(*_args, **_kwargs):
+                raise OSError(13, 'permission denied')
+
+            self.entry.os.open = deny
+            try:
+                status, logs = self.applying(env)
+            finally:
+                self.entry.os.open = original_open
+            assert status['applied'] is False and status['reason'] == 'identity', status
+            assert 'CAMOUFOX_MCP_CONFIG' not in env
+            assert any('cannot store the device identity' in line for line in logs), logs
+
+    def test_partial_identity_write_is_removed(self):
+        with tempfile.TemporaryDirectory() as root:
+            profile = self.profile(root)
+            env = self.env(root, PLAYWRIGHT_MCP_USER_DATA_DIR=profile)
+            original_fdopen = self.entry.os.fdopen
+
+            class FailingHandle:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *_exc_info):
+                    return False
+
+                def write(self, _payload):
+                    raise OSError(28, 'no space left on device')
+
+                def flush(self):
+                    return None
+
+                def fileno(self):
+                    return 1
+
+            def failing_fdopen(descriptor, *_args, **_kwargs):
+                os.close(descriptor)
+                return FailingHandle()
+
+            self.entry.os.fdopen = failing_fdopen
+            try:
+                status, logs = self.applying(env)
+            finally:
+                self.entry.os.fdopen = original_fdopen
+            assert status['applied'] is False and status['reason'] == 'identity', status
+            assert not os.path.exists(os.path.join(profile, '.camoufox-identity.json'))
+            assert 'CAMOUFOX_MCP_CONFIG' not in env
+            assert any('cannot store the device identity' in line for line in logs), logs
+
     def test_incomplete_draw_is_rejected(self):
         with tempfile.TemporaryDirectory() as root:
             profile = self.profile(root)
@@ -312,6 +366,20 @@ class Cases:
             assert merged['browser']['launchOptions'] == {'args': ['-x']}
             assert 'fingerprint' in merged['browser']['camoufoxOptions']
             assert env['PLAYWRIGHT_MCP_CONFIG'] == theirs
+
+    def test_null_sections_in_user_config_are_filled_in(self):
+        with tempfile.TemporaryDirectory() as root:
+            profile = self.profile(root)
+            theirs = os.path.join(root, 'nulls.json')
+            original = {'browser': None}
+            pathlib.Path(theirs).write_text(json.dumps(original), encoding='utf-8')
+            env = self.env(root, PLAYWRIGHT_MCP_USER_DATA_DIR=profile, CAMOUFOX_MCP_CONFIG=theirs)
+            status, _logs = self.applying(env)
+            assert status['applied'] is True, status
+            merged = json.loads(pathlib.Path(env['CAMOUFOX_MCP_CONFIG']).read_text(encoding='utf-8'))
+            assert isinstance(merged['browser'], dict)
+            assert 'fingerprint' in merged['browser']['camoufoxOptions']
+            assert json.loads(pathlib.Path(theirs).read_text(encoding='utf-8')) == original
 
     def test_non_object_browser_is_left_untouched(self):
         with tempfile.TemporaryDirectory() as root:

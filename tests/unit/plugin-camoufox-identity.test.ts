@@ -297,7 +297,10 @@ describe('identity_mode in the shipped manifests', () => {
         readFileSync(path.join(repoRoot, 'plugins', name, '.claude-plugin', 'plugin.json'), 'utf8'),
       ) as {
         version: string;
-        userConfig: Record<string, { type?: string; default?: unknown; options?: string[]; description?: string }>;
+        userConfig: Record<
+          string,
+          { type?: string; default?: unknown; options?: string[]; description?: string }
+        >;
       };
       const setting = plugin.userConfig.identity_mode;
       expect(setting, `${name} declares identity_mode`).toBeDefined();
@@ -322,10 +325,9 @@ describe('identity_mode in the shipped manifests', () => {
 
   it('maps the setting to one environment reference per plugin', () => {
     for (const name of manifests) {
-      const mcp = JSON.parse(readFileSync(path.join(repoRoot, 'plugins', name, '.mcp.json'), 'utf8')) as Record<
-        string,
-        { env?: Record<string, string> }
-      >;
+      const mcp = JSON.parse(
+        readFileSync(path.join(repoRoot, 'plugins', name, '.mcp.json'), 'utf8'),
+      ) as Record<string, { env?: Record<string, string> }>;
       const env = mcp[name].env ?? {};
       expect(env.STEALTH_IDENTITY_MODE).toBe('${user_config.identity_mode}');
       expect(Object.values(env).filter((value) => value === '${user_config.identity_mode}')).toHaveLength(1);
@@ -335,7 +337,9 @@ describe('identity_mode in the shipped manifests', () => {
   it('keeps both plugin copies of the entry point identical to the shared core', () => {
     const canonical = readFileSync(entryPath);
     for (const name of manifests) {
-      expect(readFileSync(path.join(repoRoot, 'plugins', name, 'camoufox_entry.py')).equals(canonical)).toBe(true);
+      expect(readFileSync(path.join(repoRoot, 'plugins', name, 'camoufox_entry.py')).equals(canonical)).toBe(
+        true,
+      );
     }
   });
 });
@@ -388,7 +392,11 @@ describe('the Python identity logic', () => {
   function findPython(): string | null {
     const candidates = process.platform === 'win32' ? ['python', 'py'] : ['python3', 'python'];
     for (const candidate of candidates) {
-      const result = spawnSync(candidate, ['--version'], { encoding: 'utf8', timeout: 15000, windowsHide: true });
+      const result = spawnSync(candidate, ['--version'], {
+        encoding: 'utf8',
+        timeout: 15000,
+        windowsHide: true,
+      });
       if (result.status !== 0) {
         continue;
       }
@@ -402,18 +410,21 @@ describe('the Python identity logic', () => {
   }
 
   const python = findPython();
-  const run = python === null ? it.skip : it;
 
-  run('generates, reuses, regenerates and passes configs through as specified', () => {
-    const result = spawnSync(python as string, ['-I', pythonSuitePath], {
+  it('generates, reuses, regenerates and passes configs through as specified', (context) => {
+    if (python === null) {
+      context.skip();
+      return;
+    }
+    const result = spawnSync(python, ['-I', pythonSuitePath], {
       encoding: 'utf8',
       timeout: 120000,
       windowsHide: true,
     });
     const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-    expect(result.status, output.slice(-4000)).toBe(0);
     expect(output).toContain('RESULT');
     expect(output).toContain('0 failed');
+    expect(result.status).toBe(0);
   });
 });
 
@@ -425,7 +436,9 @@ describe('broker reporting and instructions', () => {
     const file = writeIdentity(dataDir, storedIdentity());
     const session = startBroker({ pluginDir: plugin, dataDir, engine: 'camoufox' });
     const initialized = await initialize(session);
-    expect(initialized.result?.instructions).toContain('Device identity: this profile keeps one device identity');
+    expect(initialized.result?.instructions).toContain(
+      'Device identity: this profile keeps one device identity',
+    );
     expect(initialized.result?.instructions).toContain(file);
 
     const payload = await capabilities(session);
@@ -556,6 +569,22 @@ describe('broker reporting and instructions', () => {
     expect(payload.identityFile).toBe(profileIdentityFile(dataDir));
   });
 
+  it('treats a null browser section as absent, like the entry does', async () => {
+    const root = tempRoot('identity-json-null-');
+    const plugin = createStubPlugin(root);
+    const dataDir = path.join(root, 'data');
+    const theirs = path.join(root, 'user-null.json');
+    writeJson(theirs, { browser: null });
+    const session = startBroker({
+      pluginDir: plugin,
+      dataDir,
+      engine: 'camoufox',
+      env: { CAMOUFOX_MCP_CONFIG: theirs },
+    });
+    await initialize(session);
+    expect((await capabilities(session)).identitySource).toBe('profile-file');
+  });
+
   it('gives a workspace profile its own identity file', async () => {
     const root = tempRoot('identity-workspace-');
     const plugin = createStubPlugin(root);
@@ -571,7 +600,9 @@ describe('broker reporting and instructions', () => {
     });
     await initialize(session);
     const payload = await capabilities(session);
-    expect(payload.identityFile).toMatch(/profiles[\\/]camoufox[\\/]ws-[0-9a-f]{7}[\\/]\.camoufox-identity\.json$/u);
+    expect(payload.identityFile).toMatch(
+      /profiles[\\/]camoufox[\\/]ws-[0-9a-f]{7}[\\/]\.camoufox-identity\.json$/u,
+    );
     expect(payload.identityFile).not.toBe(profileIdentityFile(dataDir));
   });
 
@@ -588,11 +619,8 @@ describe('broker reporting and instructions', () => {
     const expected = path.join(copy?.sessionDir ?? '', '.camoufox-identity.json');
     expect(payload.identityFile).toBe(expected);
     expect(payload.identityCreatedAt).toBe('2026-10-26T01:02:03Z');
-    if (process.platform !== 'win32') {
-      // The copy must carry the base's identity byte for byte (Windows reads are
-      // covered by the profile-copy test below).
-      expect(readFileSync(expected, 'utf8')).toBe(readFileSync(baseFile, 'utf8'));
-    }
+    // The copy carries the base's identity byte for byte.
+    expect(readFileSync(expected, 'utf8')).toBe(readFileSync(baseFile, 'utf8'));
   });
 
   it('reports copy-keep the same way while the session runs', async () => {
@@ -611,7 +639,6 @@ describe('broker reporting and instructions', () => {
   it('says the setting is inert on engine that cannot pin', async () => {
     const root = tempRoot('identity-inert-');
     const plugin = createStubPlugin(root);
-    const dataDir = path.join(root, 'data');
     const cloak = startBroker({ pluginDir: plugin, dataDir: path.join(root, 'cloak-data'), engine: 'cloak' });
     const cloakInit = await initialize(cloak);
     expect(cloakInit.result?.instructions ?? '').not.toContain('Device identity');
@@ -687,6 +714,8 @@ describe('the identity file travels with every profile copy', () => {
     expect(plan.excluded.engineLock).toBe(0);
     const target = path.join(root, 'copy');
     profile.copyPlanToTarget(plan, target);
-    expect(readFileSync(path.join(target, '.camoufox-identity.json'), 'utf8')).toBe(readFileSync(file, 'utf8'));
+    expect(readFileSync(path.join(target, '.camoufox-identity.json'), 'utf8')).toBe(
+      readFileSync(file, 'utf8'),
+    );
   });
 });
