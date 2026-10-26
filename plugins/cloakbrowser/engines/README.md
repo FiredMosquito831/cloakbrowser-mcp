@@ -173,12 +173,16 @@ vice versa. The rule is manifest-driven; no engine id appears in `broker.mjs`.
 
 The bridge's own lock is not the only lock a persistent profile can carry. The
 Camoufox wrapper checks a Unix `lockfile` name and never writes the bridge lock,
-while Firefox itself takes `<profile>/parent.lock`; a profile a live browser still
-holds therefore produced a 180 s hang or an immediate `exitCode=0` launch failure
-instead of a clear start. A manifest can declare that file:
+while Firefox itself takes `<profile>/parent.lock`; Chromium keeps
+`<profile>/lockfile`, which a plain read can open even while the browser runs. A
+manifest can declare that file:
 
 ```json
 "profileLock": { "file": "parent.lock", "owner": "exclusive-open" }
+```
+
+```json
+"profileLock": { "file": "lockfile", "owner": "exclusive-open-write" }
 ```
 
 - `file` is a plain file name inside the resolved profile directory — letters,
@@ -187,6 +191,13 @@ instead of a clear start. A manifest can declare that file:
   - `exclusive-open` — the OS refuses to open the file while a live process holds
     it. This is the Windows Firefox lock: a zero-byte file kept open, so it carries
     no process id; after a clean exit the file stays behind, readable and 0 bytes.
+  - `exclusive-open-write` — the OS allows a plain read but refuses an open with
+    write access while a live process holds the file. This is Chromium's Windows
+    `<profile>/lockfile` (shared for readers, not writers). The broker opens it
+    `r+`, closes it at once and never writes: a successful open means nobody holds
+    it (stale), a sharing refusal (`EBUSY`, `EPERM`, `EACCES`, `ETXTBSY`) means a
+    live owner. A leftover file after a crash opens normally and is stale, exactly
+    like Chromium's own rule.
   - `pid` — the file contains the owner's process id as text. The leading integer
     is used; trailing text and whitespace are tolerated, so `1234`, `1234\n` and
     `1234 locked` all read as pid 1234. Liveness is `process.kill(pid, 0)`: `ESRCH`
@@ -205,7 +216,12 @@ no key and a byte-identical start.
 
 The check is exact to the declared file. On a platform where that file is not the
 browser's lock (Firefox on POSIX uses a `lock` symlink instead), the preflight
-reads `free` and changes nothing.
+reads `free` and changes nothing; the write probe on a platform where Chromium
+does not keep `<profile>/lockfile` finds it absent (`free`) or unheld (`stale`)
+and likewise changes nothing. `scripts/profile-copy.mjs` reads the same
+descriptor before copying: a live owner refuses the copy with the broker's
+wording instead of failing mid-tree, and the declared lock file is excluded from
+the copied tree.
 
 ## Attach runtime (`requiredEnv` + `runtime`)
 

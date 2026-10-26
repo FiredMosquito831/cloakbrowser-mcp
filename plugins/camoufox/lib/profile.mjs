@@ -21,7 +21,16 @@
 // therefore never appear. The default-profile pointer is validated with the same
 // rule before it is joined or applied.
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 
 export const ACCOUNT_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -666,20 +675,63 @@ export function selectFallbackProfile(baseDir, isBlocked) {
 // "profileLock": { "file": "<name inside the profile directory>", "owner": "<rule>" }.
 // Camoufox is why this exists: its Firefox wrapper checks a Unix "lockfile" name
 // and never writes the bridge's lock, while Firefox itself takes
-// <profile>/parent.lock. The owner rule is explicit because the real files differ:
-//   exclusive-open  the OS refuses to open the file while a live process holds it
-//                   (the Windows Firefox lock: a zero-byte file kept open, so it
-//                   carries no process id)
-//   pid             the file contains the owner's process id as text
+// <profile>/parent.lock. Chromium's Windows <profile>/lockfile needs a different
+// proof again. The owner rule is explicit because the real files differ:
+//   exclusive-open        the OS refuses to open the file while a live process
+//                         holds it (the Windows Firefox lock: a zero-byte file
+//                         kept open, so it carries no process id)
+//   exclusive-open-write  the OS allows a plain read but refuses an open with
+//                         write access while a live process holds the file
+//                         (Chromium's Windows lockfile, shared for readers but
+//                         not writers), so liveness is proven by opening it r+
+//                         and closing it at once; it is never written to
+//   pid                   the file contains the owner's process id as text
 // A malformed or unreadable file is never treated as a lock: the start is allowed
 // and the reason is reported, because this check is a courtesy, not a guarantee.
-export const ENGINE_LOCK_OWNER_RULES = Object.freeze(['exclusive-open', 'pid']);
+export const ENGINE_LOCK_OWNER_RULES = Object.freeze(['exclusive-open', 'exclusive-open-write', 'pid']);
 // Error codes that prove a live holder: the file exists and the OS refuses to
-// open it (Windows ERROR_SHARING_VIOLATION surfaces as EBUSY or EACCES).
+// open it (or, for the write probe, to open it for writing). Windows
+// ERROR_SHARING_VIOLATION surfaces as EBUSY or EACCES.
 const ENGINE_LOCK_LIVE_CODES = new Set(['EBUSY', 'EACCES', 'EPERM', 'ETXTBSY']);
 
 function engineLockResult(base, liveness, state, owner, error = null) {
   return { ...base, liveness, state, owner, error };
+}
+
+// Liveness proof for Chromium's Windows <profile>/lockfile. The browser opens it
+// for writing without sharing writes, so a plain read still succeeds while a
+// browser runs, but an open with write access is refused (measured: EBUSY;
+// EPERM/EACCES are the same refusal across accounts). The probe opens r+, closes
+// at once and never writes, so a file nobody holds — including one left behind by
+// a crash — reads as stale, exactly like Chromium's own rule. A vanished file is
+// free: it was removed between the stat and the open.
+function probeEngineLockWrite(base, liveness, lockPath) {
+  let handle;
+  try {
+    handle = openSync(lockPath, 'r+');
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return base;
+    }
+    if (ENGINE_LOCK_LIVE_CODES.has(error?.code)) {
+      return engineLockResult(base, liveness, 'live', { pid: null, createdAt: null });
+    }
+    return engineLockResult(
+      base,
+      liveness,
+      'unknown',
+      null,
+      `Cannot probe the engine profile lock ${lockPath} for writing: ${error.message}. ` +
+        'The start continues.',
+    );
+  }
+  try {
+    closeSync(handle);
+  } catch {
+    // The open already proved nobody holds the file; a failed close leaves the
+    // descriptor to the process exit and never changes the result.
+  }
+  return engineLockResult(base, liveness, 'stale', null);
 }
 
 // Read an engine's own lock file without creating, moving or deleting anything.
@@ -726,6 +778,22 @@ export function readEngineProfileLock(profileDir, descriptor) {
         `The engine profile lock ${lockPath} is not a regular file; the start continues.`,
       );
     }
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return base;
+    }
+    return engineLockResult(
+      base,
+      liveness,
+      'unknown',
+      null,
+      `Cannot read the engine profile lock ${lockPath}: ${error.message}. The start continues.`,
+    );
+  }
+  if (liveness === 'exclusive-open-write') {
+    return probeEngineLockWrite(base, liveness, lockPath);
+  }
+  try {
     bytes = readFileSync(lockPath);
   } catch (error) {
     if (error?.code === 'ENOENT') {
@@ -796,7 +864,10 @@ export function engineProfileLockFix(lock) {
 // The start-up sentence for a blocking engine lock. The broker does not spawn a
 // backend in this state; this text is what initialize.instructions,
 // browser_capabilities.engineError and browser_engine_status.lastError carry.
-export function engineProfileLockMessage(lock) {
+// `trailing` is the closing sentence; the default is the broker's own and keeps
+// every existing message byte-identical (the profile copy tool reuses the same
+// heading and fix and says "The profile was not copied." instead).
+export function engineProfileLockMessage(lock, { trailing = 'The backend was not started.' } = {}) {
   if (lock === null || typeof lock !== 'object') {
     return 'The browser profile is locked by another process.';
   }
@@ -811,7 +882,8 @@ export function engineProfileLockMessage(lock) {
       `lock file ${lock.path} open.`;
   }
   const fix = engineProfileLockFix(lock);
-  return `${heading}${fix === null ? '' : ` ${fix}`} The backend was not started.`;
+  const end = nonEmptyString(trailing) ? trailing.trim() : 'The backend was not started.';
+  return `${heading}${fix === null ? '' : ` ${fix}`} ${end}`;
 }
 
 // The optional proxy file that sits beside a profile directory:

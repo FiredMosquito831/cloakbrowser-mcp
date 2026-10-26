@@ -6,6 +6,7 @@
 // the unit tests can exercise every rule directly.
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { ENGINE_LOCK_OWNER_RULES } from './lib/profile.mjs';
 
 export const DEFAULT_ENGINE = 'cloak';
 // Shared data file beside the manifests; never treated as an engine.
@@ -470,11 +471,13 @@ function validateRuntime(manifest) {
 // Optional description of the engine's own profile lock, read by the broker
 // before it spawns a backend. The bridge's lock file is not enough for every
 // engine: the Camoufox wrapper checks a Unix "lockfile" name and never writes
-// the bridge lock, while Firefox itself takes <profile>/parent.lock. "file" is a
-// plain file name inside the profile directory (never a path); "owner" names how
-// the broker proves a live owner. An engine without the field keeps every
-// previous byte of behaviour: no second check, no new payload key.
-const ENGINE_PROFILE_LOCK_OWNERS = new Set(['exclusive-open', 'pid']);
+// the bridge lock, while Firefox itself takes <profile>/parent.lock; Chromium
+// takes <profile>/lockfile with a reader-sharing/writer-exclusive handle. "file"
+// is a plain file name inside the profile directory (never a path); "owner" names
+// how the broker proves a live owner. The rule names come from lib/profile.mjs so
+// validation and the preflight can never drift apart. An engine without the field
+// keeps every previous byte of behaviour: no second check, no new payload key.
+const ENGINE_PROFILE_LOCK_OWNERS = new Set(ENGINE_LOCK_OWNER_RULES);
 const ENGINE_PROFILE_LOCK_FILE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 function validateProfileLock(manifest) {

@@ -5,6 +5,10 @@
   "transport": "launch",
   "contract": "playwright-mcp",
   "defaultToolProfile": "full",
+  "profileLock": {
+    "file": "lockfile",
+    "owner": "exclusive-open-write"
+  },
   "toolSupport": {
     "*": "full"
   },

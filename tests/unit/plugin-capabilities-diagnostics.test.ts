@@ -497,7 +497,9 @@ describe('browser_capabilities artifact diagnostics', () => {
 
     // 2.10.0 appends the default-profile pointer facts after the artifact keys.
     // 2.10.1 changes only the *value* of outputDir when output_dir is empty, so
-    // that key is compared separately below against the new policy.
+    // that key is compared separately below against the new policy. 2.11.1 adds
+    // the additive `engineProfileLock` key right after `profileLock` for the
+    // Chromium engines, which now declare their own lock file.
     const newKeys = [
       'serverCwd',
       'outputDir',
@@ -507,7 +509,9 @@ describe('browser_capabilities artifact diagnostics', () => {
       'profileDefaultSource',
       'profileDefaultPath',
     ];
-    expect(Object.keys(actual)).toEqual([...Object.keys(fixture), ...newKeys]);
+    const expectedKeys = [...Object.keys(fixture)];
+    expectedKeys.splice(expectedKeys.indexOf('profileLock') + 1, 0, 'engineProfileLock');
+    expect(Object.keys(actual)).toEqual([...expectedKeys, ...newKeys]);
     const payload = comparable(actual) as Record<string, unknown>;
     const baseline = comparable(fixture) as Record<string, unknown>;
     for (const record of [payload, baseline]) {
@@ -533,6 +537,11 @@ describe('browser_capabilities artifact diagnostics', () => {
     expect(payload.profileDefault).toBeNull();
     expect(payload.profileDefaultSource).toBe('none');
     expect(payload.profileDefaultPath).toBe('<ROOT>/data/profiles/cloak/.default');
+    expect(payload.engineProfileLock).toMatchObject({
+      state: 'free',
+      file: 'lockfile',
+      liveness: 'exclusive-open-write',
+    });
   });
 
   it('reports no artifact directory for an engine that ignores output_dir', async () => {
