@@ -69,8 +69,18 @@ function dataDir(env) {
     : path.join(homedir(), '.cloakbrowser-mcp-plugin');
 }
 
+// profile_isolation=isolated turns the engine's own isolated switch on in the
+// broker, which also removes any user-data-dir. The launcher must then not create
+// or apply the default profile: that profile exists to be persistent, and an
+// isolated start keeps nothing. Only the spellings the engine itself treats as
+// true count, so an unset or empty value is exactly the previous behaviour.
+export function isIsolatedStart(source) {
+  const value = (source.PLAYWRIGHT_MCP_ISOLATED ?? '').trim().toLowerCase();
+  return value === 'true' || value === '1';
+}
+
 function applyDefaultProfile(env) {
-  if (env.PLAYWRIGHT_MCP_USER_DATA_DIR !== undefined) {
+  if (isIsolatedStart(env) || env.PLAYWRIGHT_MCP_USER_DATA_DIR !== undefined) {
     return;
   }
   const profile = path.join(dataDir(env), 'profiles', 'default');

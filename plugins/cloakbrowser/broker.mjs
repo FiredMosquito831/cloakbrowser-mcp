@@ -41,10 +41,16 @@ import {
   engineProfileLockFix,
   engineProfileLockMessage,
   INVALID_ACCOUNT_HINT,
+  ISOLATED_IGNORED_POINTER,
+  isolatedIgnoredEntry,
   lockBlocksStart,
+  PROFILE_ISOLATED_NATIVE_NOTE,
+  PROFILE_ISOLATED_NOTE,
+  PROFILE_ISOLATED_POINTER_NOTE,
   profileDefaultPointerDir,
   profileDefaultPointerPath,
   profileFallbackReason,
+  profileIgnoredReason,
   profileLockFix,
   profileLockMessage,
   readAccountProxy,
@@ -233,9 +239,10 @@ const PLUGIN_DATA_DIR =
 
 // profile_isolation. "shared" (the default) is the behaviour before the setting
 // existed: one profile per account, shared by every Claude Code session.
-// "workspace" derives one profile per project folder, Playwright-style. An
-// unsubstituted placeholder and an unknown value both mean "shared"; they are
-// logged once and are never fatal.
+// "workspace" derives one profile per project folder, Playwright-style.
+// "isolated" uses no profile at all: nothing is resolved, created or locked and
+// nothing persists (2.11.0). An unsubstituted placeholder and an unknown value
+// both mean "shared"; they are logged once and are never fatal.
 const isolationSetting =
   typeof process.env.STEALTH_PROFILE_ISOLATION === 'string' ? process.env.STEALTH_PROFILE_ISOLATION : '';
 const profileIsolation = resolveProfileIsolation(isolationSetting);
@@ -248,15 +255,19 @@ if (profileIsolation.ignored !== null) {
 // An engine that owns its profile elsewhere, or attaches to one, declares
 // profileApplies: false; the whole profile model is inert for it.
 const profileApplies = engine !== null && manifestProfileApplies(engine);
+// The mode itself, before the engine's profileApplies says whether it can act.
+const isolatedMode = profileIsolation.mode === 'isolated';
 
 // The default-profile pointer (2.10.0). It is read once here, next to the
 // profiles, and is only a candidate: resolveProfile applies it after profile_dir
 // and account, so an explicit setting always wins. A missing pointer is the
 // normal state; a broken one is reported and ignored, never fatal. The pointer
 // itself is reported by browser_capabilities and browser_profiles whether or not
-// it supplies this start's profile.
+// it supplies this start's profile. An isolated start never uses it, so a broken
+// pointer is not logged there (it would claim relevance it does not have); the
+// meta-tools still report its state.
 const profilePointer = profileApplies ? readProfileDefaultPointer(engine.id, PLUGIN_DATA_DIR) : null;
-if (profilePointer !== null && profilePointer.error !== null) {
+if (profilePointer !== null && profilePointer.error !== null && !isolatedMode) {
   log(profilePointer.error);
 }
 
@@ -278,6 +289,7 @@ const profileResolution =
         profileSource: null,
         account: null,
         accountApplies: false,
+        ignored: [],
         error: null,
       }
     : resolveProfile({
@@ -292,6 +304,21 @@ const profileResolution =
         isolation: profileIsolation.mode,
         cwd: process.cwd(),
       });
+// What an isolated start ignored, in the order the resolution checked it. A
+// pointer file that exists but cannot be used has no name to pass, so the broker
+// adds it here; the report is the same shape either way.
+const profileIgnored =
+  profileResolution.profileSource === 'isolated'
+    ? [
+        ...(profileResolution.ignored ?? []),
+        ...(profilePointer !== null && profilePointer.exists === true && profilePointer.name === null
+          ? [isolatedIgnoredEntry(ISOLATED_IGNORED_POINTER, profilePointer.path)]
+          : []),
+      ]
+    : [];
+if (profileIgnored.length > 0) {
+  log(profileIgnoredReason(profileIgnored));
+}
 if (profileResolution.profileSource === 'pointer') {
   log(`using the default profile "${profilePointer.name}" from ${profilePointer.path}`);
 }
@@ -317,10 +344,11 @@ if (engineError === null && profileResolution.error !== null) {
 //   workspace:                      a busy derived profile moves to its first
 //                                   free numbered sibling (-2 ... -5) and the
 //                                   fallback is always reported.
+//   isolated:                       no profile exists, so no lock is read at all.
 let profileLock = null;
 let profileFallback = null;
 let engineProfileLock = null;
-if (engineError === null && profileApplies) {
+if (engineError === null && profileApplies && profileResolution.profileSource !== 'isolated') {
   const lockDir = effectiveProfileDir(profileResolution);
   if (lockDir !== null) {
     const lock = readProfileLock(lockDir);
@@ -390,7 +418,8 @@ function proxyCandidate() {
 // file beside the resolved profile is read for a named account, for a workspace
 // profile and for the default account (where it is used only when it exists).
 // Engines whose manifest ignores profile_dir have no account profile, so no file
-// is read.
+// is read. An isolated start has no profile either, so its account proxy file is
+// not used; proxy_server still applies because a proxy is not profile state.
 function resolveProxy() {
   const setting =
     typeof process.env.PLAYWRIGHT_MCP_PROXY_SERVER === 'string'
@@ -437,7 +466,9 @@ if (engineError === null && proxyResolution.error !== null) {
 // never deletes, copies or migrates one). An explicit profile_dir is not created
 // here: launch.mjs has always created it, and its bytes are unchanged. A pointer
 // profile is created exactly like an account, so a pointer set before its first
-// launch works on that launch.
+// launch works on that launch. An isolated start creates nothing: it has no
+// profile directory at all, and both launchers skip their default-profile
+// creation while the engine's isolated switch is on.
 if (
   engineError === null &&
   (profileResolution.profileSource === 'account' ||
@@ -650,7 +681,9 @@ const state = {
   // Profile state. `dir` is set only when the broker resolved an account or a
   // workspace and must set PLAYWRIGHT_MCP_USER_DATA_DIR itself; `appliedProxy` is
   // the file proxy to inject into the spawn environment. The lock/fallback facts
-  // describe this start and are reported additively by the meta-tools.
+  // describe this start and are reported additively by the meta-tools. An
+  // isolated start has `dir: null`, `isolated: true`, no lock, and the settings it
+  // ignored in `ignored` (reported by the meta-tools).
   profile: {
     account: profileResolution.account,
     dir:
@@ -660,6 +693,10 @@ const state = {
         ? profileResolution.profileDir
         : null,
     source: profileResolution.profileSource,
+    // True only for profile_isolation=isolated on an engine that uses the
+    // broker's profile model; the spawn environment and both launchers key on it.
+    isolated: profileResolution.profileSource === 'isolated',
+    ignored: profileIgnored,
     applies: profileResolution.accountApplies,
     defaultDir: profileResolution.defaultProfileDir,
     error: profileResolution.error,
@@ -1298,6 +1335,23 @@ function capabilitiesPayload(clientRoots) {
     profileFallback: state.profile.fallback,
     profileLock: state.profile.lock,
     ...(state.profile.engineLock === null ? {} : { engineProfileLock: state.profile.engineLock }),
+    // Isolated start (2.11.0), additive only in that mode so every shared and
+    // workspace payload stays byte-identical. profileIgnored lists the profile
+    // settings the mode made inert, with the value that was supplied; the note
+    // says what the pointer and set-default mean (nothing) for this session.
+    ...(state.profile.ignored.length === 0
+      ? {}
+      : {
+          profileIgnored: state.profile.ignored,
+          profileIgnoredReason: profileIgnoredReason(state.profile.ignored),
+        }),
+    ...(state.profile.isolation === 'isolated'
+      ? {
+          profileIsolationNote: state.profile.appliesToEngine
+            ? PROFILE_ISOLATED_POINTER_NOTE
+            : PROFILE_ISOLATED_NATIVE_NOTE,
+        }
+      : {}),
     // Artifact diagnostics, additive and last, so every key above keeps its
     // position and value. serverCwd is the directory both allowlist values fall
     // back to; outputDir is the effective artifact directory (null for an engine
@@ -1394,6 +1448,23 @@ function statusPayload() {
     profileFallback: state.profile.fallback,
     profileLock: state.profile.lock,
     ...(state.profile.engineLock === null ? {} : { engineProfileLock: state.profile.engineLock }),
+    // Isolated start (2.11.0), additive only in that mode. profileSource is
+    // reported here as well so a status read alone can tell where the profile
+    // would have come from (it is "isolated": none).
+    ...(state.profile.isolation === 'isolated'
+      ? {
+          profileSource: state.profile.source,
+          profileIsolationNote: state.profile.appliesToEngine
+            ? PROFILE_ISOLATED_POINTER_NOTE
+            : PROFILE_ISOLATED_NATIVE_NOTE,
+          ...(state.profile.ignored.length === 0
+            ? {}
+            : {
+                profileIgnored: state.profile.ignored,
+                profileIgnoredReason: profileIgnoredReason(state.profile.ignored),
+              }),
+        }
+      : {}),
   };
 }
 
@@ -1496,6 +1567,21 @@ function profileStatePayload() {
     profileIsolation: state.profile.isolation,
     profileIsolationSource: state.profile.isolationSource,
     profileLock: lock === null ? null : { ...lock, fix: lockBlocksStart(lock) ? profileLockFix(lock) : null },
+    // Isolated start (2.11.0), additive only in that mode: there is no profile
+    // directory and no lock, and the settings supplied are reported as ignored.
+    ...(state.profile.isolation === 'isolated'
+      ? {
+          profileIsolationNote: state.profile.appliesToEngine
+            ? PROFILE_ISOLATED_POINTER_NOTE
+            : PROFILE_ISOLATED_NATIVE_NOTE,
+          ...(state.profile.ignored.length === 0
+            ? {}
+            : {
+                profileIgnored: state.profile.ignored,
+                profileIgnoredReason: profileIgnoredReason(state.profile.ignored),
+              }),
+        }
+      : {}),
   };
 }
 
@@ -1521,6 +1607,13 @@ function respondProfiles(id, args) {
       // A set-default call changes the next start only; this session keeps its
       // profile, so the two are reported separately.
       applies: 'next server start',
+      ...(state.profile.isolation === 'isolated'
+        ? {
+            profileIsolationNote: state.profile.appliesToEngine
+              ? PROFILE_ISOLATED_POINTER_NOTE
+              : PROFILE_ISOLATED_NATIVE_NOTE,
+          }
+        : {}),
       brokerVersion: BROKER_VERSION,
     });
     return;
@@ -1564,8 +1657,12 @@ function respondProfiles(id, args) {
       current: profileStatePayload(),
       applies: 'next server start',
       note:
-        'The default profile is written and applies at the next server start; this session keeps its ' +
-        'current profile and no browser was started or restarted. Restart Claude Code to use it.',
+        state.profile.isolation === 'isolated'
+          ? 'The default profile is written; this server started with profile_isolation "isolated", so it ' +
+            'uses no profile and the pointer has no effect on this session. It applies at the next server ' +
+            'start once profile_isolation is "shared" or "workspace"; restart Claude Code to use it.'
+          : 'The default profile is written and applies at the next server start; this session keeps its ' +
+            'current profile and no browser was started or restarted. Restart Claude Code to use it.',
       brokerVersion: BROKER_VERSION,
     });
     return;
@@ -1663,6 +1760,7 @@ function synthesizeInitialize(id, reason) {
     'Call browser_engine_status for details. Only broker meta-tools are exposed until Claude Code restarts the MCP server.' +
     (state.profile.fallback === null ? '' : ` ${state.profile.fallback.reason}`) +
     (dependencyHint === null ? '' : ` ${dependencyHint}`) +
+    (state.profile.isolated && state.profile.appliesToEngine ? ` ${PROFILE_ISOLATED_NOTE}` : '') +
     ` ${artifactDirectorySentence()}`;
   sendResult(id, {
     protocolVersion: state.requestedProtocolVersion ?? '2025-06-18',
@@ -1962,12 +2060,15 @@ function handleBackendMessage(message, rawLine) {
     // The artifact sentence is the one addition to a relayed handshake, and it is
     // added on every path. A workspace fallback keeps its own sentence after the
     // backend's text and before the artifact fact; every other initialise
-    // response is otherwise unchanged.
+    // response is otherwise unchanged. An isolated start adds the one honest
+    // "nothing persists" sentence (2.11.0); shared and workspace text is
+    // unchanged.
     const result = message.result !== null && typeof message.result === 'object' ? message.result : {};
     const current = typeof result.instructions === 'string' ? result.instructions.trim() : '';
     const parts = [
       current,
       state.profile.fallback === null ? '' : state.profile.fallback.reason,
+      state.profile.isolated && state.profile.appliesToEngine ? PROFILE_ISOLATED_NOTE : '',
       artifactDirectorySentence(),
     ];
     message.result = {
@@ -2041,11 +2142,13 @@ function startBackend() {
     `engine=${state.engineId} source=${state.engineSource} contract=${state.engine.contract} ` +
       `profile=${state.toolProfile} profileSource=${state.toolProfileSource} launcher=${path.basename(launcher)}`,
   );
-  // Only an active account/workspace profile, a fallback or a proxy-file
-  // decision adds a line, so the default start-up log stays byte-identical.
+  // Only an active account/workspace profile, a fallback, an isolated start or a
+  // proxy-file decision adds a line, so the default start-up log stays
+  // byte-identical.
   if (
     state.profile.source === 'account' ||
     state.profile.source === 'workspace' ||
+    state.profile.isolated ||
     state.proxy.source !== 'none' ||
     state.profile.fallback !== null
   ) {
@@ -2069,6 +2172,7 @@ function startBackend() {
       profileDir: state.profile.dir,
       proxyServer: state.proxy.appliedProxy,
       outputDir: OUTPUT_DIR_SOURCE === 'default' ? outputDirState.dir : null,
+      isolated: state.profile.isolated,
     }),
     windowsHide: true,
     detached: false,

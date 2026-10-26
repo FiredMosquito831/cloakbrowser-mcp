@@ -776,8 +776,8 @@ describe('pin discovery and the fail-closed guard', () => {
       bridgeTo: '1.15.2',
       wrapperFrom: '0.6.3',
       wrapperTo: '0.6.4',
-      versionFrom: '2.10.1',
-      versionTo: '2.10.2',
+      versionFrom: '2.11.0',
+      versionTo: '2.11.1',
     });
     expect(written.changed).toContain('shared/core/lib/provision.mjs');
     expect(written.changed).toContain('plugins/cloakbrowser/.mcp.json');
@@ -785,14 +785,14 @@ describe('pin discovery and the fail-closed guard', () => {
     const state = pins.readPinState(root);
     expect(state.bridge).toBe('1.15.2');
     expect(state.wrapper).toBe('0.6.4');
-    expect(state.pluginVersions.map((entry) => entry.version)).toEqual(['2.10.2', '2.10.2']);
+    expect(state.pluginVersions.map((entry) => entry.version)).toEqual(['2.11.1', '2.11.1']);
     expect(readFileSync(path.join(root, 'plugins/cloakbrowser/lib/provision.mjs'), 'utf8')).toContain(
       'cloakbrowser-mcp@1.15.2',
     );
     expect(readFileSync(path.join(root, 'plugins/cloakbrowser/README.md'), 'utf8')).toContain(
       'cloakbrowser-mcp@1.15.2',
     );
-    expect(readFileSync(path.join(root, 'plugins/cloakbrowser/README.md'), 'utf8')).toContain('2.10.2');
+    expect(readFileSync(path.join(root, 'plugins/cloakbrowser/README.md'), 'utf8')).toContain('2.11.1');
     expect(pins.checkPinState(root).ok).toBe(true);
   });
 });

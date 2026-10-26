@@ -38,7 +38,7 @@ an engine means adding a manifest, not editing broker code.
 | `runtime` | no | Object describing an attached/remote runtime: `endpointEnv`, `profileEnv`, `defaultEndpoint` (must contain `{profileId}`), `errorHint` (may contain `{endpoint}`), `statusKeys` (`endpoint`/`profileId` → field names). The broker uses it for the extra `browser_engine_status` fields and to append `errorHint` to an `isError` tool result until the first successful tool call. Omit it for a normal launch engine; nothing is added |
 | `capabilities` | no | Object with only `groupSwitchesApply` and `cdpAttach` (booleans). The broker copies these into `browser_capabilities` for the engine that declares them |
 | `systemDependencies` | no | Array of external software the engine needs but the plugin never installs (see below). Reported generically in `browser_capabilities`; omitted engines gain no key |
-| `profileApplies` | no | Boolean, default `true`. Whether the plugin's profile model applies to this engine: `profile_dir`, `account`, the default-profile pointer, `profile_isolation`, the workspace derivation and the lock preflight. Declare `false` for an engine that owns its profile elsewhere or attaches to a browser it did not start. Reported by the broker meta-tools |
+| `profileApplies` | no | Boolean, default `true`. Whether the plugin's profile model applies to this engine: `profile_dir`, `account`, the default-profile pointer, `profile_isolation` (including `isolated`), the workspace derivation and the lock preflight. Declare `false` for an engine that owns its profile elsewhere or attaches to a browser it did not start; the setting then has no effect, and an isolated start reports `profileIsolationNote` saying so. Reported by the broker meta-tools |
 | `profileLock` | no | Object with exactly `file` and `owner`, describing the engine's own lock file inside the profile directory (see below). Omit it for an engine whose only lock is the bridge's `.cloakbrowser-mcp-profile.lock`; nothing changes for it |
 | `ignoredSettings` | no | Array of non-empty strings naming plugin settings the engine cannot honour (reported by `browser_capabilities`) |
 | `notes` | yes | String summarising the backend and its limitations |
@@ -151,12 +151,15 @@ Example excerpt:
 
 The broker resolves the browser profile before it spawns a launcher. For an engine
 that owns a persistent local profile directory (`cloak`, `playwright`,
-`camoufox`) it applies, in this order: an explicit `profile_dir`, the `account`
-name, a `profile_isolation=workspace` derivation
+`camoufox`) it applies, in this order: `profile_isolation=isolated` (no profile at
+all — no directory, no lock, `PLAYWRIGHT_MCP_ISOLATED=true` and no
+user-data-dir), an explicit `profile_dir`, the `account` name, a
+`profile_isolation=workspace` derivation
 (`profiles/<engine>/ws-<sha256(cwd)[:7]>`), then the engine default. It reads the
 bridge's `<profile>/.cloakbrowser-mcp-profile.lock` before spawning and refuses a
 start when a live process holds it; in workspace mode it may move to the numbered
-siblings `-2` … `-5` and reports the switch as `profileFallback`.
+siblings `-2` … `-5` and reports the switch as `profileFallback`. An isolated
+start reads no lock: no profile exists.
 
 An engine whose profile belongs to someone else declares `"profileApplies":
 false`. The broker then skips every step above, reports `profileApplies: false`

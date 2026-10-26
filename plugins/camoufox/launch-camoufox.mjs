@@ -119,8 +119,19 @@ function applyToolGroups(env) {
   }
 }
 
+// profile_isolation=isolated turns the wrapper's own isolated switch on in the
+// broker (PLAYWRIGHT_MCP_ISOLATED=true, read in mcp/config.py), which also removes
+// any user-data-dir. The launcher must then not create or apply the default
+// profile: the wrapper refuses isolated mode together with a user-data-dir, and
+// an isolated start keeps nothing. Only the spellings the wrapper treats as true
+// count, so an unset or empty value is exactly the previous behaviour.
+export function isIsolatedStart(source) {
+  const value = (source.PLAYWRIGHT_MCP_ISOLATED ?? '').trim().toLowerCase();
+  return value === 'true' || value === '1';
+}
+
 function applyDefaultProfile(env) {
-  if (env.PLAYWRIGHT_MCP_USER_DATA_DIR !== undefined) {
+  if (isIsolatedStart(env) || env.PLAYWRIGHT_MCP_USER_DATA_DIR !== undefined) {
     return;
   }
   const profile = path.join(dataDir(env), 'profiles', 'camoufox', 'default');

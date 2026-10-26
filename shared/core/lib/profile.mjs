@@ -6,13 +6,14 @@
 // other engine's own default. `profile_dir` stays the explicit path override and
 // wins whenever it is set. profile_isolation=workspace adds one profile per
 // project folder (profiles/<engine>/ws-<sha256(cwd)[:7]>) and a numbered-sibling
-// fallback; the lock helpers read the bridge's own lock file so the broker can
-// refuse a start that would fail. A one-line default-profile pointer
-// (profiles/<engine>/.default) names the profile a start uses when neither
-// profile_dir nor account is set. The functions here are explicitly
-// parameterised (no path is read from a global setting) and read only the files
-// named by their arguments, so the unit suite can exercise every rule without a
-// backend.
+// fallback; profile_isolation=isolated uses no profile at all, so nothing is
+// resolved, created or locked and nothing persists after the session. The lock
+// helpers read the bridge's own lock file so the broker can refuse a start that
+// would fail. A one-line default-profile pointer (profiles/<engine>/.default)
+// names the profile a start uses when neither profile_dir nor account is set.
+// The functions here are explicitly parameterised (no path is read from a global
+// setting) and read only the files named by their arguments, so the unit suite
+// can exercise every rule without a backend.
 //
 // The account name is joined into a path, so it is validated before any join:
 // letters, digits, ".", "_" and "-", starting with a letter or digit, at most 64
@@ -30,9 +31,19 @@ export const DEFAULT_LAUNCHER = 'launch.mjs';
 // Session safety. "shared" is the historical behaviour: every Claude Code
 // session of an account uses one profile directory. "workspace" derives one
 // profile per project folder, Playwright-style, and may fall back to a numbered
-// sibling when that profile is already in use.
-export const PROFILE_ISOLATION_VALUES = Object.freeze(['shared', 'workspace']);
+// sibling when that profile is already in use. "isolated" uses no profile at
+// all: nothing is resolved, created or locked, and nothing persists after the
+// session (the engines' own isolated mode, which keeps the browser profile
+// ephemeral; it is deliberately not described as "in memory").
+export const PROFILE_ISOLATION_VALUES = Object.freeze(['shared', 'workspace', 'isolated']);
 export const DEFAULT_PROFILE_ISOLATION = 'shared';
+export const PROFILE_ISOLATION_ISOLATED = 'isolated';
+// The profile settings that an isolated start reports as ignored. The names are
+// the settings a user can see and change; `value` carries what was supplied so
+// the report never claims a setting was ignored when it was empty.
+export const ISOLATED_IGNORED_PROFILE_DIR = 'profile_dir';
+export const ISOLATED_IGNORED_ACCOUNT = 'account';
+export const ISOLATED_IGNORED_POINTER = 'default_profile_pointer';
 export const WORKSPACE_PROFILE_PREFIX = 'ws-';
 export const WORKSPACE_PROFILE_HASH_LENGTH = 7;
 export const PROFILE_FALLBACK_FIRST_SUFFIX = 2;
@@ -297,6 +308,54 @@ export function resolveProfileIsolation(value) {
   return { mode: DEFAULT_PROFILE_ISOLATION, source: 'default', ignored: raw, placeholder: null };
 }
 
+// --- isolated starts ---------------------------------------------------------
+// profile_isolation=isolated uses no profile at all. These strings are the one
+// honest wording every surface shares, so the mode never claims "in memory" and
+// never hides what it ignored.
+export const PROFILE_ISOLATED_REASON =
+  'profile_isolation is "isolated": this start uses no profile, so the setting has no effect.';
+export const PROFILE_ISOLATED_NOTE =
+  'Profile isolation is "isolated": this session uses no browser profile, so no cookies, logins or other browser state are saved and nothing persists after it closes.';
+export const PROFILE_ISOLATED_POINTER_NOTE =
+  'This server started with profile_isolation "isolated": it uses no profile, so the default-profile pointer and ' +
+  'set-default do not affect this session; a pointer set now applies at the next server start once ' +
+  'profile_isolation is "shared" or "workspace".';
+export const PROFILE_ISOLATED_NATIVE_NOTE =
+  'This engine manages its own browser profile, so the "Profile isolation" setting (including "isolated") has no ' +
+  'effect on it.';
+
+const IGNORED_SETTING_LABELS = Object.freeze({
+  [ISOLATED_IGNORED_PROFILE_DIR]: 'the Profile directory setting',
+  [ISOLATED_IGNORED_ACCOUNT]: 'the Account profile setting',
+  [ISOLATED_IGNORED_POINTER]: 'the default-profile pointer',
+});
+
+function boundedSettingValue(value, max = 200) {
+  const text = String(value).replace(/[\u0000-\u001f\u007f]/gu, '?');
+  return text.length <= max ? text : `${text.slice(0, max)}...`;
+}
+
+// One entry for the `ignored` report. `value` is what the user supplied, bounded
+// and stripped of control characters; the reason is the shared sentence above.
+export function isolatedIgnoredEntry(setting, value) {
+  return { setting, value: boundedSettingValue(value), reason: PROFILE_ISOLATED_REASON };
+}
+
+// The human-readable sentence for an `ignored` list, or null when nothing was
+// supplied. It names the settings in the order they were checked.
+export function profileIgnoredReason(ignored) {
+  if (!Array.isArray(ignored) || ignored.length === 0) {
+    return null;
+  }
+  const labels = ignored.map((entry) => IGNORED_SETTING_LABELS[entry?.setting] ?? String(entry?.setting));
+  const joined =
+    labels.length === 1 ? labels[0] : `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
+  return (
+    `profile_isolation is "isolated", so ${joined} ${labels.length === 1 ? 'is' : 'are'} ignored for this ` +
+    'start: no profile directory is resolved, created or locked.'
+  );
+}
+
 // Resolve the profile for this server start.
 //
 // Returns:
@@ -308,14 +367,19 @@ export function resolveProfileIsolation(value) {
 //   account           the resolved account name, or null
 //   accountApplies    false when the manifest ignores profile_dir (the engine
 //                     has its own profile setting; do not add a second control)
+//   ignored           the profile settings this start ignored because
+//                     profile_isolation is "isolated": [{ setting, value, reason }].
+//                     Absent for "shared" and "workspace", so their resolution
+//                     objects are byte-identical to before the mode existed.
 //   error             the exact start-up error, or null
 //
-// Precedence: profile_dir, then account, then the default-profile pointer, then
-// the workspace profile when profile_isolation is "workspace", then the engine
-// default. The pointer is passed in already read (null when absent or invalid);
-// an invalid name here is ignored rather than turned into an error, because a
-// broken pointer is never fatal. With no pointer the result is byte-identical to
-// the behaviour before the pointer existed.
+// Precedence: profile_isolation=isolated (no profile at all), then profile_dir,
+// then account, then the default-profile pointer, then the workspace profile when
+// profile_isolation is "workspace", then the engine default. The pointer is
+// passed in already read (null when absent or invalid); an invalid name here is
+// ignored rather than turned into an error, because a broken pointer is never
+// fatal. With no pointer the result is byte-identical to the behaviour before the
+// pointer existed.
 export function resolveProfile({
   account,
   profileDir,
@@ -344,10 +408,36 @@ export function resolveProfile({
     // profile_isolation are inert.
     return { ...base, profileSource: 'engine', accountApplies: false };
   }
+  if (isolation === PROFILE_ISOLATION_ISOLATED) {
+    // No profile at all. Nothing is resolved, created or locked, so every
+    // profile setting that was supplied is reported as ignored rather than as an
+    // error (an isolated start never fails because of a profile value), and the
+    // workspace derivation does not run.
+    const ignored = [];
+    const explicitIsolated =
+      nonEmptyString(profileDir) && !isPlaceholder(profileDir) ? profileDir.trim() : '';
+    if (explicitIsolated !== '') {
+      ignored.push(isolatedIgnoredEntry(ISOLATED_IGNORED_PROFILE_DIR, explicitIsolated));
+    }
+    const accountValue = typeof account === 'string' ? account.trim() : '';
+    if (accountValue !== '' && !isPlaceholder(accountValue)) {
+      ignored.push(isolatedIgnoredEntry(ISOLATED_IGNORED_ACCOUNT, accountValue));
+    }
+    const pointerValue = typeof pointer === 'string' ? pointer.trim() : '';
+    if (pointerValue !== '' && !isPlaceholder(pointerValue)) {
+      ignored.push(isolatedIgnoredEntry(ISOLATED_IGNORED_POINTER, pointerValue));
+    }
+    return { ...base, profileSource: PROFILE_ISOLATION_ISOLATED, accountApplies: true, ignored };
+  }
   const explicit = nonEmptyString(profileDir) && !isPlaceholder(profileDir) ? profileDir.trim() : '';
   if (explicit !== '') {
     // The broker does not normalise, resolve or create an explicit path.
-    return { ...base, profileDir: explicit, profileSource: 'profile_dir', accountApplies: true };
+    return {
+      ...base,
+      profileDir: explicit,
+      profileSource: 'profile_dir',
+      accountApplies: true,
+    };
   }
   const raw = typeof account === 'string' ? account : '';
   const trimmed = raw.trim();
@@ -394,9 +484,10 @@ export function resolveProfile({
 }
 
 // The directory the backend will actually use this start, or null when the
-// engine owns its profile (attach/native engines) or no resolution is known.
-// This is what the lock preflight reads: an explicit/account/workspace path, or
-// the engine default the launcher applies when the broker sets nothing.
+// engine owns its profile (attach/native engines), the profile_isolation is
+// "isolated" (no profile exists), or no resolution is known. This is what the
+// lock preflight reads: an explicit/account/workspace path, or the engine default
+// the launcher applies when the broker sets nothing.
 export function effectiveProfileDir(resolution) {
   if (resolution === null || typeof resolution !== 'object') {
     return null;
@@ -828,9 +919,15 @@ export function redactSecrets(text) {
 // unless resolveProfile returned a directory. `outputDir` is the broker's
 // resolved default artifact directory (2.10.1); when null nothing is added, so an
 // explicit output_dir setting keeps flowing through the plugin env untouched.
+// `isolated` is the profile_isolation=isolated start: any user-data-dir the base
+// environment carried is removed (the setting is inert in that mode) and the
+// engines' own isolated switch is turned on. Both engines read that variable:
+// the Cloak bridge passes it through when it sets no user-data-dir, and the
+// Camoufox wrapper reads it in mcp/config.py. With `isolated` false the
+// environment is byte-identical to before.
 export function backendEnvironment(
   baseEnv,
-  { engineId, profileDir = null, proxyServer = null, outputDir = null } = {},
+  { engineId, profileDir = null, proxyServer = null, outputDir = null, isolated = false } = {},
 ) {
   const env = { ...(isPlainObject(baseEnv) ? baseEnv : {}), PLAYWRIGHT_MCP_BROWSER_ENGINE: engineId };
   if (nonEmptyString(profileDir)) {
@@ -841,6 +938,13 @@ export function backendEnvironment(
   }
   if (nonEmptyString(outputDir)) {
     env.PLAYWRIGHT_MCP_OUTPUT_DIR = outputDir;
+  }
+  if (isolated === true) {
+    // Last, so neither the base environment nor a caller-supplied directory can
+    // leave a user-data-dir on an isolated start (both engines refuse or ignore
+    // it there).
+    delete env.PLAYWRIGHT_MCP_USER_DATA_DIR;
+    env.PLAYWRIGHT_MCP_ISOLATED = 'true';
   }
   return env;
 }
