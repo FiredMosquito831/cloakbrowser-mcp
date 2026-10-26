@@ -237,14 +237,16 @@ async function main() {
   ensureBuild(env, paths, build);
   const binary = resolveBinary(env, paths, build);
 
-  // Saved logins (2.15.0). Off by default and byte-identical when off: without a
+  // Saved logins (2.16.0). Off by default and byte-identical when off: without a
   // record from an earlier on start this only reads the setting and returns.
-  // When on, it writes the per-user Firefox policy file next to the Camoufox
-  // cache (a copy of the build's own policies with only the two password values
-  // flipped), verifies once that Firefox reads it, and sets the state variable
-  // the entry point uses to merge the four prefs. Any failure is reported and
-  // leaves the setting off for this start; it never stops the server.
-  await applyPasswordManager({
+  // When on, it creates a plugin-owned overlay under the plugin data directory
+  // (hardlinks/junctions to the build, with only `distribution/policies.json`
+  // replaced by the build's own policy with the two password values true),
+  // verifies once with a short headless start that Firefox reads it, and sets the
+  // state variable the entry point uses to merge the signon prefs. Any failure is
+  // reported and leaves the stock build in use for this start; it never stops the
+  // server, and a directory this plugin did not write is never touched.
+  const passwordManager = await applyPasswordManager({
     env,
     pluginDataDir: dataDir(env),
     binary,
@@ -256,9 +258,16 @@ async function main() {
 
   applyDefaultProfile(env);
   applyToolGroups(env);
-  env.CAMOUFOX_EXECUTABLE_PATH = binary;
+  env.CAMOUFOX_EXECUTABLE_PATH =
+    passwordManager !== null &&
+    typeof passwordManager.executable === 'string' &&
+    passwordManager.executable !== ''
+      ? passwordManager.executable
+      : binary;
 
-  log(`starting process pinned to build ${build.replace(/^v/, '')}; executable ${binary}`);
+  log(
+    `starting process pinned to build ${build.replace(/^v/, '')}; executable ${env.CAMOUFOX_EXECUTABLE_PATH}`,
+  );
   const entry = path.join(PLUGIN_ROOT, ENTRY);
   const child = spawn(paths.python, ['-I', entry], { stdio: 'inherit', env, windowsHide: true });
 

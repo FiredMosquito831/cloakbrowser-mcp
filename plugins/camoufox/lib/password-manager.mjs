@@ -1,37 +1,63 @@
-// Saved logins and autofill for the Camoufox engine (2.15.0).
+// Saved logins and autofill for the Camoufox engine (2.16.0).
 //
 // Firefox's login manager is gated by `signon.rememberSignons` (the save offer
 // and every fetch/autofill path) and `signon.autofillForms` (the fill itself).
 // The pinned Camoufox build sets both as defaults false and, more importantly,
 // locks `signon.rememberSignons` false through its own
 // `distribution/policies.json` (`PasswordManagerEnabled: false`,
-// `OfferToSaveLogins: false`). Launch prefs alone lose to that lock (verified by
-// the 2026-10-26 investigation, run C), so the only surgical route is Firefox's
-// per-user policy file: a copy of the build's own policies with only the two
-// password keys true, written where Firefox reads it when
-// `toolkit.policies.perUserDir=true`.
+// `OfferToSaveLogins: false`). Launch prefs alone lose to that lock, and the
+// build has no readable per-user policy directory on Windows (the 2026-10-26
+// follow-up proved `XREUserRunTimeDir` fails in the compiled platform branch).
 //
-// The per-user directory is derived from the Windows KnownFolder LocalAppData
-// (never from a possibly redirected environment variable) and is accepted only
-// when it is the same directory as the resolved build's Camoufox cache root. The
-// first enable proves the file was actually read with a one-off geolocation
-// permission probe. A per-user file that is not ours is never overwritten, and
-// the pref is never set without a readable file: with the pref set and no file,
-// Firefox applies no policies at all (also verified by the investigation).
+// The surgical route is therefore a plugin-owned overlay of the installed build:
+// every heavy byte is shared (hardlinks/junctions, lib/camoufox-overlay.mjs) and
+// only `distribution/policies.json` is ours - the build's own document with the
+// two password values true, every other policy preserved. The launcher exports
+// the overlay's `camoufox.exe` through `CAMOUFOX_EXECUTABLE_PATH`, which is the
+// route the pinned wrapper honours, and the entry point merges exactly the three
+// signon prefs. The first enable (and any build/policy/format change) is proved
+// with one short headless start whose temporary geolocation policy must answer
+// `denied`; anything else runs the stock build and reports why.
 //
 // Everything here is inert unless `password_manager` is on: the launcher calls it
-// with the setting off and it only removes a file a previous on start created.
+// with the setting off and it only removes an overlay and record a previous on
+// start created. A directory without this plugin's marker is never touched.
 
 import { spawn, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import {
+  cleanStaleTemps,
+  createOverlay,
+  inspectOverlay,
+  isRealDirectory,
+  overlayExecutablePath,
+  overlayPolicyPath,
+  overlayRoot,
+  overlayTarget,
+  OVERLAY_ENGINE,
+  OVERLAY_FORMAT,
+  OVERLAY_MARKER_FILENAME,
+  OVERLAY_MARKER_VERSION,
+  pruneOverlays,
+  readJsonFile,
+  readOverlayMarker,
+  removeOverlay,
+  sha256,
+  sha256File,
+  swapOverlay,
+  sameOverlayPath,
+  writeFileAtomic,
+} from './camoufox-overlay.mjs';
+
+export { readJsonFile, sha256, sha256File, writeFileAtomic };
 
 export const PASSWORD_MANAGER_ENGINE_ID = 'camoufox';
 export const PASSWORD_MANAGER_SETTING_VAR = 'STEALTH_PASSWORD_MANAGER';
 export const PASSWORD_MANAGER_STATE_VAR = 'STEALTH_PASSWORD_MANAGER_STATE';
-export const PASSWORD_MANAGER_STATE_APPLIED = 'applied';
-export const PASSWORD_MANAGER_POLICY_FILENAME = 'policies.json';
+export const PASSWORD_MANAGER_STATE_OVERLAY = 'overlay';
+export const PASSWORD_MANAGER_STATE_PREFS = 'prefs';
 export const PASSWORD_MANAGER_RECORD_FILENAME = 'password-manager.json';
 export const PASSWORD_MANAGER_RECORD_VERSION = 1;
 export const PASSWORD_MANAGER_SOURCE_POLICY_PARTS = Object.freeze(['distribution', 'policies.json']);
@@ -40,23 +66,29 @@ export const PASSWORD_MANAGER_CONFIG_ENV_NAMES = Object.freeze([
   'CAMOUFOX_MCP_CONFIG',
   'PLAYWRIGHT_MCP_CONFIG',
 ]);
-export const PASSWORD_MANAGER_PATH_TIMEOUT_MS = 20000;
 export const PASSWORD_MANAGER_PROBE_TIMEOUT_MS = 60000;
 
-// The four prefs this setting owns. `signon.autofillForms.http` stays false: a
+// The three prefs this setting owns. `signon.autofillForms.http` stays false: a
 // credential filled into an unencrypted page is a clear downgrade, and HTTPS is
 // unaffected (USER DECISION P3). Address/credit-card autofill and form history
-// are deliberately not touched (P9).
+// are deliberately not touched (P9). `toolkit.policies.perUserDir` is never set:
+// with the overlay the install policies are already the modified ones, and that
+// pref with no readable file disables every policy (the 2.15.0 finding).
 export const PASSWORD_MANAGER_PREFS = Object.freeze({
-  'toolkit.policies.perUserDir': true,
   'signon.rememberSignons': true,
   'signon.autofillForms': true,
   'signon.autofillForms.http': false,
 });
 
 export const PASSWORD_MANAGER_APPLIED_SENTENCE =
-  'Saved logins are enabled for this profile: Firefox may autofill credentials from the profile into matching ' +
-  'login forms, and the page (and therefore the model) can read the filled values; treat them as secrets.';
+  'Saved logins are enabled for this profile through a plugin-owned Camoufox build overlay: Firefox may autofill ' +
+  'credentials from the profile into matching login forms, and the page (and therefore the model) can read the ' +
+  'filled values; treat them as secrets.';
+
+export const PASSWORD_MANAGER_PREFS_SENTENCE =
+  'Saved logins are enabled for this profile with the Camoufox build’s own policy: Firefox may autofill credentials ' +
+  'from the profile into matching login forms, and the page (and therefore the model) can read the filled values; ' +
+  'treat them as secrets.';
 
 export const PASSWORD_MANAGER_NATIVE_NOTE =
   'Saved logins: mcp-camoufox 0.4.5 has no Firefox prefs input, so password_manager cannot be applied to the ' +
@@ -64,10 +96,10 @@ export const PASSWORD_MANAGER_NATIVE_NOTE =
 
 export const PASSWORD_MANAGER_NOT_APPLICABLE_NOTE =
   'Saved logins: password_manager applies only to the camoufox engine; this engine has no Firefox login manager ' +
-  'or per-user policy file, so the setting has no effect.';
+  'or Camoufox build to overlay, so the setting has no effect.';
 
 export const PASSWORD_MANAGER_PENDING_NOTE =
-  'Saved logins: the per-user policy file is prepared and verified when the Camoufox backend starts; this ' +
+  'Saved logins: the Camoufox overlay build is prepared and verified when the Camoufox backend starts; this ' +
   'report was taken before that step finished.';
 
 const ON_VALUES = new Set(['true', '1', 'yes', 'on']);
@@ -123,51 +155,15 @@ function timestamp() {
   return new Date().toISOString().replace(/\.\d{3}Z$/u, 'Z');
 }
 
-// Host path semantics (the feature only runs on win32). Paths are compared
-// case-insensitively because Windows is: the Camoufox cache root is
-// `<LocalAppData>\camoufox\camoufox` while Firefox's per-user directory is
-// `<LocalAppData>\Camoufox\Camoufox` (vendor/name), and those are the same
-// directory on Windows. Using the host module keeps the unit suite on Linux CI
-// running against real temporary directories.
-
-export function expectedPerUserDir(localAppData) {
-  return path.join(localAppData, 'Camoufox', 'Camoufox');
-}
-
-// The resolved build lives at <cacheRoot>\Cache\browsers\official\<build>\camoufox.exe.
-// Anything else (a custom executable, an overlay tree) is not the standard cache
-// and is refused: writing the per-user file there would be a guess.
-export function buildLayout(binary) {
-  if (!nonEmptyString(binary)) {
-    return null;
-  }
-  const buildDir = path.dirname(path.resolve(binary));
-  const official = path.dirname(buildDir);
-  const browsers = path.dirname(official);
-  const cache = path.dirname(browsers);
-  const cacheRoot = path.dirname(cache);
-  if (
-    path.basename(official).toLowerCase() !== 'official' ||
-    path.basename(browsers).toLowerCase() !== 'browsers' ||
-    path.basename(cache).toLowerCase() !== 'cache'
-  ) {
-    return null;
-  }
-  return { buildDir, cacheRoot };
-}
-
-export function sameWindowsPath(left, right) {
-  if (typeof left !== 'string' || typeof right !== 'string' || left === '' || right === '') {
-    return false;
-  }
-  return path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase();
+function randomToken() {
+  return randomBytes(6).toString('hex');
 }
 
 export function cloneJson(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-// The managed file is the build's own policy document with exactly the two
+// The managed document is the build's own policy document with exactly the two
 // password values flipped. Every other policy (telemetry, updates, extension
 // uninstall, search engines, form-history and profile-import locks) stays as the
 // build shipped it.
@@ -181,11 +177,12 @@ export function managedPolicy(buildPolicy) {
   return managed;
 }
 
-// The one-off verification file: the managed document plus a policy that is
+// The one-off verification document: the managed document plus a policy that is
 // observable from a page without any credential. `Permissions: Location:
 // BlockNewRequests` maps to permissions.default.geo=2, so
 // navigator.permissions.query({name:'geolocation'}).state is "denied" only when
-// this file was actually read.
+// this file was actually read. It is written for the probe and always replaced
+// by the managed document afterwards.
 export function probePolicy(managed) {
   if (!isPlainObject(managed) || !isPlainObject(managed.policies)) {
     return null;
@@ -203,33 +200,19 @@ export function policyBytes(policy) {
   return `${JSON.stringify(policy, null, 2)}\n`;
 }
 
-export function sha256(text) {
-  return createHash('sha256').update(text).digest('hex');
-}
-
-export function sha256File(file) {
-  try {
-    return sha256(readFileSync(file));
-  } catch {
-    return null;
+// True when the build's own policy switches the login manager off. A document
+// whose keys are absent or already true does not need an overlay: the stock build
+// plus the signon prefs is enough, and that is reported as `prefs`.
+export function passwordPolicyLocked(buildPolicy) {
+  if (!isPlainObject(buildPolicy) || !isPlainObject(buildPolicy.policies)) {
+    return true;
   }
+  return PASSWORD_MANAGER_POLICY_KEYS.some((key) => buildPolicy.policies[key] === false);
 }
 
 function readTextFile(file) {
   try {
     return readFileSync(file, 'utf8').replace(/^﻿/u, '');
-  } catch {
-    return null;
-  }
-}
-
-export function readJsonFile(file) {
-  const text = readTextFile(file);
-  if (text === null) {
-    return null;
-  }
-  try {
-    return JSON.parse(text);
   } catch {
     return null;
   }
@@ -290,7 +273,9 @@ export function passwordRecordPath(pluginDataDir) {
 
 const RECORD_STATUSES = new Set([
   'applied',
-  'blocked-by-existing-policy',
+  'prefs',
+  'blocked-by-overlay',
+  'blocked-by-existing-overlay',
   'blocked-by-build-policy',
   'blocked-config',
 ]);
@@ -311,21 +296,6 @@ export function readPasswordPolicyRecord(pluginDataDir) {
   return record;
 }
 
-function writeFileAtomic(target, text) {
-  mkdirSync(path.dirname(target), { recursive: true });
-  const temporary = `${target}.tmp-${process.pid}`;
-  try {
-    writeFileSync(temporary, text, { encoding: 'utf8' });
-    renameSync(temporary, target);
-  } finally {
-    try {
-      rmSync(temporary, { force: true });
-    } catch {
-      // A leftover temp file is harmless and never read; never mask the write.
-    }
-  }
-}
-
 export function writePasswordPolicyRecord(pluginDataDir, record) {
   writeFileAtomic(passwordRecordPath(pluginDataDir), `${JSON.stringify(record, null, 2)}\n`);
 }
@@ -336,73 +306,6 @@ export function removePasswordPolicyRecord(pluginDataDir) {
     return true;
   } catch {
     return false;
-  }
-}
-
-// 'ours' means the file's content is exactly a document this plugin wrote (the
-// managed one or the temporary probe one, recorded when it was written). Anything
-// else is foreign and must never be overwritten or removed.
-export function policyOwnership(record, policyFile) {
-  if (
-    record === null ||
-    !nonEmptyString(record.policyFile) ||
-    !sameWindowsPath(record.policyFile, policyFile)
-  ) {
-    return 'unknown';
-  }
-  const hash = sha256File(policyFile);
-  if (hash === null) {
-    return 'missing';
-  }
-  if (
-    (nonEmptyString(record.contentHash) && hash === record.contentHash) ||
-    (nonEmptyString(record.probeHash) && hash === record.probeHash)
-  ) {
-    return 'ours';
-  }
-  return 'foreign';
-}
-
-function removeOwnedPolicyFile(record, policyFile) {
-  if (policyOwnership(record, policyFile) !== 'ours') {
-    return false;
-  }
-  try {
-    rmSync(policyFile, { force: true });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// Resolve the Windows KnownFolder LocalAppData through the helper script. The
-// environment is passed through so a scratch run keeps its redirected homes, but
-// the folder itself comes from SHGetKnownFolderPath, which ignores those
-// variables (the investigation confirmed it).
-export function resolvePasswordPolicyPath(options) {
-  const { env, python, bootstrap, timeoutMs = PASSWORD_MANAGER_PATH_TIMEOUT_MS } = options;
-  if (!nonEmptyString(python) || !nonEmptyString(bootstrap)) {
-    return null;
-  }
-  const result = spawnSync(python, ['-I', bootstrap, 'password-path'], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    encoding: 'utf8',
-    env,
-    timeout: timeoutMs,
-    windowsHide: true,
-  });
-  if (result === null || result.status !== 0 || typeof result.stdout !== 'string') {
-    return null;
-  }
-  const line = lastNonEmptyLine(result.stdout);
-  if (line === null) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(line);
-    return isPlainObject(parsed) ? parsed : null;
-  } catch {
-    return null;
   }
 }
 
@@ -435,7 +338,7 @@ function killProcessTree(child) {
 // One short browser start, bounded. The helper prints exactly one JSON line;
 // progress and errors go to stderr. A timeout kills the whole tree (Python, the
 // Playwright driver and the browser), so no probe browser is left behind.
-export function runPasswordProbe(options) {
+export function runOverlayProbe(options) {
   const { env, python, bootstrap, binary, timeoutMs = PASSWORD_MANAGER_PROBE_TIMEOUT_MS } = options;
   return new Promise((resolve) => {
     if (!nonEmptyString(python) || !nonEmptyString(bootstrap) || !nonEmptyString(binary)) {
@@ -453,7 +356,7 @@ export function runPasswordProbe(options) {
       clearTimeout(timer);
       resolve(value);
     };
-    const child = spawn(python, ['-I', bootstrap, 'password-probe', binary], {
+    const child = spawn(python, ['-I', bootstrap, 'overlay-probe', binary], {
       stdio: ['ignore', 'pipe', 'pipe'],
       env,
       windowsHide: true,
@@ -492,50 +395,105 @@ export function runPasswordProbe(options) {
   });
 }
 
-function blockedResult({ env, pluginDataDir, build, status, note, policyFile, log, extra }) {
-  delete env[PASSWORD_MANAGER_STATE_VAR];
-  const record = {
-    version: PASSWORD_MANAGER_RECORD_VERSION,
-    engine: PASSWORD_MANAGER_ENGINE_ID,
+function recordMatchesKey(record, key) {
+  return (
+    record !== null &&
+    record.build === key.build &&
+    record.sourcePolicyHash === key.sourcePolicyHash &&
+    record.managedPolicyHash === key.managedPolicyHash &&
+    record.overlayFormat === key.overlayFormat
+  );
+}
+
+// Every blocked path runs the stock build and reports one honest sentence. The
+// record carries the overlay path (so turning the setting off removes it) and a
+// failure kind the next start uses to decide whether to retry.
+function blockedResult(options) {
+  const {
+    env,
+    pluginDataDir,
+    build,
     status,
-    build: nonEmptyString(build) ? build : null,
-    policyFile: nonEmptyString(policyFile) ? policyFile : null,
     note,
-    checkedAt: timestamp(),
-    ...(isPlainObject(extra) ? extra : {}),
-  };
+    log,
+    executable,
+    extra,
+    overlayPath = null,
+    policyFile = null,
+  } = options;
+  delete env[PASSWORD_MANAGER_STATE_VAR];
   try {
-    writePasswordPolicyRecord(pluginDataDir, record);
+    writePasswordPolicyRecord(pluginDataDir, {
+      version: PASSWORD_MANAGER_RECORD_VERSION,
+      engine: PASSWORD_MANAGER_ENGINE_ID,
+      status,
+      build: nonEmptyString(build) ? build : null,
+      ...(isPlainObject(extra) ? extra : {}),
+      overlay: nonEmptyString(overlayPath) ? overlayPath : null,
+      policyFile: nonEmptyString(policyFile) ? policyFile : null,
+      note,
+      checkedAt: timestamp(),
+    });
   } catch {
     // The report still works from this start's result; never fail the start.
   }
   log(note);
-  return { status, note, policyFile: nonEmptyString(policyFile) ? policyFile : null };
+  return {
+    status,
+    note,
+    policyFile: nonEmptyString(policyFile) ? policyFile : null,
+    overlay: null,
+    overlayMode: null,
+    executable: nonEmptyString(executable) ? executable : null,
+  };
 }
 
-function disablePasswordManager({ env, pluginDataDir, log }) {
+// Off removes this plugin's overlay (marker + containment + no-follow) and the
+// record. A tree that is not ours is never touched, and an in-use overlay is left
+// and reported instead of forced.
+function disablePasswordManager({ env, pluginDataDir, log, overlayOps }) {
   delete env[PASSWORD_MANAGER_STATE_VAR];
   const record = readPasswordPolicyRecord(pluginDataDir);
   if (record === null) {
-    return { status: 'off', note: null, policyFile: null };
+    return {
+      status: 'off',
+      note: null,
+      policyFile: null,
+      overlay: null,
+      overlayMode: null,
+      executable: null,
+    };
   }
-  const file = nonEmptyString(record.policyFile) ? record.policyFile : null;
   let removed = false;
-  if (file !== null) {
-    removed = removeOwnedPolicyFile(record, file);
+  let reason = null;
+  const recorded = nonEmptyString(record.overlay) ? record.overlay : null;
+  if (recorded !== null) {
+    const result = removeOverlay({ target: recorded, pluginDataDir, ...overlayOps });
+    removed = result.removed;
+    reason = result.reason;
   }
   removePasswordPolicyRecord(pluginDataDir);
-  log(
-    removed
-      ? `saved logins are off: removed this plugin's per-user policy file ${file}.`
-      : 'saved logins are off: no per-user policy file of this plugin is present; nothing was removed.',
-  );
-  return { status: 'off', note: null, policyFile: removed ? file : null };
+  if (removed) {
+    log(`saved logins are off: removed this plugin's overlay ${recorded}.`);
+  } else if (recorded !== null && reason !== null) {
+    log(`saved logins are off: the overlay ${recorded} was left in place (${reason}).`);
+  } else {
+    log('saved logins are off: no overlay of this plugin is present; nothing was removed.');
+  }
+  return {
+    status: 'off',
+    note: null,
+    policyFile: null,
+    overlay: null,
+    overlayMode: null,
+    executable: null,
+  };
 }
 
 // The whole step, called by launch-camoufox.mjs before the wrapper starts.
-// Returns { status, note, policyFile } for the launcher's log; it never throws on
-// a normal failure path and never stops the server from starting.
+// Returns { status, note, policyFile, overlay, overlayMode, executable } where
+// `executable` is the Camoufox executable the launcher must export. It never
+// throws on a normal failure path and never stops the server from starting.
 export async function applyPasswordManager(options) {
   const {
     env,
@@ -546,8 +504,8 @@ export async function applyPasswordManager(options) {
     bootstrap,
     log = () => {},
     platform = process.platform,
-    resolvePath = resolvePasswordPolicyPath,
-    probe = runPasswordProbe,
+    probe = runOverlayProbe,
+    overlayOps = {},
   } = options;
   const resolution = resolvePasswordManager(env);
   const problem = passwordManagerProblemNote(resolution);
@@ -555,71 +513,27 @@ export async function applyPasswordManager(options) {
     log(problem);
   }
   if (!resolution.enabled) {
-    return disablePasswordManager({ env, pluginDataDir, log });
+    return disablePasswordManager({ env, pluginDataDir, log, overlayOps });
   }
 
   const configProblem = passwordUserConfigProblem(env);
   if (configProblem !== null) {
-    delete env[PASSWORD_MANAGER_STATE_VAR];
-    log(configProblem);
-    return { status: 'blocked-config', note: configProblem, policyFile: null };
-  }
-
-  if (platform !== 'win32') {
     return blockedResult({
       env,
       pluginDataDir,
       build,
-      status: 'blocked-by-build-policy',
-      note:
-        'Saved logins: the per-user Firefox policy path could not be resolved on this platform, so the setting is ' +
-        'not applied. It was verified on Windows only.',
-      policyFile: null,
+      status: 'blocked-config',
+      note: configProblem,
       log,
+      executable: binary,
     });
   }
 
-  let localAppData = null;
-  try {
-    const resolved = resolvePath({ env, python, bootstrap });
-    localAppData =
-      isPlainObject(resolved) && nonEmptyString(resolved.localAppData) ? resolved.localAppData : null;
-  } catch {
-    localAppData = null;
-  }
-  if (localAppData === null) {
-    return blockedResult({
-      env,
-      pluginDataDir,
-      build,
-      status: 'blocked-by-build-policy',
-      note:
-        'Saved logins: the Windows LocalAppData folder could not be resolved, so the per-user policy file is not ' +
-        'written and the setting stays off for this start.',
-      policyFile: null,
-      log,
-    });
-  }
-  const expectedDir = expectedPerUserDir(localAppData);
-  const target = path.join(expectedDir, PASSWORD_MANAGER_POLICY_FILENAME);
-
-  const layout = buildLayout(binary);
-  if (layout === null || !sameWindowsPath(layout.cacheRoot, expectedDir)) {
-    return blockedResult({
-      env,
-      pluginDataDir,
-      build,
-      status: 'blocked-by-build-policy',
-      note:
-        `Saved logins: the Camoufox build (${binary}) is not inside the expected machine-wide Camoufox cache ` +
-        `(${expectedDir}), so the per-user policy file is not written and the setting stays off for this start.`,
-      policyFile: null,
-      log,
-    });
-  }
-
-  const sourceFile = path.join(layout.buildDir, ...PASSWORD_MANAGER_SOURCE_POLICY_PARTS);
-  const sourceText = readTextFile(sourceFile);
+  const binaryPath = nonEmptyString(binary) ? path.resolve(binary) : null;
+  const sourceDir = binaryPath === null ? null : path.dirname(binaryPath);
+  const sourcePolicyFile =
+    sourceDir === null ? null : path.join(sourceDir, ...PASSWORD_MANAGER_SOURCE_POLICY_PARTS);
+  const sourceText = sourcePolicyFile === null ? null : readTextFile(sourcePolicyFile);
   let buildPolicy = null;
   if (sourceText !== null) {
     try {
@@ -628,155 +542,317 @@ export async function applyPasswordManager(options) {
       buildPolicy = null;
     }
   }
-  const managed = buildPolicy === null ? null : managedPolicy(buildPolicy);
-  if (managed === null) {
+  const managed = managedPolicy(buildPolicy);
+  if (binaryPath === null || !existsSync(binaryPath) || managed === null) {
     return blockedResult({
       env,
       pluginDataDir,
       build,
       status: 'blocked-by-build-policy',
       note:
-        `Saved logins: the Camoufox build policy ${sourceFile} is missing or not the expected JSON, so the ` +
-        'per-user policy file cannot be derived and the setting stays off for this start.',
-      policyFile: null,
+        `Saved logins: the Camoufox build policy ${sourcePolicyFile ?? '(unknown)'} is missing or not the expected ` +
+        'JSON, or the build executable is missing, so the overlay cannot be derived and the setting stays off for ' +
+        'this start.',
       log,
+      executable: binary,
     });
   }
+
   const managedText = policyBytes(managed);
   const probeText = policyBytes(probePolicy(managed));
-  const contentHash = sha256(managedText);
-  const probeHash = sha256(probeText);
   const sourcePolicyHash = sha256(sourceText);
+  const managedPolicyHash = sha256(managedText);
+  const probePolicyHash = sha256(probeText);
+  const key = {
+    build,
+    sourcePolicyHash,
+    managedPolicyHash,
+    overlayFormat: OVERLAY_FORMAT,
+    overlayMarkerVersion: OVERLAY_MARKER_VERSION,
+  };
 
-  const record = readPasswordPolicyRecord(pluginDataDir);
-  if (existsSync(target)) {
-    const ownership = policyOwnership(record, target);
-    if (ownership !== 'ours') {
-      return blockedResult({
-        env,
-        pluginDataDir,
+  // A build that no longer locks the manager off does not need an overlay: the
+  // stock build with the signon prefs is the minimal, forward-compatible action.
+  if (!passwordPolicyLocked(buildPolicy)) {
+    try {
+      writePasswordPolicyRecord(pluginDataDir, {
+        version: PASSWORD_MANAGER_RECORD_VERSION,
+        engine: PASSWORD_MANAGER_ENGINE_ID,
+        status: 'prefs',
         build,
-        status: 'blocked-by-existing-policy',
-        note:
-          `Saved logins: ${target} already exists and was not written by this plugin, so it is left untouched ` +
-          'and the setting stays off for this start.',
-        policyFile: target,
-        log,
+        sourcePolicyHash,
+        managedPolicyHash,
+        overlayFormat: OVERLAY_FORMAT,
+        overlay: null,
+        policyFile: null,
+        verified: true,
+        checkedAt: timestamp(),
+        note: null,
       });
+    } catch {
+      // Never fail the start over the record.
     }
+    env[PASSWORD_MANAGER_STATE_VAR] = PASSWORD_MANAGER_STATE_PREFS;
+    log(
+      'saved logins: this Camoufox build no longer locks the password manager off, so the stock build is used ' +
+        'with the signon prefs and no overlay is created.',
+    );
+    return {
+      status: 'prefs',
+      note: null,
+      policyFile: null,
+      overlay: null,
+      overlayMode: null,
+      executable: binaryPath,
+    };
   }
 
-  // A verification failure is cached for the same build and policy document, so a
-  // machine where Firefox does not read the resolved per-user path does not pay
-  // for a browser start on every launch. Turning the setting off removes the
-  // record and therefore retries when it is turned on again.
+  if (platform !== 'win32') {
+    return blockedResult({
+      env,
+      pluginDataDir,
+      build,
+      status: 'blocked-by-overlay',
+      note:
+        'Saved logins: the Camoufox overlay build is Windows-only, so the setting is not applied on this ' +
+        'platform; the stock build is used and its own policy stays in force.',
+      log,
+      executable: binaryPath,
+      extra: { ...key, failure: 'platform' },
+    });
+  }
+
+  // A definitive verification failure (`prompt`: the file was not read) is
+  // cached for the same build, source policy, managed policy and format, so a
+  // machine where Firefox does not read the overlay does not pay for a browser
+  // start on every launch. A timeout or error is never cached: the next start
+  // retries. Turning the setting off removes the record.
+  const earlier = readPasswordPolicyRecord(pluginDataDir);
   if (
-    record !== null &&
-    record.status === 'blocked-by-build-policy' &&
-    record.verified !== true &&
-    record.build === build &&
-    record.sourcePolicyHash === sourcePolicyHash &&
-    record.contentHash === contentHash &&
-    record.policyFile === null &&
-    !existsSync(target)
+    earlier !== null &&
+    earlier.status === 'blocked-by-overlay' &&
+    earlier.failure === 'probe' &&
+    recordMatchesKey(earlier, key)
   ) {
     return blockedResult({
       env,
       pluginDataDir,
       build,
-      status: 'blocked-by-build-policy',
-      note: nonEmptyString(record.note)
-        ? record.note
-        : 'Saved logins: the verification start previously failed.',
-      policyFile: null,
+      status: 'blocked-by-overlay',
+      note: nonEmptyString(earlier.note)
+        ? earlier.note
+        : 'Saved logins: the overlay verification previously failed.',
       log,
-      extra: { sourcePolicyHash, contentHash, probeHash, verified: false, failure: 'probe' },
+      executable: binaryPath,
+      extra: { ...key, failure: 'probe' },
     });
   }
 
-  const needsProbe =
-    record === null ||
-    record.verified !== true ||
-    record.build !== build ||
-    record.sourcePolicyHash !== sourcePolicyHash ||
-    record.contentHash !== contentHash ||
-    !nonEmptyString(record.policyFile) ||
-    !sameWindowsPath(record.policyFile, target);
+  const target = overlayTarget(pluginDataDir, sourceDir);
+  const markerState = readOverlayMarker(target);
+  if (markerState.state === 'foreign') {
+    return blockedResult({
+      env,
+      pluginDataDir,
+      build,
+      status: 'blocked-by-existing-overlay',
+      note:
+        `Saved logins: ${target} already exists and was not written by this plugin ` +
+        `(${markerState.reason ?? 'no marker of ours'}), so it is left untouched and the setting stays off for ` +
+        'this start.',
+      log,
+      executable: binaryPath,
+      overlayPath: target,
+      extra: { ...key, failure: 'foreign' },
+    });
+  }
+
+  let marker = markerState.state === 'ours' ? markerState.marker : null;
+  let inspection =
+    marker === null
+      ? { ok: false, reason: 'no overlay yet', needsFinalPolicy: false }
+      : inspectOverlay({
+          target,
+          marker,
+          sourceDir,
+          sourcePolicyHash,
+          managedPolicyHash,
+          probePolicyHash,
+        });
+
+  if (!inspection.ok) {
+    let tempDir = null;
+    try {
+      cleanStaleTemps({ pluginDataDir, ...overlayOps });
+      tempDir = `${target}.tmp-${process.pid}-${randomToken()}`;
+      const createdAt = timestamp();
+      marker = createOverlay({
+        sourceDir,
+        tempDir,
+        probePolicyText: probeText,
+        markerBase: {
+          version: OVERLAY_MARKER_VERSION,
+          engine: OVERLAY_ENGINE,
+          sourceBuild: path.resolve(sourceDir),
+          sourceExe: path.join(sourceDir, 'camoufox.exe'),
+          sourcePolicySha256: sourcePolicyHash,
+          managedPolicySha256: managedPolicyHash,
+          probePolicySha256: probePolicyHash,
+          createdAt,
+          verifiedAt: null,
+          pluginOverlayFormat: OVERLAY_FORMAT,
+        },
+        ...overlayOps,
+      });
+      swapOverlay({ tempDir, target, ...overlayOps, log });
+      inspection = { ok: true, reason: null, needsFinalPolicy: true };
+    } catch (error) {
+      if (tempDir !== null) {
+        try {
+          rmSync(tempDir, { recursive: true, force: true, maxRetries: 2 });
+        } catch {
+          // A leftover temp tree is pruned by age on a later start.
+        }
+      }
+      const leftover = markerState.state === 'ours' ? target : null;
+      const detail = error instanceof Error ? error.message : String(error);
+      return blockedResult({
+        env,
+        pluginDataDir,
+        build,
+        status: 'blocked-by-overlay',
+        note:
+          `Saved logins: the Camoufox overlay build could not be created or refreshed (${detail}); the stock ` +
+          'build is used and the setting stays off for this start.',
+        log,
+        executable: binaryPath,
+        overlayPath: leftover,
+        extra: { ...key, failure: typeof error?.code === 'string' ? error.code : 'create' },
+      });
+    }
+  }
+
+  const verifiedForThisKey =
+    earlier !== null &&
+    earlier.status === 'applied' &&
+    earlier.verified === true &&
+    recordMatchesKey(earlier, key) &&
+    sameOverlayPath(earlier.overlay, target) &&
+    (earlier.mode === 'hardlink' || earlier.mode === 'copy');
 
   try {
-    if (needsProbe) {
-      writeFileAtomic(target, probeText);
-      log(`saved logins: verifying that Firefox reads ${target} (one short headless start).`);
-      const probeResult = await probe({ env, python, bootstrap, binary });
+    if (!verifiedForThisKey) {
+      writeFileAtomic(overlayPolicyPath(target), probeText);
+      log('saved logins: verifying that Firefox reads the overlay policy (one short headless start).');
+      const probeResult = await probe({
+        env,
+        python,
+        bootstrap,
+        binary: overlayExecutablePath(target),
+      });
+      // Always restore the final policy, so a leftover overlay can never carry
+      // the temporary verification policy into a user session.
+      writeFileAtomic(overlayPolicyPath(target), managedText);
       if (probeResult === null || typeof probeResult !== 'object' || probeResult.state !== 'denied') {
-        removeOwnedPolicyFile(
-          {
-            version: PASSWORD_MANAGER_RECORD_VERSION,
-            engine: PASSWORD_MANAGER_ENGINE_ID,
-            policyFile: target,
-            contentHash,
-            probeHash,
-          },
-          target,
-        );
+        const definitive =
+          probeResult !== null && typeof probeResult === 'object' && probeResult.state === 'prompt';
         const detail =
           probeResult === null || typeof probeResult !== 'object' || !nonEmptyString(probeResult.detail)
             ? String(probeResult?.state ?? 'no answer')
             : probeResult.detail;
+        let overlayPath = target;
+        let removed = false;
+        if (definitive) {
+          const removal = removeOverlay({ target, pluginDataDir, ...overlayOps });
+          removed = removal.removed;
+          if (removed) {
+            overlayPath = null;
+          }
+        }
         return blockedResult({
           env,
           pluginDataDir,
           build,
-          status: 'blocked-by-build-policy',
-          note:
-            `Saved logins: the verification start could not confirm that Firefox reads ${target} (${detail}), so ` +
-            'the per-user policy file was removed and the setting stays off. This result is cached for this build ' +
-            'and policy document; turn the setting off and on to retry after a Firefox or cache change.',
-          policyFile: null,
+          status: 'blocked-by-overlay',
+          note: definitive
+            ? `Saved logins: the overlay build was created but Firefox did not read its policy (geolocation ` +
+              `answered ${detail}), so the overlay was ${removed ? 'removed' : 'left in place'} and the stock ` +
+              'build is used. This result is cached for this build and policy document; turn the setting off and ' +
+              'on to retry after a Firefox or cache change.'
+            : `Saved logins: the overlay build could not be verified (${detail}), so the stock build is used for ` +
+              'this start; the next start retries.',
           log,
-          extra: { sourcePolicyHash, contentHash, probeHash, verified: false, failure: 'probe' },
+          executable: binaryPath,
+          overlayPath,
+          extra: { ...key, failure: definitive ? 'probe' : 'transient', verified: false },
         });
       }
+      marker = { ...marker, verifiedAt: timestamp() };
+      writeFileAtomic(path.join(target, OVERLAY_MARKER_FILENAME), `${JSON.stringify(marker, null, 2)}\n`);
+    } else if (inspection.needsFinalPolicy) {
+      // An earlier start was interrupted between the probe policy write and the
+      // final one; restore the final document without another browser start.
+      writeFileAtomic(overlayPolicyPath(target), managedText);
     }
-    writeFileAtomic(target, managedText);
+
+    const policyFile = overlayPolicyPath(target);
     writePasswordPolicyRecord(pluginDataDir, {
       version: PASSWORD_MANAGER_RECORD_VERSION,
       engine: PASSWORD_MANAGER_ENGINE_ID,
       status: 'applied',
       build,
-      policyFile: target,
-      sourcePolicyFile: sourceFile,
       sourcePolicyHash,
-      contentHash,
-      probeHash,
+      managedPolicyHash,
+      probePolicyHash,
+      overlayFormat: OVERLAY_FORMAT,
+      overlay: target,
+      policyFile,
+      mode: marker.mode,
       verified: true,
-      verifiedAt: timestamp(),
+      verifiedAt: marker.verifiedAt ?? timestamp(),
       checkedAt: timestamp(),
       note: null,
     });
-    env[PASSWORD_MANAGER_STATE_VAR] = PASSWORD_MANAGER_STATE_APPLIED;
+    env[PASSWORD_MANAGER_STATE_VAR] = PASSWORD_MANAGER_STATE_OVERLAY;
     log(
-      `saved logins enabled: wrote the per-user policy file ${target} (the build's policies with only ` +
-        'PasswordManagerEnabled and OfferToSaveLogins set true) and the Firefox prefs that use it.',
+      `saved logins enabled: the Camoufox overlay build ${target} (${marker.mode}) carries the build's policies ` +
+        'with only PasswordManagerEnabled and OfferToSaveLogins set true; the session runs that executable with ' +
+        'the signon prefs.',
     );
-    return { status: 'applied', note: null, policyFile: target };
+    pruneOverlays({
+      pluginDataDir,
+      currentName: path.basename(target),
+      ...overlayOps,
+      log,
+    });
+    return {
+      status: 'applied',
+      note: null,
+      policyFile,
+      overlay: target,
+      overlayMode: marker.mode,
+      executable: overlayExecutablePath(target),
+    };
   } catch (error) {
-    removeOwnedPolicyFile(
-      {
-        version: PASSWORD_MANAGER_RECORD_VERSION,
-        engine: PASSWORD_MANAGER_ENGINE_ID,
-        policyFile: target,
-        contentHash,
-        probeHash,
-      },
-      target,
-    );
-    removePasswordPolicyRecord(pluginDataDir);
+    try {
+      writeFileAtomic(overlayPolicyPath(target), managedText);
+    } catch {
+      // The overlay may be gone; the stock build still starts.
+    }
     const detail = error instanceof Error ? error.message : String(error);
-    const note = `Saved logins: the per-user policy file ${target} could not be written (${detail}); the setting is off for this start.`;
-    delete env[PASSWORD_MANAGER_STATE_VAR];
-    log(note);
-    return { status: 'blocked-by-build-policy', note, policyFile: null };
+    return blockedResult({
+      env,
+      pluginDataDir,
+      build,
+      status: 'blocked-by-overlay',
+      note:
+        `Saved logins: the overlay verification or record could not be completed (${detail}); the stock build is ` +
+        'used for this start and the next start retries.',
+      log,
+      executable: binaryPath,
+      overlayPath: readOverlayMarker(target).state === 'ours' ? target : null,
+      extra: { ...key, failure: 'transient', verified: false },
+    });
   }
 }
 
@@ -787,3 +863,8 @@ export function hasFirefoxLoginStore(profileDir) {
   }
   return existsSync(path.join(profileDir, 'logins.db'));
 }
+
+// Re-exported for the broker's overlay re-check: a directory that is not a real
+// directory (a junction, a file) is not a usable overlay even when the record
+// says applied.
+export { isRealDirectory, overlayPolicyPath, overlayRoot };

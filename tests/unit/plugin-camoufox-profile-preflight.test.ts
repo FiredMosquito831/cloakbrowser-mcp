@@ -845,6 +845,7 @@ function createLockPlugin(root: string): string {
   }
   for (const file of [
     'attach.mjs',
+    'camoufox-overlay.mjs',
     'password-manager.mjs',
     'ping-timeout.mjs',
     'profile.mjs',
