@@ -18,16 +18,14 @@ blocks while the MCP stdio reader has a ``readline()`` outstanding, freezing the
 whole event loop until the client sends another line. Importing it here, before
 the wrapper starts serving stdio, removes that concurrency.
 
-A third step gives a persistent Camoufox profile one stable device identity
-(plugin 2.14.0). Camoufox draws a new fingerprint on every launch unless the
-caller pins one, and its own code names the changing-fonts-under-identical-
-cookies pattern as a spoof tell (daijro/camoufox#442, #765, #378). With
-``identity_mode=profile`` (the default) the first launch of a profile draws a
-fingerprint for the host OS, stores it under ``<profile>/.camoufox-identity.json``
-and passes it to the wrapper through a per-profile ``CAMOUFOX_MCP_CONFIG`` file
-under the plugin data directory. ``identity_mode=random`` leaves the wrapper's
-environment exactly as before. An isolated start has no profile, so it always
-draws a new identity. Nothing here may ever stop the server from starting.
+A fourth step carries the opt-in saved-logins setting (plugin 2.15.0). When the
+launcher has resolved `password_manager` and written its managed per-user Firefox
+policy file, it sets `STEALTH_PASSWORD_MANAGER_STATE=applied`; this entry then
+merges the four Firefox prefs that use that file into the same per-profile
+`CAMOUFOX_MCP_CONFIG` the identity uses (one file, never two writers racing).
+Nothing here formats, reads or logs a credential: the plugin never opens the
+profile's login store. With the setting off or blocked the environment is left
+exactly as before.
 """
 
 from __future__ import annotations
@@ -53,9 +51,25 @@ PLUGIN_DATA_FALLBACK = '.camoufox-mcp-plugin'
 CONFIG_DIR_PARTS = ('config', 'camoufox')
 LOG_PREFIX = 'camoufox identity:'
 
+PASSWORD_MANAGER_STATE_ENV = 'STEALTH_PASSWORD_MANAGER_STATE'
+PASSWORD_MANAGER_STATE_APPLIED = 'applied'
+PASSWORD_LOG_PREFIX = 'camoufox passwords:'
+# The four prefs this setting owns. Plain-HTTP autofill stays off (USER DECISION
+# P3); address/credit-card autofill and form history are not touched (P9).
+PASSWORD_PREFS = {
+    'toolkit.policies.perUserDir': True,
+    'signon.rememberSignons': True,
+    'signon.autofillForms': True,
+    'signon.autofillForms.http': False,
+}
+
 
 def _log(message: str) -> None:
     print(f'{LOG_PREFIX} {message}', file=sys.stderr, flush=True)
+
+
+def _password_log(message: str) -> None:
+    print(f'{PASSWORD_LOG_PREFIX} {message}', file=sys.stderr, flush=True)
 
 
 def identity_mode(env=None):
@@ -397,6 +411,93 @@ def apply_identity(env=None, generate=None, log=_log):
     return {'mode': mode, 'applied': True, 'identityFile': path, 'configFile': config}
 
 
+def password_manager_applied(env=None) -> bool:
+    """True only when the launcher resolved and verified the managed policy file."""
+    source = os.environ if env is None else env
+    value = source.get(PASSWORD_MANAGER_STATE_ENV)
+    return isinstance(value, str) and value.strip().lower() == PASSWORD_MANAGER_STATE_APPLIED
+
+
+def merge_password_prefs(config):
+    """Merge the four prefs this setting owns into a wrapper config document.
+
+    The user's other keys and their other `firefox_user_prefs` are preserved; our
+    four win in the plugin-data copy. Returns a list of pref names that the user's
+    config already set to a different value (for one honest log line), or None
+    when the document cannot hold prefs at all.
+    """
+    browser = config.get('browser')
+    if not isinstance(browser, dict):
+        browser = {}
+        config['browser'] = browser
+    options = browser.get('camoufoxOptions')
+    if not isinstance(options, dict):
+        options = {}
+        browser['camoufoxOptions'] = options
+    prefs = options.get('firefox_user_prefs')
+    if prefs is None:
+        prefs = {}
+        options['firefox_user_prefs'] = prefs
+    if not isinstance(prefs, dict):
+        return None
+    overridden = sorted(name for name, value in PASSWORD_PREFS.items() if name in prefs and prefs[name] != value)
+    prefs.update(PASSWORD_PREFS)
+    return overridden
+
+
+def apply_password_manager(env=None, log=_password_log):
+    """Merge the saved-login prefs into the wrapper config when the launcher says so.
+
+    Never raises for a normal failure path and never starts a browser: the file and
+    its verification belong to the launcher. Returns a small status dict.
+    """
+    source = os.environ if env is None else env
+    if not password_manager_applied(source):
+        return {'applied': False, 'reason': 'off'}
+    theirs = user_config_path(source)
+    user_config = None
+    if theirs is not None:
+        user_config, reason = usable_json_config(theirs)
+        if user_config is None:
+            log(f'the config file {theirs} {reason}; leaving it untouched and starting without the saved-login prefs')
+            return {'applied': False, 'reason': 'config'}
+    raw_profile = source.get(USER_DATA_ENV)
+    profile_dir = raw_profile.strip() if isinstance(raw_profile, str) else ''
+    # An isolated start has no profile to store logins in; the prefs still apply to
+    # the browser it launches, and the config file is keyed on the working
+    # directory so two isolated servers in one project share one document.
+    scope = profile_dir if profile_dir != '' else os.getcwd()
+    config = user_config if user_config is not None else {}
+    overridden = merge_password_prefs(config)
+    if overridden is None:
+        log(
+            f'the config file {theirs} has a "browser.camoufoxOptions.firefox_user_prefs" value that is not an '
+            'object; leaving it untouched and starting without the saved-login prefs'
+        )
+        return {'applied': False, 'reason': 'config'}
+    if overridden:
+        log(
+            f'the config file {theirs} already sets {", ".join(overridden)}; this session uses the saved-login '
+            'values instead (your file is unchanged)'
+        )
+    target = launch_config_path(os.path.abspath(scope), source)
+    try:
+        _write_config_file(target, config)
+    except OSError as exc:
+        log(f'cannot write the launch config {target}: {exc}; starting without the saved-login prefs')
+        return {'applied': False, 'reason': 'config'}
+    source['CAMOUFOX_MCP_CONFIG'] = target
+    log(f'merged the saved-login prefs into {target}')
+    return {'applied': True, 'configFile': target, 'overridden': overridden}
+
+
+def _apply_password_manager_safely() -> None:
+    try:
+        apply_password_manager()
+    except Exception as exc:  # noqa: BLE001 - saved logins must never stop the server from starting
+        _password_log(f'saved-login setup failed: {exc}; this start runs without the saved-login prefs')
+
+
 def _apply_identity_safely() -> None:
     try:
         apply_identity()
@@ -441,6 +542,7 @@ def main() -> None:
         except Exception as exc:  # noqa: BLE001 - a warm-up must never stop the server from starting
             print(f'camoufox warm-up import failed: {exc}', file=sys.stderr, flush=True)
     _apply_identity_safely()
+    _apply_password_manager_safely()
     from camoufox_playwright_mcp.cli import main as wrapper_main
 
     wrapper_main()

@@ -18,6 +18,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { applyPingTimeout, pingTimeoutProblemNote } from './lib/ping-timeout.mjs';
+import { applyPasswordManager } from './lib/password-manager.mjs';
 import { ensurePython, ensureUv, ensureVenv } from './lib/provision.mjs';
 
 const PLUGIN_ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -235,6 +236,23 @@ async function main() {
   const paths = await ensureRuntime(env, spec, build);
   ensureBuild(env, paths, build);
   const binary = resolveBinary(env, paths, build);
+
+  // Saved logins (2.15.0). Off by default and byte-identical when off: without a
+  // record from an earlier on start this only reads the setting and returns.
+  // When on, it writes the per-user Firefox policy file next to the Camoufox
+  // cache (a copy of the build's own policies with only the two password values
+  // flipped), verifies once that Firefox reads it, and sets the state variable
+  // the entry point uses to merge the four prefs. Any failure is reported and
+  // leaves the setting off for this start; it never stops the server.
+  await applyPasswordManager({
+    env,
+    pluginDataDir: dataDir(env),
+    binary,
+    build,
+    python: paths.python,
+    bootstrap: path.join(PLUGIN_ROOT, BOOTSTRAP),
+    log,
+  });
 
   applyDefaultProfile(env);
   applyToolGroups(env);
