@@ -374,7 +374,7 @@ describe('the shared password-manager helper', () => {
   it('derives the per-user directory and accepts only the standard cache layout', () => {
     const local = path.join('C:', 'Users', 'someone', 'AppData', 'Local');
     expect(library.expectedPerUserDir(local)).toBe(path.join(local, 'Camoufox', 'Camoufox'));
-    const binary = path.join(
+    const binary = path.resolve(
       local,
       'camoufox',
       'camoufox',
@@ -385,8 +385,8 @@ describe('the shared password-manager helper', () => {
       'camoufox.exe',
     );
     expect(library.buildLayout(binary)).toEqual({
-      buildDir: path.join(local, 'camoufox', 'camoufox', 'Cache', 'browsers', 'official', 'x-h'),
-      cacheRoot: path.join(local, 'camoufox', 'camoufox'),
+      buildDir: path.resolve(local, 'camoufox', 'camoufox', 'Cache', 'browsers', 'official', 'x-h'),
+      cacheRoot: path.resolve(local, 'camoufox', 'camoufox'),
     });
     expect(
       library.sameWindowsPath(path.join(local, 'camoufox', 'camoufox'), library.expectedPerUserDir(local)),

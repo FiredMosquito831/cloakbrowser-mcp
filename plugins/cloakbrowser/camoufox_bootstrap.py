@@ -251,10 +251,11 @@ def main(argv: list[str]) -> int:
         )
         return USAGE_EXIT_STATUS
     except Exception as exc:  # noqa: BLE001 - one actionable line, never a traceback
+        detail = f'{type(exc).__name__}: {exc}'
         if 'password-probe' in argv or 'password-path' in argv:
-            protocol_stdout.write(f'{json.dumps({"state": "error", "detail": f"{type(exc).__name__}: {exc}"})}\n')
+            protocol_stdout.write(f'{json.dumps({"state": "error", "detail": detail})}\n')
             protocol_stdout.flush()
-        print(f'{type(exc).__name__}: {exc}', file=sys.stderr)
+        print(detail, file=sys.stderr)
         return 1
 
 
