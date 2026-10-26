@@ -760,18 +760,12 @@ function usableIdentityConfig(file) {
   }
   const browser = config.browser;
   // null is "absent" for the entry too, so it is usable and gets filled in.
-  if (
-    browser !== undefined &&
-    browser !== null &&
-    (typeof browser !== 'object' || Array.isArray(browser))
-  ) {
+  if (browser !== undefined && browser !== null && (typeof browser !== 'object' || Array.isArray(browser))) {
     return false;
   }
   const options = browser === undefined || browser === null ? undefined : browser.camoufoxOptions;
   return (
-    options === undefined ||
-    options === null ||
-    (typeof options === 'object' && !Array.isArray(options))
+    options === undefined || options === null || (typeof options === 'object' && !Array.isArray(options))
   );
 }
 
