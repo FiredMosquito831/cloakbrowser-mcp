@@ -679,12 +679,11 @@ if (copyMode && engineError === null && profileApplies) {
 // file and the generated config because only it runs inside the engine venv; the
 // broker reads the same file for the meta-tools and the initialize sentence.
 // The setting is inert for every other engine: cloak pins its own Chromium seed,
-// playwright has no identity input, camoufox-native's mcp-camoufox has none, and
-// Kameleo manages its own profiles. The manifests are deliberately not edited —
-// each one feeds its engine's venv marker — so the inertness is reported from
-// here and documented in the READMEs.
+// playwright and the native contract have no identity input, and the attach
+// engine owns its own profiles. The manifests are deliberately not edited — each
+// one feeds its engine's venv marker — so the inertness is reported from here and
+// documented in the READMEs.
 const IDENTITY_ENGINE_ID = 'camoufox';
-const IDENTITY_NATIVE_ENGINE_ID = 'camoufox-native';
 const IDENTITY_MODE_DEFAULT = 'profile';
 const IDENTITY_MODES = Object.freeze(['profile', 'random']);
 const IDENTITY_FILE_NAME = '.camoufox-identity.json';
@@ -819,7 +818,7 @@ const IDENTITY_RANDOM_NOTE =
 const IDENTITY_ISOLATED_NOTE =
   'Device identity: this isolated start has no profile and draws a new one each time.';
 const IDENTITY_NATIVE_NOTE =
-  'Device identity: the camoufox-native engine (mcp-camoufox 0.4.5) has no fingerprint input, so each browser start draws a new one; identity_mode has no effect.';
+  'Device identity: this native engine (mcp-camoufox 0.4.5) has no fingerprint input, so each browser start draws a new one; identity_mode has no effect.';
 const IDENTITY_NOT_APPLICABLE_NOTE =
   'Device identity: identity_mode applies only to the camoufox engine; this engine has no generated identity file, so the setting has no effect.';
 
@@ -828,7 +827,7 @@ const IDENTITY_NOT_APPLICABLE_NOTE =
 // creates or regenerates the file when the backend starts.
 function identityFacts() {
   const mode = identityModeResolution.mode;
-  if (engine !== null && engine.id === IDENTITY_NATIVE_ENGINE_ID) {
+  if (native) {
     return { mode, applies: false, source: 'native-unavailable', file: null, note: IDENTITY_NATIVE_NOTE };
   }
   if (engine === null || engine.id !== IDENTITY_ENGINE_ID) {
@@ -1159,10 +1158,10 @@ const state = {
     // error }, or null for an engine whose profile the broker does not own. It is
     // reported whether or not it supplied this start's profile.
     pointer: profilePointer,
-    // Device identity (2.14.0): the resolved mode and the file this start would
-    // use. The created-at value and corruption notes are read by identityReport().
-    identity: identityState,
   },
+  // Device identity (2.14.0): the resolved mode and the file this start would
+  // use. The created-at value and corruption notes are read by identityReport().
+  identity: identityState,
   proxy: {
     source: proxyResolution.source,
     configured: proxyResolution.configured,
