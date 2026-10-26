@@ -12,7 +12,11 @@
 // the base's bridge-format lock for the session, and launches the engine on a
 // whole-tree copy under profiles/<engine>/.sessions; the copy is discarded on a
 // clean shutdown, and a crashed broker leaves it for browser_profiles and the
-// explicit prune command. The lock helpers read (and, for copy mode only, write)
+// explicit prune command. profile_isolation=copy-keep does everything copy does
+// and then swaps the whole tree back on a clean shutdown: the base is renamed to
+// <base>.previous-<stamp> (retained as user data, never pruned automatically) and
+// the session copy takes its place; a hard kill performs no swap. The lock
+// helpers read (and, for the copy modes only, write)
 // the bridge's own lock file so the broker can refuse a start that would fail. A one-line default-profile pointer (profiles/<engine>/.default)
 // names the profile a start uses when neither profile_dir nor account is set.
 // The functions here are explicitly parameterised (no path is read from a global
@@ -58,13 +62,33 @@ export const DEFAULT_LAUNCHER = 'launch.mjs';
 // the browser on a temporary whole-tree copy of the profile the ordinary
 // precedence resolves, holds the base profile's lock for the session so another
 // shared/workspace start cannot use it, and discards the copy on a clean
-// shutdown; the base profile is never written. In this version "copy" copies
-// whatever profile_dir/account/the pointer/engine default resolves and does not
-// combine with "workspace".
-export const PROFILE_ISOLATION_VALUES = Object.freeze(['shared', 'workspace', 'isolated', 'copy']);
+// shutdown; the base profile is never written. "copy-keep" behaves exactly like
+// "copy" and additionally swaps the whole tree on a clean close: the base is
+// renamed to <base>.previous-<stamp> (retained) and the session copy takes the
+// base path, so the session's changes are kept. A hard kill never swaps. In this
+// version both copy modes resolve whatever profile_dir/account/the
+// pointer/engine default resolves and do not combine with "workspace".
+export const PROFILE_ISOLATION_VALUES = Object.freeze([
+  'shared',
+  'workspace',
+  'isolated',
+  'copy',
+  'copy-keep',
+]);
 export const DEFAULT_PROFILE_ISOLATION = 'shared';
 export const PROFILE_ISOLATION_ISOLATED = 'isolated';
 export const PROFILE_ISOLATION_COPY = 'copy';
+export const PROFILE_ISOLATION_COPY_KEEP = 'copy-keep';
+// The two modes that run on a session copy. They share the base resolution, the
+// preflights, the base lock, the copy plan and the session directory; they differ
+// only in what a clean shutdown does with the copy.
+export const PROFILE_ISOLATION_COPY_VALUES = Object.freeze([
+  PROFILE_ISOLATION_COPY,
+  PROFILE_ISOLATION_COPY_KEEP,
+]);
+export function isCopyIsolation(value) {
+  return PROFILE_ISOLATION_COPY_VALUES.includes(value);
+}
 // The profile settings that an isolated start reports as ignored. The names are
 // the settings a user can see and change; `value` carries what was supplied so
 // the report never claims a setting was ignored when it was empty.
@@ -365,6 +389,29 @@ export function profileCopyNote(baseDir, sessionDir) {
   );
 }
 
+// profile_isolation=copy-keep runs on the same temporary copy and then keeps the
+// changes: on a clean close the base is renamed to <base>.previous-<stamp> and
+// the session copy takes its place. The one sentence says exactly that, and a
+// hard kill keeps both the base and the session tree untouched.
+export function profileCopyKeepNote(baseDir, sessionDir) {
+  const base = nonEmptyString(baseDir) ? baseDir : 'the selected profile';
+  const session = nonEmptyString(sessionDir) ? sessionDir : 'a temporary copy';
+  return (
+    `Profile isolation is "copy-keep": this session runs on a temporary copy of ${base} at ${session}, ` +
+    'and changes are kept: the base is replaced on a clean close and the previous tree is retained beside it.'
+  );
+}
+
+// The one sentence every surface shares when the active engine owns its own
+// profile and neither copy mode applies. For "copy" this is byte-identical to the
+// sentence it replaced.
+export function profileCopyNotApplicableNote(mode) {
+  return (
+    'This engine manages its own browser profile, so profile_isolation ' +
+    `"${nonEmptyString(mode) ? mode : PROFILE_ISOLATION_COPY}" does not apply to it.`
+  );
+}
+
 // Session copies of one engine live beside its account profiles, in a
 // dot-directory the profile inventory deliberately skips: a session copy is a
 // working directory, never a profile a user can select.
@@ -414,6 +461,18 @@ export function sessionCopyDir(engineId, dataDir, baseDir, { pid = process.pid, 
   return path.join(sessionRootDir(engineId, dataDir), sessionCopyName(baseDir, { pid, now }));
 }
 
+// True for a YYYYMMDD-HHMMSS stamp whose date and time fields are in range. The
+// stamp is local time and is only ever produced by localStamp(); this check keeps
+// a directory name the plugin did not create from being listed, locked or pruned.
+function validLocalStamp(stamp) {
+  const month = Number(stamp.slice(4, 6));
+  const day = Number(stamp.slice(6, 8));
+  const hour = Number(stamp.slice(9, 11));
+  const minute = Number(stamp.slice(11, 13));
+  const second = Number(stamp.slice(13, 15));
+  return !(month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59);
+}
+
 // Parse a session-copy directory name. Returns
 // { name, baseName, startedAtLocal, pid } or null for anything else, so a
 // directory the plugin did not create is never listed, locked or pruned.
@@ -430,12 +489,7 @@ export function parseSessionCopyName(name) {
     return null;
   }
   const stamp = match[2];
-  const month = Number(stamp.slice(4, 6));
-  const day = Number(stamp.slice(6, 8));
-  const hour = Number(stamp.slice(9, 11));
-  const minute = Number(stamp.slice(11, 13));
-  const second = Number(stamp.slice(13, 15));
-  if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59) {
+  if (!validLocalStamp(stamp)) {
     return null;
   }
   return { name, baseName: match[1], startedAtLocal: stamp, pid };
@@ -578,6 +632,385 @@ export function pruneSessionCopies(
   };
 }
 
+// --- keeping a session copy (copy-keep) --------------------------------------
+// A copy-keep session ends by swapping whole trees: the base is renamed to a
+// retained sibling named <base>.previous-<YYYYMMDD-HHMMSS> and the session copy
+// takes the base path. Previous trees are user data: they are listed (bounded)
+// and never removed by the plugin or by an explicit --prune, which only ever
+// touches .sessions. A hard kill performs no swap at all.
+
+// The separator and the sibling name a kept base moves to. A collision in the
+// same second gets a numbered suffix, so a second swap can never overwrite the
+// first retained tree.
+export const PREVIOUS_TREE_INFIX = '.previous-';
+export const PREVIOUS_TREE_LIST_LIMIT = 10;
+const PREVIOUS_TREE_PATTERN = /^(.+)\.previous-(\d{8}-\d{6})(?:-(\d+))?$/u;
+// How long a clean close waits for the session copy's own locks to disappear
+// before it gives up and keeps everything. Never forced.
+export const COPY_KEEP_LOCK_WAIT_MS = 5000;
+export const COPY_KEEP_LOCK_POLL_MS = 100;
+export const SWAP_RECORD_FILENAME = '.last-swap.json';
+
+// <baseName>.previous-<YYYYMMDD-HHMMSS>, or with a 1-based numbered suffix after
+// a same-second collision. The stamp is local time, like the session copies.
+export function previousTreeName(baseDir, { now = new Date(), suffix = 0 } = {}) {
+  const stem = `${sessionBaseName(baseDir)}${PREVIOUS_TREE_INFIX}${localStamp(now)}`;
+  return suffix > 0 ? `${stem}-${suffix + 1}` : stem;
+}
+
+// The retained sibling of a base profile: the base's parent directory keeps its
+// name, so the rename is always inside one directory and never across volumes.
+export function previousTreeDir(baseDir, options = {}) {
+  return path.join(path.dirname(path.resolve(baseDir)), previousTreeName(baseDir, options));
+}
+
+// The first free previous-tree name for this base. `exists` is injectable for
+// tests; it must answer false for a path that does not exist.
+export function selectPreviousTreeDir(baseDir, { now = new Date(), exists = existsSync } = {}) {
+  for (let suffix = 0; suffix < 100; suffix += 1) {
+    const candidate = previousTreeDir(baseDir, { now, suffix });
+    if (!exists(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+// Parse a retained previous-tree name. Returns
+// { name, baseName, timestamp, suffix } or null for anything else.
+export function parsePreviousTreeName(name) {
+  if (typeof name !== 'string') {
+    return null;
+  }
+  const match = PREVIOUS_TREE_PATTERN.exec(name);
+  if (match === null) {
+    return null;
+  }
+  const timestamp = match[2];
+  if (!validLocalStamp(timestamp)) {
+    return null;
+  }
+  const suffix = match[3] === undefined ? 0 : Number(match[3]);
+  // 0 is the un-suffixed name; a collision suffix starts at 2, so "-1" is a
+  // name this plugin never writes.
+  if (!Number.isSafeInteger(suffix) || suffix < 0 || suffix === 1) {
+    return null;
+  }
+  return { name, baseName: match[1], timestamp, suffix };
+}
+
+// The retained previous trees that sit beside one base profile, newest first and
+// bounded so a long history cannot bloat a payload. Read-only: nothing is
+// created, moved or deleted. Returns
+// { root, baseName, trees, count, truncated, error? }; `count` is untruncated.
+export function listPreviousTrees(baseDir, { limit = PREVIOUS_TREE_LIST_LIMIT } = {}) {
+  const resolved = path.resolve(typeof baseDir === 'string' ? baseDir : '');
+  const root = path.dirname(resolved);
+  const baseName = sessionBaseName(resolved);
+  const bounded = Number.isSafeInteger(limit) && limit > 0 ? limit : PREVIOUS_TREE_LIST_LIMIT;
+  let entries;
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch (error) {
+    const empty = { root, baseName, trees: [], count: 0, truncated: false };
+    return error?.code === 'ENOENT'
+      ? empty
+      : {
+          ...empty,
+          error: `Cannot read the profile directory ${root}: ${error.message}`,
+        };
+  }
+  const trees = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const parsed = parsePreviousTreeName(entry.name);
+    if (parsed === null || parsed.baseName !== baseName) {
+      continue;
+    }
+    trees.push({
+      name: parsed.name,
+      path: path.join(root, entry.name),
+      timestamp: parsed.timestamp,
+      suffix: parsed.suffix,
+    });
+  }
+  // Newest first: the stamp sorts lexicographically, then the collision suffix.
+  trees.sort((left, right) => (left.name === right.name ? 0 : left.name < right.name ? 1 : -1));
+  return {
+    root,
+    baseName,
+    trees: trees.slice(0, bounded),
+    count: trees.length,
+    truncated: trees.length > bounded,
+  };
+}
+
+// True when a session copy's own locks still prove a live holder: the backend's
+// bridge-format lock or the engine's own lock (Chromium lockfile, Firefox
+// parent.lock). A stale lock, a missing file and an unreadable one are all free
+// for the swap; only a proven live owner waits.
+export function sessionCopyHasLiveLock(sessionDir, { engineLockDescriptor = null } = {}) {
+  const bridge = readProfileLock(sessionDir);
+  if (lockBlocksStart(bridge)) {
+    return { live: true, bridge, engine: null };
+  }
+  if (engineLockDescriptor !== null && engineLockDescriptor !== undefined) {
+    const engine = readEngineProfileLock(sessionDir, engineLockDescriptor);
+    if (engineLockBlocksStart(engine)) {
+      return { live: true, bridge, engine };
+    }
+    return { live: false, bridge, engine };
+  }
+  return { live: false, bridge, engine: null };
+}
+
+function samePath(left, right) {
+  const a = path.resolve(left);
+  const b = path.resolve(right);
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+// Swap a session copy into its base path, keeping the old base as a retained
+// sibling. The two renames run back to back:
+//   1. base        -> <base>.previous-<stamp>   (retained, never auto-pruned)
+//   2. sessionCopy -> base
+// If the second rename fails, the base is renamed back from the previous tree and
+// the session copy is kept, so neither tree is lost. `exists` and `rename` are
+// injectable for tests, as are `retryMs`, `pollMs` and `sleep`: Windows can refuse
+// a directory rename transiently (EPERM/EBUSY) while a dying browser, an indexer
+// or antivirus still holds a handle inside a tree, so both renames are retried
+// within one bounded window — never forced, never longer than the window.
+//
+// Returns { ok, baseDir, sessionDir, previousDir, restored, retriedMs, error }:
+//   ok            both renames succeeded; previousDir is the retained tree
+//   restorable    false when a failed swap could not restore the base; then
+//                 previousDir names the retained tree that holds it
+//   error         the loud failure sentence, naming both paths
+export const SWAP_RENAME_RETRY_MS = 3000;
+const SWAP_RETRY_CODES = new Set(['EPERM', 'EBUSY', 'EACCES', 'ENOTEMPTY', 'EEXIST']);
+
+export function swapSessionCopyIntoBase({
+  baseDir,
+  sessionDir,
+  now = new Date(),
+  exists = existsSync,
+  rename = renameSync,
+  retryMs = SWAP_RENAME_RETRY_MS,
+  pollMs = COPY_KEEP_LOCK_POLL_MS,
+  sleep = null,
+  clock = () => Date.now(),
+} = {}) {
+  const resolvedBase = path.resolve(typeof baseDir === 'string' ? baseDir : '');
+  const resolvedSession = path.resolve(typeof sessionDir === 'string' ? sessionDir : '');
+  const base = {
+    baseDir: resolvedBase,
+    sessionDir: resolvedSession,
+    previousDir: null,
+    restored: false,
+    retriedMs: 0,
+  };
+  const wait = (ms) => {
+    if (typeof sleep === 'function') {
+      sleep(ms);
+      return;
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  };
+  // Retry a rename only for the transient Windows refusals, and only inside one
+  // window shared by both renames. A test-injected plain Error is not retried.
+  let retriedMs = 0;
+  const deadline = clock() + (Number.isFinite(retryMs) && retryMs > 0 ? retryMs : 0);
+  const renameWithRetry = (from, to) => {
+    for (;;) {
+      try {
+        rename(from, to);
+        return null;
+      } catch (error) {
+        const retryable = SWAP_RETRY_CODES.has(error?.code);
+        const remaining = deadline - clock();
+        if (!retryable || remaining <= 0) {
+          return error;
+        }
+        const pause = Math.min(pollMs, remaining);
+        wait(pause);
+        retriedMs += pause;
+      }
+    }
+  };
+  if (resolvedBase === resolvedSession) {
+    return {
+      ...base,
+      ok: false,
+      error: `The base ${resolvedBase} and the session copy are the same directory; nothing was swapped.`,
+    };
+  }
+  if (isPathInsideRoot(resolvedSession, resolvedBase)) {
+    // Renaming the base would move the session copy with it. A base that holds
+    // the session root is never a profile folder; nothing is renamed.
+    return {
+      ...base,
+      ok: false,
+      error:
+        `The session copy ${resolvedSession} is inside the base ${resolvedBase}, so a swap would move ` +
+        'both trees at once; nothing was swapped.',
+    };
+  }
+  if (!exists(resolvedBase)) {
+    return {
+      ...base,
+      ok: false,
+      error:
+        `The base profile ${resolvedBase} disappeared before the swap, so nothing was swapped; ` +
+        `the session copy ${resolvedSession} was kept.`,
+    };
+  }
+  if (!exists(resolvedSession)) {
+    return {
+      ...base,
+      ok: false,
+      error:
+        `The session copy ${resolvedSession} disappeared before the swap, so nothing was swapped; ` +
+        `the base profile ${resolvedBase} was left unchanged.`,
+    };
+  }
+  const previousDir = selectPreviousTreeDir(resolvedBase, { now, exists });
+  if (previousDir === null) {
+    return {
+      ...base,
+      ok: false,
+      error:
+        `Cannot find a free previous-tree name beside ${resolvedBase}, so nothing was swapped; ` +
+        `the base profile and the session copy ${resolvedSession} were both kept.`,
+    };
+  }
+  const retryText = () => (retriedMs > 0 ? ` (after retrying the rename for ${retriedMs} ms)` : '');
+  const firstError = renameWithRetry(resolvedBase, previousDir);
+  if (firstError !== null) {
+    return {
+      ...base,
+      ok: false,
+      previousDir: null,
+      restored: false,
+      retriedMs,
+      error:
+        `Cannot move the base profile ${resolvedBase} to ${previousDir}: ${firstError.message}` +
+        `${retryText()}. Nothing was swapped; the session copy ${resolvedSession} was kept.`,
+    };
+  }
+  const secondError = renameWithRetry(resolvedSession, resolvedBase);
+  if (secondError !== null) {
+    let restored = false;
+    let restoreError = null;
+    try {
+      rename(previousDir, resolvedBase);
+      restored = true;
+    } catch (failure) {
+      restoreError = failure?.message ?? String(failure);
+    }
+    const restoreText = restored
+      ? `The base was restored from ${previousDir}.`
+      : `The base could not be restored from ${previousDir} (${restoreError}); it is retained there.`;
+    return {
+      ok: false,
+      baseDir: resolvedBase,
+      sessionDir: resolvedSession,
+      previousDir: restored ? null : previousDir,
+      retainedPreviousDir: previousDir,
+      restored,
+      retriedMs,
+      error:
+        `Cannot move the session copy ${resolvedSession} into ${resolvedBase}: ${secondError.message}` +
+        `${retryText()}. ${restoreText} The session copy was kept.`,
+    };
+  }
+  return {
+    ok: true,
+    baseDir: resolvedBase,
+    sessionDir: resolvedSession,
+    previousDir,
+    restored: false,
+    retriedMs,
+    error: null,
+  };
+}
+
+// True when `candidate` is inside `root` (not equal to it). Copy-keep replaces a
+// whole profile tree, so the broker refuses a base outside the plugin data
+// directory; the lexical check is the rule stated to the user, and Windows paths
+// compare case-insensitively through path.relative.
+export function isPathInsideRoot(candidate, root) {
+  if (!nonEmptyString(candidate) || !nonEmptyString(root)) {
+    return false;
+  }
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
+// The engine-scoped record of the last clean-close swap, so a later
+// browser_profiles call can report the result (the broker that swapped is
+// exiting and cannot answer a tool call). One small dot-file; the profile
+// inventory skips it and --prune never touches it.
+export function swapRecordPath(engineId, dataDir) {
+  return path.join(path.resolve(dataDir), 'profiles', engineId, SWAP_RECORD_FILENAME);
+}
+
+function boundedRecordField(value, max) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const text = value.trim();
+  return text === '' ? null : text.slice(0, max);
+}
+
+// Write the swap record atomically; a failure is reported, never fatal.
+export function writeSwapRecord(engineId, dataDir, record) {
+  const file = swapRecordPath(engineId, dataDir);
+  const temporary = `${file}.${process.pid}.tmp`;
+  try {
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`);
+    renameSync(temporary, file);
+    return { path: file, written: true, error: null };
+  } catch (error) {
+    try {
+      rmSync(temporary, { force: true });
+    } catch {
+      // The temporary file is beside the record; leaving it changes no behaviour.
+    }
+    return { path: file, written: false, error: `Cannot write the swap record ${file}: ${error.message}` };
+  }
+}
+
+// Read the last swap record, shaped and bounded. Null when it is missing,
+// unreadable or not a record this plugin wrote (state is "swapped" or "failed").
+export function readSwapRecord(engineId, dataDir) {
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(swapRecordPath(engineId, dataDir), 'utf8'));
+  } catch {
+    return null;
+  }
+  if (!isPlainObject(parsed)) {
+    return null;
+  }
+  const state = boundedRecordField(parsed.state, 16);
+  if (state !== 'swapped' && state !== 'failed') {
+    return null;
+  }
+  return {
+    at: boundedRecordField(parsed.at, 64),
+    isolation: boundedRecordField(parsed.isolation, 16),
+    state,
+    baseDir: boundedRecordField(parsed.baseDir, 1024),
+    sessionDir: boundedRecordField(parsed.sessionDir, 1024),
+    previousDir: boundedRecordField(parsed.previousDir, 1024),
+    restored: parsed.restored === true,
+    error: boundedRecordField(parsed.error, 800),
+  };
+}
+
 const IGNORED_SETTING_LABELS = Object.freeze({
   [ISOLATED_IGNORED_PROFILE_DIR]: 'the Profile directory setting',
   [ISOLATED_IGNORED_ACCOUNT]: 'the Account profile setting',
@@ -633,9 +1066,9 @@ export function profileIgnoredReason(ignored) {
 // passed in already read (null when absent or invalid); an invalid name here is
 // ignored rather than turned into an error, because a broken pointer is never
 // fatal. With no pointer the result is byte-identical to the behaviour before the
-// pointer existed. profile_isolation="copy" resolves exactly like "shared" (same
-// precedence, same sources) and never derives a workspace profile: in this
-// version copy and workspace do not combine.
+// pointer existed. profile_isolation="copy" and "copy-keep" resolve exactly like
+// "shared" (same precedence, same sources) and never derive a workspace profile:
+// in this version the copy modes and workspace do not combine.
 export function resolveProfile({
   account,
   profileDir,

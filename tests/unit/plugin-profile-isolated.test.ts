@@ -335,14 +335,20 @@ describe('isolated as a profile_isolation value', () => {
         readFileSync(path.join(repoRoot, 'plugins', name, '.claude-plugin', 'plugin.json'), 'utf8'),
       ) as { userConfig: { profile_isolation: { options: string[]; description: string } } };
       const setting = manifest.userConfig.profile_isolation;
-      expect(setting.options).toEqual(['shared', 'workspace', 'isolated', 'copy']);
+      expect(setting.options).toEqual(['shared', 'workspace', 'isolated', 'copy', 'copy-keep']);
       expect(setting.description).toContain('isolated uses no browser profile at all');
       expect(setting.description).toContain('nothing persists');
       expect(setting.description.toLowerCase()).not.toContain('in memory');
     }
-    // 2.12.0 appended "copy" to the same setting; this suite's isolated
-    // expectations below are otherwise unchanged.
-    expect(profile.PROFILE_ISOLATION_VALUES).toEqual(['shared', 'workspace', 'isolated', 'copy']);
+    // 2.12.0 appended "copy" and 2.13.0 "copy-keep" to the same setting; this
+    // suite's isolated expectations below are otherwise unchanged.
+    expect(profile.PROFILE_ISOLATION_VALUES).toEqual([
+      'shared',
+      'workspace',
+      'isolated',
+      'copy',
+      'copy-keep',
+    ]);
   });
 
   it('is accepted by resolveProfileIsolation and is not a fallback value', () => {

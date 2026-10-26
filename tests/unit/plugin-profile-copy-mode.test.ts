@@ -537,14 +537,20 @@ describe('copy as a profile_isolation value', () => {
         readFileSync(path.join(repoRoot, 'plugins', name, '.claude-plugin', 'plugin.json'), 'utf8'),
       ) as { userConfig: { profile_isolation: { options: string[]; description: string } } };
       const setting = manifest.userConfig.profile_isolation;
-      expect(setting.options).toEqual(['shared', 'workspace', 'isolated', 'copy']);
+      expect(setting.options).toEqual(['shared', 'workspace', 'isolated', 'copy', 'copy-keep']);
       expect(setting.description).toContain('temporary copy');
       expect(setting.description).toContain('discarded');
       expect(setting.description).toContain('does not combine with workspace');
       expect(setting.description).toContain('scripts/profile-copy.mjs --prune');
       expect(setting.description.toLowerCase()).not.toContain('in memory');
     }
-    expect(profile.PROFILE_ISOLATION_VALUES).toEqual(['shared', 'workspace', 'isolated', 'copy']);
+    expect(profile.PROFILE_ISOLATION_VALUES).toEqual([
+      'shared',
+      'workspace',
+      'isolated',
+      'copy',
+      'copy-keep',
+    ]);
     expect(profile.PROFILE_ISOLATION_COPY).toBe('copy');
     expect(profile.SESSION_ROOT_DIRNAME).toBe('.sessions');
   });
