@@ -12,12 +12,15 @@
 // (EBUSY on this machine), so it carries no process id; a lock file that does
 // carry a pid is checked with process.kill(pid, 0). Both rules are exercised.
 import {
+  closeSync,
   copyFileSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync as originalReadFileSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
@@ -31,8 +34,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 // A lock file the OS refuses to open cannot be produced portably (Windows only),
 // so the error mapping is exercised by injecting the exact error Node reported
 // for the real Firefox lock: EBUSY "resource busy or locked". Every other read
-// in this file goes to the real fs.
-const faults = vi.hoisted(() => ({ unreadablePath: '', unreadableCode: '' }));
+// in this file goes to the real fs. The write-open probe (Chromium's lockfile)
+// gets its own injected fault the same way, and a real exclusive Windows handle
+// covers it end to end where the platform allows it.
+const faults = vi.hoisted(() => ({
+  unreadablePath: '',
+  unreadableCode: '',
+  unopenablePath: '',
+  unopenableCode: '',
+}));
 
 vi.mock('node:fs', async (importOriginal) => {
   const original = await importOriginal<typeof import('node:fs')>();
@@ -44,7 +54,15 @@ vi.mock('node:fs', async (importOriginal) => {
     }
     return original.readFileSync(file, options);
   };
-  return { ...original, readFileSync };
+  const openSync = (file: string, flags: string) => {
+    if (faults.unopenablePath !== '' && String(file) === faults.unopenablePath) {
+      const error = new Error(`Injected ${faults.unopenableCode}`);
+      Object.assign(error, { code: faults.unopenableCode });
+      throw error;
+    }
+    return original.openSync(file, flags);
+  };
+  return { ...original, readFileSync, openSync };
 });
 
 interface EngineLock {
@@ -65,7 +83,7 @@ interface ProfileModule {
   ): EngineLock;
   engineLockBlocksStart(lock: EngineLock): boolean;
   engineProfileLockFix(lock: EngineLock): string | null;
-  engineProfileLockMessage(lock: EngineLock): string;
+  engineProfileLockMessage(lock: EngineLock, options?: { trailing?: string }): string;
 }
 
 interface RegistryModule {
@@ -201,12 +219,31 @@ const STATUS_KEYS_293 = [
   'profileLock',
 ];
 
+// 2.11.1 declares the Chromium lockfile for cloak and playwright, so those two
+// engines gain the additive `engineProfileLock` key right after `profileLock`.
+// An engine without a descriptor still produces exactly CAPABILITIES_KEYS_295 /
+// STATUS_KEYS_293 (checked below with the synthetic plain engine).
+function withEngineLock(keys: string[]): string[] {
+  const copy = [...keys];
+  copy.splice(copy.indexOf('profileLock') + 1, 0, 'engineProfileLock');
+  return copy;
+}
+
+const CLOAK_CAPABILITIES_KEYS = withEngineLock(CAPABILITIES_KEYS_295);
+const CLOAK_STATUS_KEYS = withEngineLock(STATUS_KEYS_293);
+
 const tempRoots: string[] = [];
 const sessions: BrokerSession[] = [];
+const holders: FileHolder[] = [];
 
 afterEach(async () => {
   faults.unreadablePath = '';
   faults.unreadableCode = '';
+  faults.unopenablePath = '';
+  faults.unopenableCode = '';
+  for (const holder of holders.splice(0)) {
+    await holder.stop();
+  }
   for (const session of sessions.splice(0)) {
     await session.close();
   }
@@ -243,6 +280,77 @@ function deadPid(root: string): number {
 function injectedCode(lockPath: string, code: string): void {
   faults.unreadablePath = lockPath;
   faults.unreadableCode = code;
+}
+
+function injectedOpenCode(lockPath: string, code: string): void {
+  faults.unopenablePath = lockPath;
+  faults.unopenableCode = code;
+}
+
+interface FileHolder {
+  pid: number;
+  stop: () => Promise<void>;
+}
+
+// Hold a file the way Chromium holds its lockfile: one Windows handle opened for
+// read and write with FILE_SHARE_READ, so other readers succeed while any open
+// for writing is refused. Measured on this machine: the writer-open fails with
+// EBUSY and the file is released the moment the holder exits. The holder is a
+// real process, started and stopped by exact pid.
+async function holdExclusiveForRead(file: string): Promise<FileHolder> {
+  const script =
+    `$f=[System.IO.File]::Open('${file.replaceAll("'", "''")}','Open','ReadWrite','Read');` +
+    'Write-Output held; Start-Sleep -Seconds 120';
+  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
+  const pid = child.pid;
+  if (pid === undefined) {
+    throw new Error('could not start the file holder');
+  }
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    try {
+      const handle = openSync(file, 'r+');
+      closeSync(handle);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EBUSY') {
+        let stopped = false;
+        const stop = async () => {
+          if (stopped) {
+            return;
+          }
+          stopped = true;
+          try {
+            process.kill(pid);
+          } catch {
+            // Already gone.
+          }
+          await new Promise<void>((resolve) => {
+            if (child.exitCode !== null || child.signalCode !== null) {
+              resolve();
+              return;
+            }
+            const timer = setTimeout(resolve, 3000);
+            child.once('exit', () => {
+              clearTimeout(timer);
+              resolve();
+            });
+          });
+        };
+        return { pid, stop };
+      }
+      // Another error while the holder starts; keep waiting.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  try {
+    process.kill(pid);
+  } catch {
+    // Already gone.
+  }
+  throw new Error('the file holder never locked the file');
 }
 
 describe('engine lock reading (exclusive-open)', () => {
@@ -307,6 +415,112 @@ describe('engine lock reading (exclusive-open)', () => {
     expect(lock.state).toBe('unknown');
     expect(String(lock.error)).toContain('not a regular file');
     expect(profile.engineLockBlocksStart(lock)).toBe(false);
+  });
+});
+
+describe('engine lock reading (exclusive-open-write)', () => {
+  const descriptor = { file: 'lockfile', owner: 'exclusive-open-write' };
+
+  it('reports free when the profile has no lock file', () => {
+    const dir = profileWithLock('write-free');
+    expect(profile.readEngineProfileLock(dir, descriptor)).toMatchObject({
+      state: 'free',
+      owner: null,
+      error: null,
+      file: 'lockfile',
+      liveness: 'exclusive-open-write',
+      path: path.join(dir, 'lockfile'),
+    });
+  });
+
+  it('reports stale for a file that opens for writing, which is a dead lock', () => {
+    // Chromium removes lockfile on a clean exit and after a kill; a leftover from
+    // a crash opens normally, so it must never block a start.
+    const dir = profileWithLock('write-stale', 'leftover', 'lockfile');
+    const lock = profile.readEngineProfileLock(dir, descriptor);
+    expect(lock).toMatchObject({ state: 'stale', owner: null, error: null });
+    expect(profile.engineLockBlocksStart(lock)).toBe(false);
+  });
+
+  it('reports live when the OS refuses a write-open (EBUSY)', () => {
+    const dir = profileWithLock('write-live', '', 'lockfile');
+    injectedOpenCode(path.join(dir, 'lockfile'), 'EBUSY');
+    const lock = profile.readEngineProfileLock(dir, descriptor);
+    expect(lock).toMatchObject({ state: 'live', owner: { pid: null, createdAt: null }, error: null });
+    expect(profile.engineLockBlocksStart(lock)).toBe(true);
+  });
+
+  it.each(['EPERM', 'EACCES', 'ETXTBSY'])('treats an OS refusal (%s) as a live holder', (code) => {
+    const dir = profileWithLock(`write-${code}`, '', 'lockfile');
+    injectedOpenCode(path.join(dir, 'lockfile'), code);
+    expect(profile.readEngineProfileLock(dir, descriptor)).toMatchObject({
+      state: 'live',
+      owner: { pid: null },
+    });
+  });
+
+  it('treats a file that vanished between stat and open as free', () => {
+    const dir = profileWithLock('write-vanished', '', 'lockfile');
+    injectedOpenCode(path.join(dir, 'lockfile'), 'ENOENT');
+    expect(profile.readEngineProfileLock(dir, descriptor)).toMatchObject({ state: 'free' });
+  });
+
+  it('allows the start with a note when the write-open fails for another reason', () => {
+    const dir = profileWithLock('write-unknown', '', 'lockfile');
+    injectedOpenCode(path.join(dir, 'lockfile'), 'EIO');
+    const lock = profile.readEngineProfileLock(dir, descriptor);
+    expect(lock.state).toBe('unknown');
+    expect(String(lock.error)).toContain('for writing');
+    expect(profile.engineLockBlocksStart(lock)).toBe(false);
+  });
+
+  it('allows the start with a note when the lock path is not a regular file', () => {
+    const dir = profileWithLock('write-directory');
+    mkdirSync(path.join(dir, 'lockfile'));
+    const lock = profile.readEngineProfileLock(dir, descriptor);
+    expect(lock.state).toBe('unknown');
+    expect(String(lock.error)).toContain('not a regular file');
+    expect(profile.engineLockBlocksStart(lock)).toBe(false);
+  });
+
+  it('never writes the lock file it probes', () => {
+    const dir = profileWithLock('write-no-write', 'ORIGINAL-CONTENT', 'lockfile');
+    const lockPath = path.join(dir, 'lockfile');
+    const before = originalReadFileSync(lockPath);
+    const beforeStat = statSync(lockPath);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      expect(profile.readEngineProfileLock(dir, descriptor)).toMatchObject({ state: 'stale' });
+    }
+    expect(originalReadFileSync(lockPath)).toEqual(before);
+    expect(statSync(lockPath).size).toBe(beforeStat.size);
+    expect(statSync(lockPath).mtimeMs).toBe(beforeStat.mtimeMs);
+  });
+
+  it.skipIf(process.platform !== 'win32')(
+    'reports live while a real process holds the file and stale after it exits',
+    async () => {
+      const dir = profileWithLock('write-real-holder', '', 'lockfile');
+      const lockPath = path.join(dir, 'lockfile');
+      const holder = await holdExclusiveForRead(lockPath);
+      holders.push(holder);
+      const live = profile.readEngineProfileLock(dir, descriptor);
+      expect(live).toMatchObject({ state: 'live', owner: { pid: null }, error: null });
+      expect(profile.engineLockBlocksStart(live)).toBe(true);
+      // A plain read still succeeds while the Chromium-like holder runs: that is
+      // why the read-based rule cannot see this lock and the write probe exists.
+      expect(originalReadFileSync(lockPath).length).toBe(0);
+      await holder.stop();
+      const stale = profile.readEngineProfileLock(dir, descriptor);
+      expect(stale).toMatchObject({ state: 'stale', owner: null });
+      expect(profile.engineLockBlocksStart(stale)).toBe(false);
+    },
+  );
+
+  it('blocks only a live owner, never stale or unknown', () => {
+    expect(profile.engineLockBlocksStart({ state: 'stale' } as never)).toBe(false);
+    expect(profile.engineLockBlocksStart({ state: 'unknown' } as never)).toBe(false);
+    expect(profile.engineLockBlocksStart({ state: 'free' } as never)).toBe(false);
+    expect(profile.engineLockBlocksStart({ state: 'live' } as never)).toBe(true);
   });
 });
 
@@ -376,8 +590,8 @@ describe('engine lock reading (pid)', () => {
     }
   });
 
-  it('declares exactly the two owner rules it implements', () => {
-    expect([...profile.ENGINE_LOCK_OWNER_RULES]).toEqual(['exclusive-open', 'pid']);
+  it('declares exactly the three owner rules it implements', () => {
+    expect([...profile.ENGINE_LOCK_OWNER_RULES]).toEqual(['exclusive-open', 'exclusive-open-write', 'pid']);
   });
 });
 
@@ -404,6 +618,25 @@ describe('engine lock message', () => {
     expect(message).toContain('The backend was not started.');
   });
 
+  it('names the Chromium lock file and keeps the broker wording for the write rule', () => {
+    const dir = profileWithLock('message-write', '', 'lockfile');
+    injectedOpenCode(path.join(dir, 'lockfile'), 'EBUSY');
+    const lock = profile.readEngineProfileLock(dir, { file: 'lockfile', owner: 'exclusive-open-write' });
+    const message = profile.engineProfileLockMessage(lock);
+    expect(message).toContain(dir);
+    expect(message).toContain(path.join(dir, 'lockfile'));
+    expect(message).toContain('another process holds the engine lock file');
+    expect(message).toContain('The backend was not started.');
+    // The profile copy tool reuses the same heading and fix with its own closing
+    // sentence; the default message above stays byte-identical.
+    const copyMessage = profile.engineProfileLockMessage(lock, {
+      trailing: 'The profile was not copied.',
+    });
+    expect(copyMessage).toContain('The profile was not copied.');
+    expect(copyMessage).not.toContain('The backend was not started.');
+    expect(copyMessage.replace('The profile was not copied.', 'The backend was not started.')).toBe(message);
+  });
+
   it('has no fix for a stale lock', () => {
     const dir = profileWithLock('message-stale', '');
     const stale = profile.readEngineProfileLock(dir, { file: 'parent.lock', owner: 'exclusive-open' });
@@ -424,11 +657,18 @@ describe('manifest profileLock validation', () => {
     notes: 'test',
   };
 
-  it('accepts both owner rules and no descriptor at all', () => {
+  it('accepts every owner rule and no descriptor at all', () => {
     expect(registry.validateManifest(base, 'alpha', ['full'])).toBeNull();
     expect(
       registry.validateManifest(
         { ...base, profileLock: { file: 'parent.lock', owner: 'exclusive-open' } },
+        'alpha',
+        ['full'],
+      ),
+    ).toBeNull();
+    expect(
+      registry.validateManifest(
+        { ...base, profileLock: { file: 'lockfile', owner: 'exclusive-open-write' } },
         'alpha',
         ['full'],
       ),
@@ -491,8 +731,15 @@ describe('manifest wiring', () => {
     );
   });
 
+  it('declares the Chromium lockfile for cloak and playwright', () => {
+    for (const engine of ['cloak', 'playwright']) {
+      const manifest = JSON.parse(originalReadFileSync(path.join(universal, `${engine}.json`), 'utf8'));
+      expect(manifest.profileLock).toEqual({ file: 'lockfile', owner: 'exclusive-open-write' });
+    }
+  });
+
   it('declares no profileLock for the engines that do not need one', () => {
-    for (const engine of ['cloak', 'playwright', 'camoufox-native', 'kameleo']) {
+    for (const engine of ['camoufox-native', 'kameleo']) {
       const manifest = JSON.parse(originalReadFileSync(path.join(universal, `${engine}.json`), 'utf8'));
       expect(manifest.profileLock).toBeUndefined();
     }
@@ -844,17 +1091,95 @@ describe('broker engine-lock preflight', () => {
     expect('engineProfileLock' in statusPayload).toBe(false);
   });
 
-  it('keeps every pre-existing cloak payload key and adds only the 2.9.5 diagnostics', async () => {
+  function setupCloak(prepare?: (profileDir: string) => void): {
+    dataDir: string;
+    profileDir: string;
+    session: BrokerSession;
+  } {
     const root = tempRoot('pr-camoufox-preflight-cloak-');
     const dataDir = createCloakRuntime(path.join(root, 'data'));
+    const profileDir = path.join(dataDir, 'profiles', 'default');
+    mkdirSync(profileDir, { recursive: true });
+    if (prepare !== undefined) {
+      prepare(profileDir);
+    }
     const session = startBroker({ dataDir, engine: 'cloak', pluginDir });
+    return { dataDir, profileDir, session };
+  }
+
+  it('keeps every pre-existing cloak payload key and adds engineProfileLock', async () => {
+    const { profileDir, session } = setupCloak();
     await initialize(session);
     expect(await toolNames(session)).toContain('browser_navigate');
     const caps = await payload(session, 'browser_capabilities');
     const statusPayload = await payload(session, 'browser_engine_status');
-    expect(Object.keys(caps)).toEqual(CAPABILITIES_KEYS_295);
-    expect(Object.keys(statusPayload)).toEqual(STATUS_KEYS_293);
+    expect(Object.keys(caps)).toEqual(CLOAK_CAPABILITIES_KEYS);
+    expect(Object.keys(statusPayload)).toEqual(CLOAK_STATUS_KEYS);
     expect(caps.profileLock).toMatchObject({ state: 'free' });
     expect(statusPayload.profileLock).toMatchObject({ state: 'free' });
+    expect(caps.engineProfileLock).toMatchObject({
+      state: 'free',
+      profileDir,
+      file: 'lockfile',
+      liveness: 'exclusive-open-write',
+    });
+    expect(statusPayload.engineProfileLock).toMatchObject({ state: 'free', file: 'lockfile' });
   });
+
+  it('allows the start and reports stale for a leftover Chromium lockfile', async () => {
+    const { profileDir, session } = setupCloak((dir) => {
+      writeFileSync(path.join(dir, 'lockfile'), '');
+    });
+    await initialize(session);
+    expect(await toolNames(session)).toContain('browser_navigate');
+    const caps = await payload(session, 'browser_capabilities');
+    expect(caps.engineProfileLock).toMatchObject({ state: 'stale', profileDir, file: 'lockfile' });
+    expect(session.stderr()).toContain('engine profile lock');
+    expect(session.stderr()).toContain('is stale');
+  });
+
+  it.skipIf(process.platform !== 'win32')(
+    'refuses to spawn when another process holds the Chromium lockfile',
+    async () => {
+      const root = tempRoot('pr-camoufox-preflight-cloak-live-');
+      const dataDir = createCloakRuntime(path.join(root, 'data'));
+      const profileDir = path.join(dataDir, 'profiles', 'default');
+      mkdirSync(profileDir, { recursive: true });
+      const lockPath = path.join(profileDir, 'lockfile');
+      writeFileSync(lockPath, '');
+      const holder = await holdExclusiveForRead(lockPath);
+      holders.push(holder);
+
+      const session = startBroker({ dataDir, engine: 'cloak', pluginDir });
+      const instructions = await initialize(session);
+      expect(instructions).toContain(profileDir);
+      expect(instructions).toContain(lockPath);
+      expect(instructions).toContain('another process holds the engine lock file');
+      expect(instructions).toContain('The backend was not started.');
+      expect(await toolNames(session)).toEqual([
+        'browser_capabilities',
+        'browser_engine_status',
+        'browser_profiles',
+      ]);
+      const statusPayload = await payload(session, 'browser_engine_status');
+      expect(statusPayload.backendState).toBe('failed');
+      expect(statusPayload.backendPid).toBeNull();
+      expect(statusPayload.engineProfileLock).toMatchObject({
+        state: 'live',
+        profileDir,
+        file: 'lockfile',
+        liveness: 'exclusive-open-write',
+      });
+      expect(String(statusPayload.lastError)).toContain(lockPath);
+      expect(session.stderr()).toContain('not starting a backend');
+
+      // The same profile starts once the holder exits: a dead lockfile is stale.
+      await holder.stop();
+      const next = startBroker({ dataDir, engine: 'cloak', pluginDir });
+      await initialize(next);
+      expect(await toolNames(next)).toContain('browser_navigate');
+      const nextCaps = await payload(next, 'browser_capabilities');
+      expect(nextCaps.engineProfileLock).toMatchObject({ state: 'stale', file: 'lockfile' });
+    },
+  );
 });

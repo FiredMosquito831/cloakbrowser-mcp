@@ -1,8 +1,11 @@
 import { spawn, spawnSync } from 'node:child_process';
 import {
+  closeSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -18,12 +21,17 @@ interface CopySummary {
   ok: boolean;
   dryRun: boolean;
   engine: string;
+  engineSource: 'path' | 'setting';
   from: string;
   to: string;
   sourceDir: string;
   targetDir: string;
   copied: { files: number; directories: number; bytes: number };
-  excluded: { entries: number; byRule: Record<string, number> };
+  excluded: {
+    entries: number;
+    byRule: Record<string, number>;
+    names: { name: string; rule: string; count: number }[];
+  };
   skipped: { symlinks: number; other: number };
   topLevel: {
     path: string;
@@ -33,6 +41,14 @@ interface CopySummary {
     excluded: string | null;
   }[];
   sourceLock: { state: string; owner: { pid: number; createdAt: string | null } | null };
+  sourceEngineLock: {
+    state: string;
+    path: string;
+    file: string | null;
+    liveness: string | null;
+    owner: { pid: number | null; createdAt: string | null } | null;
+    error: string | null;
+  } | null;
 }
 
 interface CopyResult {
@@ -59,7 +75,14 @@ interface CopyPlan {
 
 interface ProfileCopyModule {
   DEFAULT_COPY_ENGINE: string;
-  exclusionRule(name: string, isDirectory: boolean): string | null;
+  exclusionRule(name: string, isDirectory: boolean, engineLockFile?: string | null): string | null;
+  detectEngineFromProfilePath(profileDir: string, dataDir: string, engineIds: string[]): string | null;
+  resolveCopyEngine(options: {
+    requestedEngine?: string;
+    sourceDir: string;
+    dataDir: string;
+    engineIds: string[];
+  }): { engineId: string | null; source: string | null; error: string | null };
   parseArguments(argv: string[]): { options: Record<string, unknown>; errors: string[] };
   runProfileCopy(options?: CopyOptions): CopyResult;
   copyPlanToTarget(plan: CopyPlan, targetDir: string, options?: { targetName?: string }): void;
@@ -69,6 +92,8 @@ interface ProfileCopyModule {
 const scriptPath = fileURLToPath(
   new URL('../../plugins/cloakbrowser/scripts/profile-copy.mjs', import.meta.url),
 );
+const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
+const realEnginesDir = path.join(repoRoot, 'plugins', 'cloakbrowser', 'engines');
 const profileCopy = (await import(
   new URL('../../plugins/cloakbrowser/scripts/profile-copy.mjs', import.meta.url).href
 )) as unknown as ProfileCopyModule;
@@ -98,12 +123,112 @@ const SECRET_SEED = 'SEED-SECRET-9c1b';
 const LOCK_FILENAME = '.cloakbrowser-mcp-profile.lock';
 
 const tempRoots: string[] = [];
+const holders: FileHolder[] = [];
 
-afterEach(() => {
+afterEach(async () => {
+  for (const holder of holders.splice(0)) {
+    await holder.stop();
+  }
   for (const root of tempRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+interface FileHolder {
+  pid: number;
+  stop: () => Promise<void>;
+}
+
+// Hold a file like the browser holds its lock. Chromium's lockfile is shared for
+// readers and exclusive for writers (share "Read": reads succeed, r+ fails);
+// Firefox's parent.lock refuses readers too (share "None": read and r+ both fail
+// with EBUSY). A real process with one Windows handle, started and stopped by
+// exact pid.
+async function holdExclusiveForRead(file: string, share: 'Read' | 'None' = 'Read'): Promise<FileHolder> {
+  const script =
+    `$f=[System.IO.File]::Open('${file.replaceAll("'", "''")}','Open','ReadWrite','${share}');` +
+    'Write-Output held; Start-Sleep -Seconds 120';
+  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
+  const pid = child.pid;
+  if (pid === undefined) {
+    throw new Error('could not start the file holder');
+  }
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    try {
+      const handle = openSync(file, 'r+');
+      closeSync(handle);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EBUSY') {
+        let stopped = false;
+        const stop = async () => {
+          if (stopped) {
+            return;
+          }
+          stopped = true;
+          try {
+            process.kill(pid);
+          } catch {
+            // Already gone.
+          }
+          await new Promise<void>((resolve) => {
+            if (child.exitCode !== null || child.signalCode !== null) {
+              resolve();
+              return;
+            }
+            const timer = setTimeout(resolve, 3000);
+            child.once('exit', () => {
+              clearTimeout(timer);
+              resolve();
+            });
+          });
+        };
+        return { pid, stop };
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  try {
+    process.kill(pid);
+  } catch {
+    // Already gone.
+  }
+  throw new Error('the file holder never locked the file');
+}
+
+// A scratch plugin root whose engines directory is the real one, with one
+// engine's lock descriptor replaced by a pid rule. The copy tool reads the
+// manifest from `pluginRoot` but imports its code from the installed plugin, so
+// this exercises the whole descriptor wiring on every platform without needing
+// an OS-level exclusive handle.
+function createPidLockPluginRoot(root: string, engine: 'cloak' | 'camoufox'): string {
+  const engines = path.join(root, 'engines');
+  mkdirSync(engines, { recursive: true });
+  // Validation requires the default launcher and every named launcher to exist;
+  // the copy tool never runs them.
+  writeFileSync(path.join(root, 'launch.mjs'), '');
+  for (const name of readdirSync(realEnginesDir)) {
+    if (!name.endsWith('.json')) {
+      continue;
+    }
+    copyFileSync(path.join(realEnginesDir, name), path.join(engines, name));
+    const copied = JSON.parse(readFileSync(path.join(engines, name), 'utf8')) as {
+      launch?: { launcher?: string };
+    };
+    const launcher = copied.launch?.launcher;
+    if (typeof launcher === 'string') {
+      writeFileSync(path.join(root, launcher), '');
+    }
+  }
+  const manifestPath = path.join(engines, `${engine}.json`);
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
+  manifest.profileLock = { file: 'owner.lock', owner: 'pid' };
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  return root;
+}
 
 function tempRoot(): string {
   const root = mkdtempSync(path.join(tmpdir(), 'profile-copy-'));
@@ -124,8 +249,9 @@ function writeLock(profileDir: string, pid: number): void {
   );
 }
 
-// The full cloak fixture: identity files that must survive, and every excluded
-// class. Returns the expected kept byte count.
+// The full cloak fixture: identity files that must survive (including the
+// database's WAL/SHM companions), and every excluded class. Returns the expected
+// kept byte count.
 function createCloakFixture(dataDir: string, lockPid: number = DEAD_PID): number {
   const profile = path.join(dataDir, 'profiles', 'default');
   write(profile, 'Cookies', `SQLite format 3\0${SECRET_COOKIE}`);
@@ -135,7 +261,11 @@ function createCloakFixture(dataDir: string, lockPid: number = DEAD_PID): number
   write(profile, 'Local State', '{"profile":{"info_cache":{}}}');
   write(profile, 'Preferences', '{"account_id":"fixture"}');
   write(profile, '.cloakbrowser-seed', SECRET_SEED);
-  // Excluded: caches at the root and below Default.
+  // Kept: the WAL and SHM are part of the database and must travel with it.
+  write(profile, 'Default/Network/Cookies.sqlite-wal', 'wal-part-of-db');
+  write(profile, 'Default/Network/Cookies.sqlite-shm', 'shm-part-of-db');
+  // Excluded: caches at the root and below Default, including Chromium 146's
+  // Dawn shader caches, plus the crash metrics dump.
   write(profile, 'Cache/data_0', 'cache');
   write(profile, 'Default/Cache/data_1', 'cache');
   write(profile, 'Code Cache/js/index', 'code-cache');
@@ -144,14 +274,19 @@ function createCloakFixture(dataDir: string, lockPid: number = DEAD_PID): number
   write(profile, 'GrShaderCache/data_0', 'gr');
   write(profile, 'GraphiteDawnCache/data_0', 'graphite');
   write(profile, 'Default/DawnCache/data_0', 'dawn');
+  write(profile, 'Default/DawnGraphiteCache/data_0', 'dawn-graphite');
+  write(profile, 'Default/DawnWebGPUCache/data_0', 'dawn-webgpu');
   write(profile, 'ShaderCache/data_0', 'shader');
   write(profile, 'Crashpad/reports/one.dmp', 'crash');
-  // Excluded: temporary entry, log directory, Chromium singletons, profile lock.
+  write(profile, 'BrowserMetrics/metrics.pma', 'metrics-dump');
+  // Excluded: temporary entry, log directory, Chromium singletons, profile lock,
+  // and the engine's own lock file.
   write(profile, 'scratch.tmp', 'temporary');
   write(profile, 'logs/browser.log', 'log-line');
   write(profile, 'SingletonLock', 'host-12345');
   write(profile, 'SingletonSocket', 'socket');
   write(profile, 'SingletonCookie', '123456789');
+  write(profile, 'lockfile', '');
   writeLock(profile, lockPid);
 
   return [
@@ -162,7 +297,24 @@ function createCloakFixture(dataDir: string, lockPid: number = DEAD_PID): number
     '{"profile":{"info_cache":{}}}',
     '{"account_id":"fixture"}',
     SECRET_SEED,
+    'wal-part-of-db',
+    'shm-part-of-db',
   ].reduce((total, content) => total + Buffer.byteLength(content), 0);
+}
+
+// A Firefox-shaped profile for the camoufox engine: its own lock, caches and
+// thumbnails are excluded, and the cookie database's WAL/SHM companions are kept.
+function createCamoufoxFixture(dataDir: string): void {
+  const profile = path.join(dataDir, 'profiles', 'camoufox', 'default');
+  write(profile, 'cookies.sqlite', 'SQLite format 3\0ff-cookies');
+  write(profile, 'cookies.sqlite-wal', 'ff-wal');
+  write(profile, 'cookies.sqlite-shm', 'ff-shm');
+  write(profile, 'prefs.js', 'user_pref("browser.startup.page", 1);');
+  write(profile, '.cloakbrowser-seed', SECRET_SEED);
+  write(profile, 'cache2/entries/one', 'ff-cache');
+  write(profile, 'startupCache/scriptCache.bin', 'ff-startup-cache');
+  write(profile, 'thumbnails/one.png', 'ff-thumbnail');
+  write(profile, 'parent.lock', '');
 }
 
 function run(options: CopyOptions): CopyResult {
@@ -238,6 +390,19 @@ describe('profile-copy CLI arguments', () => {
     expect(cli.status).toBe(0);
     expect(cli.stdout).toContain('Usage: node scripts/profile-copy.mjs');
     expect(cli.stdout).toContain('--dry-run');
+    // The engine-specific exclusions and the session-cookie truth are stated.
+    expect(cli.stdout).toContain('lockfile');
+    expect(cli.stdout).toContain('parent.lock');
+    expect(cli.stdout).toContain('DawnGraphiteCache');
+    expect(cli.stdout).toContain('DawnWebGPUCache');
+    expect(cli.stdout).toContain('BrowserMetrics');
+    expect(cli.stdout).toContain('cache2');
+    expect(cli.stdout).toContain('startupCache');
+    expect(cli.stdout).toContain('thumbnails');
+    expect(cli.stdout).toContain('*.sqlite-wal');
+    expect(cli.stdout).toContain('session cookies');
+    expect(cli.stdout).toContain('Chromium deletes its session cookies');
+    expect(cli.stdout).toContain('Firefox keeps them in memory');
     expect(cli.stderr).toBe('');
   });
 
@@ -261,11 +426,17 @@ describe('exclusion rules', () => {
       'GrShaderCache',
       'GraphiteDawnCache',
       'DawnCache',
+      'DawnGraphiteCache',
+      'DawnWebGPUCache',
       'ShaderCache',
       'Crashpad',
+      'cache2',
+      'startupCache',
     ]) {
       expect(profileCopy.exclusionRule(name, true)).toBe('cache');
     }
+    expect(profileCopy.exclusionRule('BrowserMetrics', true)).toBe('metrics');
+    expect(profileCopy.exclusionRule('thumbnails', true)).toBe('thumbnails');
     expect(profileCopy.exclusionRule('scratch.tmp', false)).toBe('temporary');
     expect(profileCopy.exclusionRule('logs', true)).toBe('logs');
     expect(profileCopy.exclusionRule('Log', true)).toBe('logs');
@@ -275,6 +446,36 @@ describe('exclusion rules', () => {
     // A cache name is excluded whatever its kind; "logs" only as a directory.
     expect(profileCopy.exclusionRule('GPUCache', false)).toBe('cache');
     expect(profileCopy.exclusionRule('logs', false)).toBeNull();
+  });
+
+  it('excludes the engine lock file only when the manifest names it', () => {
+    for (const [name, descriptor] of [
+      ['lockfile', 'lockfile'],
+      ['parent.lock', 'parent.lock'],
+      ['LockFile', 'lockfile'],
+    ]) {
+      expect(profileCopy.exclusionRule(name, false, descriptor)).toBe('engineLock');
+    }
+    // Without a descriptor nothing named lockfile/parent.lock is excluded, so the
+    // rule is driven by the engine's manifest rather than by a guessed name.
+    expect(profileCopy.exclusionRule('lockfile', false, null)).toBeNull();
+    expect(profileCopy.exclusionRule('parent.lock', false, '')).toBeNull();
+    expect(profileCopy.exclusionRule('parent.lock', false, 'lockfile')).toBeNull();
+  });
+
+  it('never excludes a database WAL or SHM file', () => {
+    for (const name of [
+      'cookies.sqlite-wal',
+      'cookies.sqlite-shm',
+      'webappsstore.sqlite-wal',
+      'Cookies.sqlite-wal',
+      'Cookies.sqlite-shm',
+      'Local Storage.sqlite-wal',
+    ]) {
+      for (const descriptor of [null, 'lockfile', 'parent.lock']) {
+        expect(profileCopy.exclusionRule(name, false, descriptor)).toBeNull();
+      }
+    }
   });
 });
 
@@ -369,21 +570,40 @@ describe('profile-copy behaviour', () => {
       ok: true,
       dryRun: false,
       engine: 'cloak',
+      engineSource: 'setting',
       from: 'default',
       to: 'alice',
-      copied: { files: 7, directories: 2, bytes: expectedBytes },
+      copied: { files: 9, directories: 2, bytes: expectedBytes },
       excluded: {
-        entries: 16,
-        byRule: { profileLock: 1, singleton: 3, cache: 10, temporary: 1, logs: 1 },
+        entries: 20,
+        byRule: {
+          profileLock: 1,
+          engineLock: 1,
+          singleton: 3,
+          cache: 12,
+          metrics: 1,
+          thumbnails: 0,
+          temporary: 1,
+          logs: 1,
+        },
       },
       skipped: { symlinks: 0, other: 0 },
       sourceLock: { state: 'stale', owner: { pid: DEAD_PID } },
+      sourceEngineLock: {
+        state: 'stale',
+        file: 'lockfile',
+        liveness: 'exclusive-open-write',
+        owner: null,
+      },
     });
+    expect(summary.sourceEngineLock?.path).toBe(path.join(dataDir, 'profiles', 'default', 'lockfile'));
 
     const targetDir = summary.targetDir;
     for (const relative of [
       'Cookies',
       path.join('Default', 'Network', 'Cookies'),
+      path.join('Default', 'Network', 'Cookies.sqlite-wal'),
+      path.join('Default', 'Network', 'Cookies.sqlite-shm'),
       path.join('Default', 'Login Data'),
       path.join('Default', 'Preferences'),
       'Local State',
@@ -394,9 +614,13 @@ describe('profile-copy behaviour', () => {
     }
     expect(readFileSync(path.join(targetDir, 'Cookies'), 'utf8')).toContain(SECRET_COOKIE);
     expect(readFileSync(path.join(targetDir, '.cloakbrowser-seed'), 'utf8')).toBe(SECRET_SEED);
+    expect(readFileSync(path.join(targetDir, 'Default', 'Network', 'Cookies.sqlite-wal'), 'utf8')).toBe(
+      'wal-part-of-db',
+    );
 
     for (const relative of [
       LOCK_FILENAME,
+      'lockfile',
       'SingletonLock',
       'SingletonSocket',
       'SingletonCookie',
@@ -408,17 +632,37 @@ describe('profile-copy behaviour', () => {
       'DawnCache',
       'ShaderCache',
       'Crashpad',
+      'BrowserMetrics',
       'scratch.tmp',
       'logs',
       path.join('Default', 'Cache'),
       path.join('Default', 'GPUCache'),
       path.join('Default', 'DawnCache'),
+      path.join('Default', 'DawnGraphiteCache'),
+      path.join('Default', 'DawnWebGPUCache'),
     ]) {
       expect(existsSync(path.join(targetDir, relative))).toBe(false);
     }
+    // The engine-specific report names what this engine's tree carried, merging
+    // the same name at different depths.
+    expect(summary.excluded.names).toEqual([
+      { name: 'lockfile', rule: 'engineLock', count: 1 },
+      { name: 'Cache', rule: 'cache', count: 2 },
+      { name: 'Code Cache', rule: 'cache', count: 1 },
+      { name: 'Crashpad', rule: 'cache', count: 1 },
+      { name: 'DawnCache', rule: 'cache', count: 1 },
+      { name: 'DawnGraphiteCache', rule: 'cache', count: 1 },
+      { name: 'DawnWebGPUCache', rule: 'cache', count: 1 },
+      { name: 'GPUCache', rule: 'cache', count: 2 },
+      { name: 'GraphiteDawnCache', rule: 'cache', count: 1 },
+      { name: 'GrShaderCache', rule: 'cache', count: 1 },
+      { name: 'ShaderCache', rule: 'cache', count: 1 },
+      { name: 'BrowserMetrics', rule: 'metrics', count: 1 },
+    ]);
     // The source is never touched by the copy.
     expect(existsSync(path.join(dataDir, 'profiles', 'default', 'Cookies'))).toBe(true);
     expect(existsSync(path.join(dataDir, 'profiles', 'default', LOCK_FILENAME))).toBe(true);
+    expect(existsSync(path.join(dataDir, 'profiles', 'default', 'lockfile'))).toBe(true);
   });
 
   it('plans a dry run without creating anything, with the same counts as the copy', () => {
@@ -504,6 +748,264 @@ describe('profile-copy behaviour', () => {
   });
 });
 
+describe('engine identification', () => {
+  const ids = ['cloak', 'playwright', 'camoufox'];
+
+  it('detects the engine only when the path proves it', () => {
+    const dataDir = path.resolve(tempRoot(), 'data');
+    const under = (...segments: string[]) => path.join(dataDir, 'profiles', ...segments);
+    expect(profileCopy.detectEngineFromProfilePath(under('cloak', 'alice'), dataDir, ids)).toBe('cloak');
+    expect(profileCopy.detectEngineFromProfilePath(under('camoufox', 'default'), dataDir, ids)).toBe(
+      'camoufox',
+    );
+    expect(profileCopy.detectEngineFromProfilePath(under('playwright', 'ws-abc1234'), dataDir, ids)).toBe(
+      'playwright',
+    );
+    // The legacy shared Chromium default has no engine segment.
+    expect(profileCopy.detectEngineFromProfilePath(under('default'), dataDir, ids)).toBeNull();
+    expect(profileCopy.detectEngineFromProfilePath(under('ws-abc1234'), dataDir, ids)).toBeNull();
+    // The profiles root itself, an unknown first segment and anything outside
+    // the data root are never guessed.
+    expect(profileCopy.detectEngineFromProfilePath(under(), dataDir, ids)).toBeNull();
+    expect(profileCopy.detectEngineFromProfilePath(under('nope', 'alice'), dataDir, ids)).toBeNull();
+    expect(
+      profileCopy.detectEngineFromProfilePath(
+        path.join(dataDir, 'elsewhere', 'cloak', 'alice'),
+        dataDir,
+        ids,
+      ),
+    ).toBeNull();
+    expect(profileCopy.detectEngineFromProfilePath(dataDir, dataDir, ids)).toBeNull();
+    // Missing inputs are not an error, they are "no proof".
+    expect(profileCopy.detectEngineFromProfilePath('', dataDir, ids)).toBeNull();
+    expect(profileCopy.detectEngineFromProfilePath(under('cloak', 'alice'), '', ids)).toBeNull();
+    expect(
+      profileCopy.detectEngineFromProfilePath(under('cloak', 'alice'), dataDir, null as never),
+    ).toBeNull();
+  });
+
+  it('confirms the explicit engine with the path and refuses a disagreement', () => {
+    const dataDir = path.resolve(tempRoot(), 'data');
+    const matching = profileCopy.resolveCopyEngine({
+      requestedEngine: 'cloak',
+      sourceDir: path.join(dataDir, 'profiles', 'cloak', 'alice'),
+      dataDir,
+      engineIds: ids,
+    });
+    expect(matching).toEqual({ engineId: 'cloak', source: 'path', error: null });
+    const legacy = profileCopy.resolveCopyEngine({
+      requestedEngine: 'cloak',
+      sourceDir: path.join(dataDir, 'profiles', 'default'),
+      dataDir,
+      engineIds: ids,
+    });
+    expect(legacy).toEqual({ engineId: 'cloak', source: 'setting', error: null });
+    const mismatch = profileCopy.resolveCopyEngine({
+      requestedEngine: 'cloak',
+      sourceDir: path.join(dataDir, 'profiles', 'camoufox', 'alice'),
+      dataDir,
+      engineIds: ids,
+    });
+    expect(mismatch.engineId).toBeNull();
+    expect(mismatch.source).toBeNull();
+    expect(String(mismatch.error)).toContain('is a "camoufox" profile');
+    expect(String(mismatch.error)).toContain('--engine is "cloak"');
+    expect(String(mismatch.error)).toContain('--engine camoufox');
+    // The default engine is cloak when none is supplied.
+    expect(
+      profileCopy.resolveCopyEngine({
+        sourceDir: path.join(dataDir, 'profiles', 'default'),
+        dataDir,
+        engineIds: ids,
+      }).engineId,
+    ).toBe('cloak');
+  });
+
+  it('reports how the engine was identified in the summary', () => {
+    const dataDir = tempRoot();
+    createCloakFixture(dataDir);
+    write(path.join(dataDir, 'profiles', 'cloak', 'alice'), 'Cookies', 'named-account');
+    const legacy = run({ from: 'default', to: 'legacy-copy', dataDir });
+    expect(legacy.ok).toBe(true);
+    expect(legacy.summary?.engineSource).toBe('setting');
+    const account = run({ from: 'alice', to: 'alice-copy', dataDir });
+    expect(account.ok).toBe(true);
+    expect(account.summary?.engineSource).toBe('path');
+    expect(account.summary?.sourceDir).toBe(path.join(dataDir, 'profiles', 'cloak', 'alice'));
+  });
+});
+
+describe('camoufox exclusions', () => {
+  it('excludes Firefox caches, thumbnails and parent.lock and keeps the WAL and SHM', () => {
+    const dataDir = tempRoot();
+    createCamoufoxFixture(dataDir);
+    const result = run({ engine: 'camoufox', from: 'default', to: 'alice', dataDir });
+    expect(result.ok).toBe(true);
+    const summary = result.summary!;
+    expect(summary).toMatchObject({
+      engine: 'camoufox',
+      engineSource: 'path',
+      copied: { files: 5, directories: 0 },
+      excluded: {
+        entries: 4,
+        byRule: { engineLock: 1, cache: 2, thumbnails: 1 },
+      },
+      sourceEngineLock: {
+        state: 'stale',
+        file: 'parent.lock',
+        liveness: 'exclusive-open',
+        owner: null,
+      },
+    });
+    expect(summary.excluded.names).toEqual([
+      { name: 'parent.lock', rule: 'engineLock', count: 1 },
+      { name: 'cache2', rule: 'cache', count: 1 },
+      { name: 'startupCache', rule: 'cache', count: 1 },
+      { name: 'thumbnails', rule: 'thumbnails', count: 1 },
+    ]);
+    const targetDir = summary.targetDir;
+    for (const kept of [
+      'cookies.sqlite',
+      'cookies.sqlite-wal',
+      'cookies.sqlite-shm',
+      'prefs.js',
+      '.cloakbrowser-seed',
+    ]) {
+      expect(existsSync(path.join(targetDir, kept))).toBe(true);
+    }
+    for (const gone of ['parent.lock', 'cache2', 'startupCache', 'thumbnails']) {
+      expect(existsSync(path.join(targetDir, gone))).toBe(false);
+    }
+    const human = profileCopy.formatHumanSummary(summary);
+    expect(human).toContain(
+      'engine-specific exclusions: parent.lock 1, cache2 1, startupCache 1, thumbnails 1',
+    );
+  });
+});
+
+describe('live engine-lock refusals', () => {
+  it('refuses a Chromium source whose lock descriptor names a live pid', () => {
+    const dataDir = tempRoot();
+    const pluginRoot = createPidLockPluginRoot(tempRoot(), 'cloak');
+    createCloakFixture(dataDir);
+    write(path.join(dataDir, 'profiles', 'default'), 'owner.lock', `${process.pid}\n`);
+
+    const message = expectFailure(
+      run({ from: 'default', to: 'alice', dataDir, pluginRoot }),
+      'source-locked',
+    );
+    expect(message).toContain('is already in use');
+    expect(message).toContain(`pid ${process.pid}`);
+    expect(message).toContain('The profile was not copied.');
+    expect(message).not.toContain('The backend was not started.');
+    expect(existsSync(path.join(dataDir, 'profiles', 'cloak', 'alice'))).toBe(false);
+  });
+
+  it('refuses a Camoufox source whose lock descriptor names a live pid', () => {
+    const dataDir = tempRoot();
+    const pluginRoot = createPidLockPluginRoot(tempRoot(), 'camoufox');
+    createCamoufoxFixture(dataDir);
+    write(path.join(dataDir, 'profiles', 'camoufox', 'default'), 'owner.lock', `${process.pid}\n`);
+
+    const message = expectFailure(
+      run({ engine: 'camoufox', from: 'default', to: 'alice', dataDir, pluginRoot }),
+      'source-locked',
+    );
+    expect(message).toContain(`pid ${process.pid}`);
+    expect(message).toContain('The profile was not copied.');
+    expect(existsSync(path.join(dataDir, 'profiles', 'camoufox', 'alice'))).toBe(false);
+  });
+
+  it.skipIf(process.platform !== 'win32')(
+    'refuses a Chromium profile while a real process holds lockfile, then copies once it exits',
+    async () => {
+      const dataDir = tempRoot();
+      createCloakFixture(dataDir);
+      const lockPath = path.join(dataDir, 'profiles', 'default', 'lockfile');
+      const holder = await holdExclusiveForRead(lockPath);
+      holders.push(holder);
+
+      const message = expectFailure(run({ from: 'default', to: 'alice', dataDir }), 'source-locked');
+      expect(message).toContain(lockPath);
+      expect(message).toContain('another process holds the engine lock file');
+      expect(message).toContain('The profile was not copied.');
+      expect(existsSync(path.join(dataDir, 'profiles', 'cloak', 'alice'))).toBe(false);
+
+      await holder.stop();
+      const after = run({ from: 'default', to: 'alice', dataDir });
+      expect(after.ok).toBe(true);
+      expect(after.summary?.sourceEngineLock?.state).toBe('stale');
+      expect(existsSync(path.join(after.summary!.targetDir, 'lockfile'))).toBe(false);
+    },
+  );
+
+  it.skipIf(process.platform !== 'win32')(
+    'refuses a Camoufox profile while a real process holds parent.lock, then copies once it exits',
+    async () => {
+      const dataDir = tempRoot();
+      createCamoufoxFixture(dataDir);
+      const lockPath = path.join(dataDir, 'profiles', 'camoufox', 'default', 'parent.lock');
+      const holder = await holdExclusiveForRead(lockPath, 'None');
+      holders.push(holder);
+
+      const message = expectFailure(
+        run({ engine: 'camoufox', from: 'default', to: 'alice', dataDir }),
+        'source-locked',
+      );
+      expect(message).toContain(lockPath);
+      expect(message).toContain('another process holds the engine lock file');
+      expect(message).toContain('The profile was not copied.');
+      expect(existsSync(path.join(dataDir, 'profiles', 'camoufox', 'alice'))).toBe(false);
+
+      await holder.stop();
+      const after = run({ engine: 'camoufox', from: 'default', to: 'alice', dataDir });
+      expect(after.ok).toBe(true);
+      expect(after.summary?.sourceEngineLock?.state).toBe('stale');
+      expect(existsSync(path.join(after.summary!.targetDir, 'parent.lock'))).toBe(false);
+    },
+  );
+});
+
+describe('behaviour-preserving equality', () => {
+  it('copies an ordinary unlocked profile with no new exclusions', () => {
+    const dataDir = tempRoot();
+    const profile = path.join(dataDir, 'profiles', 'default');
+    write(profile, 'Cookies', 'SQLite format 3\0plain-cookies');
+    write(profile, 'Local State', '{"plain":true}');
+    write(profile, 'Preferences', '{"plain":true}');
+    write(profile, '.cloakbrowser-seed', '12345');
+    writeLock(profile, DEAD_PID);
+    const expectedBytes = [
+      'SQLite format 3\0plain-cookies',
+      '{"plain":true}',
+      '{"plain":true}',
+      '12345',
+    ].reduce((total, content) => total + Buffer.byteLength(content), 0);
+
+    const result = run({ from: 'default', to: 'alice', dataDir });
+    expect(result.ok).toBe(true);
+    const summary = result.summary!;
+    expect(summary.copied).toEqual({ files: 4, directories: 0, bytes: expectedBytes });
+    expect(summary.excluded).toEqual({
+      entries: 1,
+      byRule: {
+        profileLock: 1,
+        engineLock: 0,
+        singleton: 0,
+        cache: 0,
+        metrics: 0,
+        thumbnails: 0,
+        temporary: 0,
+        logs: 0,
+      },
+      names: [],
+    });
+    expect(summary.sourceEngineLock).toMatchObject({ state: 'free', file: 'lockfile' });
+    const human = profileCopy.formatHumanSummary(summary);
+    expect(human).toContain('engine-specific exclusions: none');
+  });
+});
+
 describe('profile-copy failure cleanup', () => {
   it('removes the destination and the parent directories this run created', () => {
     const root = tempRoot();
@@ -554,8 +1056,10 @@ describe('profile-copy output', () => {
     expect(cli.stderr).toBe('');
     const parsed = JSON.parse(cli.stdout) as CopySummary;
     expect(parsed).toMatchObject({ ok: true, dryRun: false, engine: 'cloak', from: 'default' });
-    expect(parsed.copied.files).toBe(7);
-    expect(parsed.excluded.byRule.cache).toBe(10);
+    expect(parsed.copied.files).toBe(9);
+    expect(parsed.excluded.byRule.cache).toBe(12);
+    expect(parsed.excluded.byRule.engineLock).toBe(1);
+    expect(parsed.excluded.byRule.metrics).toBe(1);
   });
 
   it('prints a JSON error object with a non-zero exit code', () => {
@@ -580,7 +1084,12 @@ describe('profile-copy output', () => {
       expect(text).not.toContain(SECRET_SEED);
     }
     expect(human).toContain('Copied profile "default" to "alice" (engine cloak).');
-    expect(human).toContain(`files: 7 (${summary.copied.bytes} bytes`);
+    expect(human).toContain(`files: 9 (${summary.copied.bytes} bytes`);
+    expect(human).toContain(
+      'engine-specific exclusions: lockfile 1, Cache 2, Code Cache 1, Crashpad 1, DawnCache 1',
+    );
+    expect(human).toContain('stale engine lock ignored');
+    expect(human).toContain('A copy carries no session cookies');
     expect(human).toContain('stale lock ignored');
     expect(human).toContain('The per-account <name>.proxy file was not copied');
 

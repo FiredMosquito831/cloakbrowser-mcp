@@ -10,10 +10,17 @@
 //
 // This tool only ever creates its own destination directory. It never renames,
 // moves, overwrites or deletes a profile; a failure removes only what this run
-// created. It copies no lock, no Chromium singleton file and no cache, so the
-// copy starts cleanly. Names and paths follow lib/profile.mjs and the broker:
-// the same account rule, the same profiles/<engine>/<name> layout and the same
-// "default" mapping.
+// created. It copies no lock (neither the bridge's nor the engine's own), no
+// Chromium singleton file and no cache, so the copy starts cleanly. Names and
+// paths follow lib/profile.mjs and the broker: the same account rule, the same
+// profiles/<engine>/<name> layout and the same "default" mapping.
+//
+// A profile a live browser holds is refused before anything is copied: the
+// bridge lock is read first, then the engine's own lock from the manifest's
+// profileLock descriptor (Chromium's lockfile, Firefox's parent.lock), so a
+// browser started by another tool is caught instead of failing mid-tree. The
+// engine is the explicit --engine setting, confirmed by the resolved path, so a
+// profile under another engine's folder is never copied with the wrong rules.
 //
 // Output never contains a file's contents. It reports paths, counts and bytes
 // only, and anything that looks like a URL credential is redacted.
@@ -29,7 +36,10 @@ import {
 } from '../engine-registry.mjs';
 import {
   accountNameError,
+  engineLockBlocksStart,
+  engineProfileLockMessage,
   PROFILE_LOCK_FILENAME,
+  readEngineProfileLock,
   readProfileLock,
   redactSecrets,
   resolveProfile,
@@ -48,39 +58,85 @@ export const FALLBACK_DATA_DIR_NAME = '.cloakbrowser-mcp-plugin';
 // browser from opening a profile.
 const SINGLETON_NAMES = new Set(['singletonlock', 'singletonsocket', 'singletoncookie']);
 // Regenerable caches. They hold no identity, can be very large, and the copy
-// rebuilds them on first use.
+// rebuilds them on first use. The list covers both profile formats this plugin
+// copies: Chromium's cache directories (including Chromium 146's Dawn shader
+// caches) and Firefox's cache2/startupCache.
 const CACHE_NAMES = new Set([
   'cache',
+  'cache2',
   'code cache',
   'gpucache',
   'grshadercache',
   'graphitedawncache',
+  'dawngraphitecache',
+  'dawnwebgpucache',
   'dawncache',
   'shadercache',
+  'startupcache',
   'crashpad',
 ]);
+// Crash and usage dumps Chromium rewrites. They carry no identity and can be
+// several megabytes.
+const METRICS_NAMES = new Set(['browsermetrics']);
+// Firefox's page thumbnails. Regenerated on demand, not identity.
+const THUMBNAIL_NAMES = new Set(['thumbnails']);
 // Log directories, excluded by name at any depth. Logs are not identity and may
 // contain incidental browsing text.
 const LOG_DIRECTORY_NAMES = new Set(['log', 'logs']);
-const EXCLUSION_RULES = Object.freeze(['profileLock', 'singleton', 'cache', 'temporary', 'logs']);
+const EXCLUSION_RULES = Object.freeze([
+  'profileLock',
+  'engineLock',
+  'singleton',
+  'cache',
+  'metrics',
+  'thumbnails',
+  'temporary',
+  'logs',
+]);
 const EXCLUSION_LABELS = Object.freeze({
   profileLock: 'profile lock',
+  engineLock: 'engine lock file',
   singleton: 'Chromium singleton',
   cache: 'cache',
+  metrics: 'metrics dump',
+  thumbnails: 'thumbnail cache',
   temporary: 'temporary file',
   logs: 'log directory',
 });
-
+// The rules whose excluded entries are named one by one in the report. Their
+// names differ by profile format (Chromium's lockfile/Dawn caches/BrowserMetrics,
+// Firefox's parent.lock/cache2/startupCache/thumbnails), so counts alone would
+// hide which engine's artifacts a copy left behind.
+const ENGINE_SPECIFIC_RULES = Object.freeze(['engineLock', 'cache', 'metrics', 'thumbnails']);
+// Every *.sqlite-wal and *.sqlite-shm file is deliberately NOT matched by any
+// rule: those files are part of the database, and a copy without them can lose
+// the newest committed rows. No rule ends in these suffixes.
 const USAGE = `Usage: node scripts/profile-copy.mjs --from <name> --to <new-name> [options]
 
 Copy one browser profile to a new name. Cookies, logins, Local State,
-Preferences and the fingerprint seed (.cloakbrowser-seed) are kept; the profile
-lock, Chromium singleton files, caches, *.tmp entries and log directories are
-not. The source browser must be closed: a live profile lock refuses the copy.
+Preferences and the fingerprint seed (.cloakbrowser-seed) are kept. The bridge
+profile lock, the engine's own lock file, Chromium singleton files, caches,
+temporary files and log directories are not. The source browser must be closed:
+a live profile lock refuses the copy, and for Chromium that includes a browser
+started on the profile by another tool.
+
+A copy never carries session cookies: Chromium deletes its session cookies at the
+next start, and Firefox keeps them in memory, not on disk. Saved cookies, logins,
+localStorage and IndexedDB travel as files, so a copy on the same operating-system
+user and machine stays signed in wherever those files carry the session.
+
+Engine-specific exclusions (every engine also loses the bridge profile lock,
+*.tmp entries, log directories and the shared caches):
+  Chromium   lockfile, DawnGraphiteCache, DawnWebGPUCache, BrowserMetrics
+  Firefox    parent.lock, cache2, startupCache, thumbnails
+Every *.sqlite-wal and *.sqlite-shm file is kept: it is part of the database.
 
 Options:
   --engine <id>      Engine whose profiles are copied (default: ${DEFAULT_COPY_ENGINE}).
-                     Any engine whose manifest has profileApplies true.
+                     Any engine whose manifest has profileApplies true. The
+                     resolved profile path must agree: if it lies under
+                     profiles/<engine>/ for a different engine, the copy is
+                     refused instead of guessing.
   --from <name>      Source profile: an account name or "default".
   --to <new-name>    New profile name. It must not exist; nothing is overwritten
                      and nothing is merged.
@@ -117,17 +173,31 @@ function sortEntries(entries) {
 }
 
 // The exclusion rule for one directory entry, or null when it is copied. The
-// first matching rule wins, so one excluded entry is counted once.
-export function exclusionRule(name, isDirectory) {
+// first matching rule wins, so one excluded entry is counted once. engineLockFile
+// is the lock file name the engine's manifest declares (Chromium "lockfile",
+// Firefox "parent.lock"); without it, only the bridge's own lock is excluded and
+// the function behaves exactly as before.
+export function exclusionRule(name, isDirectory, engineLockFile = null) {
   const lower = String(name).toLowerCase();
   if (lower === PROFILE_LOCK_FILENAME.toLowerCase()) {
     return 'profileLock';
+  }
+  if (typeof engineLockFile === 'string' && engineLockFile.trim() !== '') {
+    if (lower === engineLockFile.trim().toLowerCase()) {
+      return 'engineLock';
+    }
   }
   if (SINGLETON_NAMES.has(lower)) {
     return 'singleton';
   }
   if (CACHE_NAMES.has(lower)) {
     return 'cache';
+  }
+  if (METRICS_NAMES.has(lower)) {
+    return 'metrics';
+  }
+  if (THUMBNAIL_NAMES.has(lower)) {
+    return 'thumbnails';
   }
   if (/\.tmp$/iu.test(name)) {
     return 'temporary';
@@ -142,15 +212,47 @@ function emptyExcludedCounts() {
   return Object.fromEntries(EXCLUSION_RULES.map((rule) => [rule, 0]));
 }
 
+// Count one excluded entry, and remember its name for the engine-specific
+// report. Names are merged case-insensitively per rule so one class of artifact
+// appears once with its total, however deep it was found.
+function recordExclusion(plan, name, rule) {
+  plan.excluded[rule] += 1;
+  if (!ENGINE_SPECIFIC_RULES.includes(rule)) {
+    return;
+  }
+  const key = `${rule}\u0000${String(name).toLowerCase()}`;
+  const entry = plan.excludedNames.get(key) ?? { name: String(name), rule, count: 0 };
+  entry.count += 1;
+  plan.excludedNames.set(key, entry);
+}
+
+// The engine-specific exclusions as a stable list: rule order first, then name.
+function excludedNameList(excludedNames) {
+  const order = (rule) => ENGINE_SPECIFIC_RULES.indexOf(rule);
+  return [...excludedNames.values()].sort((left, right) => {
+    const byRule = order(left.rule) - order(right.rule);
+    if (byRule !== 0) {
+      return byRule;
+    }
+    return left.name.toLowerCase() < right.name.toLowerCase()
+      ? -1
+      : left.name.toLowerCase() > right.name.toLowerCase()
+        ? 1
+        : 0;
+  });
+}
+
 // Walk the source once. The returned plan is the dry-run listing and the exact
 // list of directories and files the copy executes, so the tool never counts one
-// tree and copies another.
-function planCopy(sourceDir) {
+// tree and copies another. `engineLockFile` is the manifest-declared lock file of
+// the engine being copied; it is excluded like the bridge lock.
+function planCopy(sourceDir, { engineLockFile = null } = {}) {
   const plan = {
     directories: [],
     files: [],
     topLevel: [],
     excluded: emptyExcludedCounts(),
+    excludedNames: new Map(),
     skipped: { symlinks: 0, other: 0 },
     bytes: 0,
   };
@@ -190,9 +292,9 @@ function planCopy(sourceDir) {
       const childRelative = path.join(relative, entry.name);
       const childAbsolute = path.join(directory, entry.name);
       const isDirectory = entry.isDirectory();
-      const rule = exclusionRule(entry.name, isDirectory);
+      const rule = exclusionRule(entry.name, isDirectory, engineLockFile);
       if (rule !== null) {
-        plan.excluded[rule] += 1;
+        recordExclusion(plan, entry.name, rule);
         continue;
       }
       if (isDirectory) {
@@ -217,10 +319,10 @@ function planCopy(sourceDir) {
       excluded: null,
     };
     plan.topLevel.push(stats);
-    const rule = exclusionRule(entry.name, isDirectory);
+    const rule = exclusionRule(entry.name, isDirectory, engineLockFile);
     if (rule !== null) {
       stats.excluded = rule;
-      plan.excluded[rule] += 1;
+      recordExclusion(plan, entry.name, rule);
       continue;
     }
     if (isDirectory) {
@@ -316,6 +418,52 @@ function lockSummary(lock) {
     state: lock.state,
     owner: lock.owner === null ? null : { pid: lock.owner.pid, createdAt: lock.owner.createdAt },
   };
+}
+
+// The engine a profile directory belongs to, proven by the path. A directory
+// under <data>/profiles/<engine>/ names the engine in the same layout the broker
+// and this tool use; <data>/profiles/default is the legacy shared Chromium
+// default and has no engine segment. Anything else — a path outside the data
+// root, a first segment that is not a shipped engine id, the profiles root itself
+// — returns null: the tool never guesses an engine from a path it cannot prove,
+// and the explicit --engine decides. Detection therefore cannot mis-detect: it
+// either names a shipped engine the layout proves or says nothing.
+export function detectEngineFromProfilePath(profileDir, dataDir, engineIds) {
+  if (!nonEmptyString(profileDir) || !nonEmptyString(dataDir) || !Array.isArray(engineIds)) {
+    return null;
+  }
+  const profilesRoot = path.resolve(dataDir, 'profiles');
+  const relative = path.relative(profilesRoot, path.resolve(profileDir));
+  if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) {
+    return null;
+  }
+  const segments = relative.split(path.sep);
+  if (segments.length < 2) {
+    return null;
+  }
+  const segment = segments[0];
+  return engineIds.includes(segment) ? segment : null;
+}
+
+// The engine a copy uses: the requested setting, confirmed by the resolved path.
+// A source under profiles/<engine>/ for a different engine is refused rather
+// than guessed, so a name that exists under two engines can never apply the
+// wrong engine's lock rule or exclusion list. Returns { engineId, source,
+// error }: source is "path" when the layout proved the engine and "setting"
+// otherwise (the legacy shared default).
+export function resolveCopyEngine({ requestedEngine, sourceDir, dataDir, engineIds }) {
+  const requested = nonEmptyString(requestedEngine) ? requestedEngine.trim() : DEFAULT_COPY_ENGINE;
+  const detected = detectEngineFromProfilePath(sourceDir, dataDir, engineIds);
+  if (detected !== null && detected !== requested) {
+    return {
+      engineId: null,
+      source: null,
+      error:
+        `The source profile ${sourceDir} is a "${detected}" profile, but --engine is "${requested}". ` +
+        `Run the copy again with --engine ${detected}, or copy the "${requested}" profile of that name.`,
+    };
+  }
+  return { engineId: requested, source: detected === null ? 'setting' : 'path', error: null };
 }
 
 /**
@@ -474,6 +622,18 @@ function copyProfile({ engine, from, to, dataDir, dryRun, env, home, pluginRoot 
   }
   const sourceDir = sourceResolution.profileDir;
   const targetDir = targetResolution.profileDir;
+  // The engine is the requested setting, confirmed by the resolved path: a source
+  // under profiles/<engine>/ for another shipped engine refuses instead of
+  // guessing, so the wrong lock rule and exclusion list can never be applied.
+  const resolvedEngine = resolveCopyEngine({
+    requestedEngine: engineId,
+    sourceDir,
+    dataDir: dataRoot,
+    engineIds: configuration.engineIds,
+  });
+  if (resolvedEngine.error !== null) {
+    throw new ProfileCopyError('engine-mismatch', redactSecrets(resolvedEngine.error));
+  }
   const samePath = (left, right) =>
     process.platform === 'win32'
       ? left.toLowerCase() === right.toLowerCase()
@@ -538,11 +698,33 @@ function copyProfile({ engine, from, to, dataDir, dryRun, env, home, pluginRoot 
     );
   }
 
-  const plan = planCopy(sourceDir);
+  // The engine's own lock file, read from the manifest's profileLock descriptor
+  // with the same rule the broker's preflight uses: Chromium's lockfile proves a
+  // live owner by refusing a write-open, Firefox's parent.lock by refusing a
+  // read-open, a pid file by process liveness. A live owner refuses the copy with
+  // the broker's own wording (profile directory, lock file, holder and fix); a
+  // stale or uninterpretable file never blocks, exactly like the broker.
+  const engineLockDescriptor =
+    configuration.engine.profileLock === undefined ? null : configuration.engine.profileLock;
+  const engineLock =
+    engineLockDescriptor === null ? null : readEngineProfileLock(sourceDir, engineLockDescriptor);
+  if (engineLock !== null && engineLockBlocksStart(engineLock)) {
+    throw new ProfileCopyError(
+      'source-locked',
+      engineProfileLockMessage(engineLock, { trailing: 'The profile was not copied.' }),
+    );
+  }
+
+  const engineLockFile =
+    engineLockDescriptor !== null && typeof engineLockDescriptor.file === 'string'
+      ? engineLockDescriptor.file
+      : null;
+  const plan = planCopy(sourceDir, { engineLockFile });
   const summary = {
     ok: true,
     dryRun,
     engine: engineId,
+    engineSource: resolvedEngine.source,
     from: sourceName,
     to: targetName,
     sourceDir: redactSecrets(sourceDir),
@@ -555,6 +737,11 @@ function copyProfile({ engine, from, to, dataDir, dryRun, env, home, pluginRoot 
     excluded: {
       entries: Object.values(plan.excluded).reduce((total, count) => total + count, 0),
       byRule: { ...plan.excluded },
+      names: excludedNameList(plan.excludedNames).map((entry) => ({
+        name: entry.name,
+        rule: entry.rule,
+        count: entry.count,
+      })),
     },
     skipped: { ...plan.skipped },
     topLevel: plan.topLevel.map((entry) => ({
@@ -565,6 +752,17 @@ function copyProfile({ engine, from, to, dataDir, dryRun, env, home, pluginRoot 
       excluded: entry.excluded,
     })),
     sourceLock: lockSummary(lock),
+    sourceEngineLock:
+      engineLock === null
+        ? null
+        : {
+            state: engineLock.state,
+            path: redactSecrets(engineLock.path),
+            file: engineLock.file,
+            liveness: engineLock.liveness,
+            owner: engineLock.owner,
+            error: engineLock.error === null ? null : redactSecrets(engineLock.error),
+          },
   };
   if (dryRun) {
     return summary;
@@ -608,12 +806,29 @@ export function formatHumanSummary(summary) {
     (rule) => `${EXCLUSION_LABELS[rule]} ${summary.excluded.byRule[rule]}`,
   );
   lines.push(`excluded: ${summary.excluded.entries}${rules.length === 0 ? '' : ` (${rules.join(', ')})`}`);
+  const names = Array.isArray(summary.excluded.names)
+    ? summary.excluded.names.map((entry) => `${entry.name} ${entry.count}`)
+    : [];
+  lines.push(`engine-specific exclusions: ${names.length === 0 ? 'none' : names.join(', ')}`);
   lines.push(`skipped: ${summary.skipped.symlinks} symlinks, ${summary.skipped.other} other entries`);
   if (summary.sourceLock.state === 'stale') {
     const owner = summary.sourceLock.owner;
     const who = owner === null || owner.pid === undefined ? 'its owner' : `pid ${owner.pid}`;
     lines.push(`stale lock ignored: ${who} is gone; the lock file was not copied.`);
   }
+  if (summary.sourceEngineLock !== null && summary.sourceEngineLock !== undefined) {
+    if (summary.sourceEngineLock.state === 'stale') {
+      lines.push(
+        `stale engine lock ignored: nobody holds ${summary.sourceEngineLock.path}; it was not copied.`,
+      );
+    } else if (summary.sourceEngineLock.state === 'unknown') {
+      lines.push(
+        `engine lock not interpreted: ${summary.sourceEngineLock.path} was not checked ` +
+          `(${summary.sourceEngineLock.error ?? 'unknown reason'}); it was not copied.`,
+      );
+    }
+  }
+  lines.push('A copy carries no session cookies (Chromium discards them, Firefox keeps them in memory).');
   lines.push('The per-account <name>.proxy file was not copied; it is a plaintext credential.');
   return `${lines.join('\n')}\n`;
 }
