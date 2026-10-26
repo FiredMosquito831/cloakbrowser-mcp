@@ -17,6 +17,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { applyPingTimeout, pingTimeoutProblemNote } from './lib/ping-timeout.mjs';
 import { ensurePython, ensureUv, ensureVenv } from './lib/provision.mjs';
 
 const PLUGIN_ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -91,6 +92,19 @@ export function buildChildEnv(source) {
     }
   }
   applyUnrestrictedFileAccess(env);
+  // Server heartbeat (2.14.1). The wrapper pings every 3 s and closes the
+  // browser and the session when the answer is more than the deadline late;
+  // mcp/server.py:105-107 installs no heartbeat at all at 0. The plugin default
+  // is 0 because one late client answer cost the browser (see
+  // lib/ping-timeout.mjs); the setting or an explicit operator value re-enables
+  // it. The variable is always written, so the wrapper's own 5 s default can
+  // never apply by omission; an unusable value becomes 0 with one stderr line
+  // and never stops the start.
+  const pingTimeout = applyPingTimeout(env);
+  const pingProblem = pingTimeoutProblemNote(pingTimeout);
+  if (pingProblem !== null) {
+    log(pingProblem);
+  }
   return env;
 }
 

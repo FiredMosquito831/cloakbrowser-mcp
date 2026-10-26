@@ -178,6 +178,8 @@ const CAPABILITIES_KEYS_293 = [
 // engines have no pointer file, so profileDefaultError is absent here.
 // 2.14.0 appends the six device-identity keys after the profile block for every
 // engine; these synthetic engines cannot pin, so the note is always present.
+// 2.14.1 appends the five server-heartbeat keys after them; none of these
+// synthetic engines is `camoufox`, so they all report the not-applicable note.
 const IDENTITY_KEYS_2140 = [
   'identityMode',
   'identityApplies',
@@ -186,9 +188,17 @@ const IDENTITY_KEYS_2140 = [
   'identityCreatedAt',
   'identityNote',
 ];
+const PING_TIMEOUT_KEYS_2141 = [
+  'pingTimeoutApplies',
+  'pingTimeoutMs',
+  'pingTimeoutSource',
+  'heartbeatEnabled',
+  'pingTimeoutNote',
+];
 const CAPABILITIES_KEYS_295 = [
   ...CAPABILITIES_KEYS_293,
   ...IDENTITY_KEYS_2140,
+  ...PING_TIMEOUT_KEYS_2141,
   'serverCwd',
   'outputDir',
   'clientRoots',
@@ -229,6 +239,7 @@ const STATUS_KEYS_293 = [
   'profileFallback',
   'profileLock',
   ...IDENTITY_KEYS_2140,
+  ...PING_TIMEOUT_KEYS_2141,
 ];
 
 // 2.11.1 declares the Chromium lockfile for cloak and playwright, so those two
@@ -832,7 +843,7 @@ function createLockPlugin(root: string): string {
   for (const file of ['broker.mjs', 'engine-registry.mjs']) {
     copyFileSync(path.join(pluginDir, file), path.join(plugin, file));
   }
-  for (const file of ['attach.mjs', 'profile.mjs', 'provision.mjs', 'surface.mjs']) {
+  for (const file of ['attach.mjs', 'ping-timeout.mjs', 'profile.mjs', 'provision.mjs', 'surface.mjs']) {
     copyFileSync(path.join(pluginDir, 'lib', file), path.join(lib, file));
   }
   copyFileSync(path.join(pluginDir, 'engines', 'profiles.json'), path.join(engines, 'profiles.json'));

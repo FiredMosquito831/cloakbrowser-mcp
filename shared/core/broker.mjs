@@ -31,6 +31,7 @@ import {
   systemDependencies,
 } from './engine-registry.mjs';
 import { enrichToolError, runtimeErrorHint, runtimeStatusFields } from './lib/attach.mjs';
+import { PING_TIMEOUT_ENGINE_ID, pingTimeoutProblemNote, resolvePingTimeout } from './lib/ping-timeout.mjs';
 import {
   accountNameError,
   accountProxyPath,
@@ -932,6 +933,45 @@ function identitySentence() {
 
 const runtimeHint = runtimeErrorHint(engine, process.env);
 const profileSelection = resolveToolProfile(process.env.STEALTH_TOOL_PROFILE, engine, profiles);
+
+// --- server heartbeat timeout (2.14.1) --------------------------------------
+// The camoufox wrapper (camoufox-playwright-mcp 0.1.5) pings its client every
+// 3 s and closes the browser and the session when an answer is more than 5 s
+// late (mcp/server.py:332-380; 0 disables the middleware, :105-107). One late
+// answer was enough to lose the browser, so the launcher now passes 0 unless the
+// ping_timeout_ms setting or an explicit operator value says otherwise; the
+// resolution lives in one shared helper so the launcher's child environment and
+// this report can never disagree. A value that cannot be used becomes 0 and is
+// reported (the launcher also logs it once). The setting is inert for every
+// other engine — they send no server heartbeat — and they say so.
+const pingTimeoutState = resolvePingTimeout(process.env);
+const PING_TIMEOUT_NOT_APPLICABLE_NOTE =
+  'Ping timeout: ping_timeout_ms applies only to the camoufox engine; this engine sends no server heartbeat ping, so the setting has no effect.';
+
+// The additive keys every engine gains: whether the setting applies, the
+// effective deadline, where it came from (env, setting or default) and whether
+// the wrapper heartbeat runs at all (false at 0). The note appears only when
+// there is something honest to say: an engine the setting cannot reach, or a
+// supplied value that was ignored.
+function pingTimeoutReport() {
+  if (native || engine === null || engine.id !== PING_TIMEOUT_ENGINE_ID) {
+    return {
+      pingTimeoutApplies: false,
+      pingTimeoutMs: null,
+      pingTimeoutSource: null,
+      heartbeatEnabled: null,
+      pingTimeoutNote: PING_TIMEOUT_NOT_APPLICABLE_NOTE,
+    };
+  }
+  const problemNote = pingTimeoutProblemNote(pingTimeoutState);
+  return {
+    pingTimeoutApplies: true,
+    pingTimeoutMs: pingTimeoutState.ms,
+    pingTimeoutSource: pingTimeoutState.source,
+    heartbeatEnabled: pingTimeoutState.ms > 0,
+    ...(problemNote === null ? {} : { pingTimeoutNote: problemNote }),
+  };
+}
 
 // Artifact directory policy (2.10.1). Upstream's file-access allowlist is
 // [output directory, workspace root], and through the Cloak bridge the client's
@@ -1952,6 +1992,10 @@ function capabilitiesPayload(clientRoots) {
     // file when one is used, and identityNote explains an inert engine, the
     // random and isolated modes, or a corrupt/regenerated file.
     ...identityReport(),
+    // Server heartbeat (2.14.1), additive and the same values in both
+    // meta-tools: whether ping_timeout_ms applies to this engine, the effective
+    // deadline, its source and whether the wrapper heartbeat runs at all.
+    ...pingTimeoutReport(),
     // Artifact diagnostics, additive and last, so every key above keeps its
     // position and value. serverCwd is the directory both allowlist values fall
     // back to; outputDir is the effective artifact directory (null for an engine
@@ -2085,6 +2129,9 @@ function statusPayload() {
     // Device identity (2.14.0), additive and the same values browser_capabilities
     // reports, so a status read alone shows which identity this start uses.
     ...identityReport(),
+    // Server heartbeat (2.14.1), additive and the same values browser_capabilities
+    // reports, so a status read alone shows whether the wrapper heartbeat runs.
+    ...pingTimeoutReport(),
   };
 }
 
