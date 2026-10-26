@@ -476,14 +476,16 @@ describe('the camoufox launcher child environment', () => {
   it.each(['abc', '-1', '1.5'])('falls back to 0 with exactly one stderr line for %j', (raw) => {
     const write = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const env = camoufoxLauncher.buildChildEnv({ STEALTH_PING_TIMEOUT_MS: raw });
+    // Every line the launcher writes carries the [camoufox] prefix; an invalid
+    // value must produce exactly one of them and nothing else.
     const lines = write.mock.calls
       .map(([chunk]) => String(chunk))
-      .filter((line) => line.includes('Ping timeout'));
+      .filter((line) => line.includes('[camoufox]'));
     expect(env.PLAYWRIGHT_MCP_PING_TIMEOUT_MS).toBe('0');
     expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('Ping timeout');
     expect(lines[0]).toContain(raw);
     expect(lines[0]).toContain('STEALTH_PING_TIMEOUT_MS');
-    expect(lines[0]).toContain('[camoufox]');
     write.mockRestore();
   });
 
@@ -492,7 +494,7 @@ describe('the camoufox launcher child environment', () => {
     const env = camoufoxLauncher.buildChildEnv({ STEALTH_PING_TIMEOUT_MS: '' });
     const lines = write.mock.calls
       .map(([chunk]) => String(chunk))
-      .filter((line) => line.includes('Ping timeout'));
+      .filter((line) => line.includes('[camoufox]'));
     expect(env.PLAYWRIGHT_MCP_PING_TIMEOUT_MS).toBe('0');
     expect(lines).toHaveLength(0);
     write.mockRestore();
