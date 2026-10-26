@@ -103,20 +103,12 @@ const camoufoxCopy = (await import(
 
 // A PID that is guaranteed gone: spawn a short process, wait for its exit, then
 // use its PID for the stale-lock fixture.
-async function exitedPid(): Promise<number> {
-  const child = spawn(process.execPath, ['--version'], { stdio: 'ignore' });
-  const pid = child.pid;
-  if (pid === undefined) {
-    throw new Error('could not spawn a short-lived process');
-  }
-  await new Promise<void>((resolve, reject) => {
-    child.on('exit', () => resolve());
-    child.on('error', reject);
-  });
-  return pid;
-}
-
-const DEAD_PID = await exitedPid();
+// A PID no process can have on any supported platform: Linux caps pids at
+// 4194304 by default, macOS at ~99999, and Windows rejects 2^31-1 with ESRCH.
+// A pid from an exited child can still be reported live while its kernel
+// process object lingers (observed on hosted Windows runners), which made the
+// stale-lock fixtures flaky; this constant cannot collide.
+const DEAD_PID = 2_147_483_647;
 
 const SECRET_COOKIE = 'COOKIE-SECRET-6f2a';
 const SECRET_SEED = 'SEED-SECRET-9c1b';

@@ -11,7 +11,7 @@
 // Windows rules: no detached children, stdin EOF is the shutdown signal, and the
 // backend process tree is killed with taskkill after a 300 ms grace period.
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
@@ -35,6 +35,8 @@ import {
   accountNameError,
   accountProxyPath,
   backendEnvironment,
+  copyPlanToTarget,
+  createProfileLock,
   DEFAULT_PROFILE_NAME,
   effectiveProfileDir,
   engineLockBlocksStart,
@@ -43,10 +45,13 @@ import {
   INVALID_ACCOUNT_HINT,
   ISOLATED_IGNORED_POINTER,
   isolatedIgnoredEntry,
+  listSessionCopies,
   lockBlocksStart,
+  planCopy,
   PROFILE_ISOLATED_NATIVE_NOTE,
   PROFILE_ISOLATED_NOTE,
   PROFILE_ISOLATED_POINTER_NOTE,
+  profileCopyNote,
   profileDefaultPointerDir,
   profileDefaultPointerPath,
   profileFallbackReason,
@@ -58,9 +63,12 @@ import {
   readProfileDefaultPointer,
   readProfileLock,
   redactSecrets,
+  releaseProfileLock,
   resolveProfile,
   resolveProfileIsolation,
   selectFallbackProfile,
+  sessionCopyDir,
+  SESSION_OWNER_FILENAME,
   validateAccountName,
   writeProfileDefaultPointer,
 } from './lib/profile.mjs';
@@ -241,8 +249,11 @@ const PLUGIN_DATA_DIR =
 // existed: one profile per account, shared by every Claude Code session.
 // "workspace" derives one profile per project folder, Playwright-style.
 // "isolated" uses no profile at all: nothing is resolved, created or locked and
-// nothing persists (2.11.0). An unsubstituted placeholder and an unknown value
-// both mean "shared"; they are logged once and are never fatal.
+// nothing persists (2.11.0). "copy" resolves the base exactly like "shared",
+// holds the base profile's lock for the session, starts the engine on a
+// temporary whole-tree copy and discards it on a clean shutdown (2.12.0). An
+// unsubstituted placeholder and an unknown value both mean "shared"; they are
+// logged once and are never fatal.
 const isolationSetting =
   typeof process.env.STEALTH_PROFILE_ISOLATION === 'string' ? process.env.STEALTH_PROFILE_ISOLATION : '';
 const profileIsolation = resolveProfileIsolation(isolationSetting);
@@ -257,6 +268,7 @@ if (profileIsolation.ignored !== null) {
 const profileApplies = engine !== null && manifestProfileApplies(engine);
 // The mode itself, before the engine's profileApplies says whether it can act.
 const isolatedMode = profileIsolation.mode === 'isolated';
+const copyMode = profileIsolation.mode === 'copy';
 
 // The default-profile pointer (2.10.0). It is read once here, next to the
 // profiles, and is only a candidate: resolveProfile applies it after profile_dir
@@ -335,6 +347,18 @@ if (engineError === null && profileResolution.error !== null) {
   engineError = profileResolution.error;
 }
 
+// profile_isolation=copy never silently degrades. An engine that owns its own
+// profile (profileApplies: false) has no broker profile to copy, so the start is
+// refused loudly instead of starting that engine some other way. ("isolated" is
+// inert for such engines by contrast: it needs no profile at all.)
+if (copyMode && engineError === null && engine !== null && !profileApplies) {
+  engineError =
+    `The "${selected.id}" engine manages its own browser profile, so profile_isolation "copy" does not apply to it. ` +
+    'Set "Profile isolation" (profile_isolation) to shared, or choose an engine that uses the plugin\'s ' +
+    'profiles. The backend was not started.';
+  log(engineError);
+}
+
 // Loud lock preflight. The bridge takes its exclusive profile lock at backend
 // start-up, so starting a backend against a profile a live process owns only
 // produces "Backend exited" and a two-tool surface. The broker reads the same
@@ -370,6 +394,11 @@ if (engineError === null && profileApplies && profileResolution.profileSource !=
       } else {
         profileLock = { ...lock, fix: profileLockFix(lock) };
         engineError = profileLockMessage(lock, { fallbackExhausted: workspaceProfile });
+        if (copyMode) {
+          // Copy mode never falls back to another profile: the base is either
+          // safe to copy or the start is refused, loudly.
+          engineError += ' Profile isolation is "copy", so the base profile was not copied.';
+        }
         log(engineError);
       }
     } else {
@@ -391,6 +420,9 @@ if (engineError === null && profileApplies && profileResolution.profileSource !=
       engineProfileLock = { ...engineOwnerLock, fix: engineProfileLockFix(engineOwnerLock) };
       if (engineLockBlocksStart(engineOwnerLock)) {
         engineError = engineProfileLockMessage(engineOwnerLock);
+        if (copyMode) {
+          engineError += ' Profile isolation is "copy", so the base profile was not copied.';
+        }
         log(engineError);
       } else if (engineOwnerLock.state === 'stale') {
         log(
@@ -486,6 +518,107 @@ if (
           : 'account';
     engineError = `Cannot create the ${label} profile directory ${profileResolution.profileDir}: ${error.message}`;
   }
+}
+
+// profile_isolation=copy (2.12.0). The preflight above proved the base has no
+// live owner. From here the broker becomes the base's writer-owner for the
+// session: it holds the bridge's own lock format (so a shared/workspace start,
+// and the bridge itself, refuse the base), copies the base tree through the
+// shared copy plan into profiles/<engine>/.sessions/<base>-<stamp>-<pid>, and
+// starts the engine on that copy. The base is never written. Every failure is
+// loud, releases the lock, removes only a partial copy, and leaves the base
+// untouched; there is never a silent fallback to another profile.
+let copySession = null;
+// The lock handle this session holds on the base profile, or null. It is kept
+// outside the reportable `copySession` object so no file identity leaks into a
+// payload.
+let copyBaseLockHandle = null;
+function prepareCopySession() {
+  const baseDir = effectiveProfileDir(profileResolution);
+  if (baseDir === null) {
+    engineError =
+      'profile_isolation "copy" could not resolve a base profile directory. The backend was not started.';
+    log(engineError);
+    return null;
+  }
+  let baseCreated = false;
+  try {
+    if (!existsSync(baseDir)) {
+      mkdirSync(baseDir, { recursive: true });
+      baseCreated = true;
+    } else if (!statSync(baseDir).isDirectory()) {
+      throw new Error('it is not a directory');
+    }
+  } catch (error) {
+    engineError =
+      `profile_isolation "copy" cannot use the base profile ${baseDir}: ${error.message}. ` +
+      'The backend was not started.';
+    log(engineError);
+    return null;
+  }
+  const held = createProfileLock(baseDir);
+  if (!held.ok) {
+    engineError =
+      `profile_isolation "copy" could not hold the base profile ${baseDir}: ${held.error} ` +
+      'The backend was not started.';
+    log(engineError);
+    return null;
+  }
+  const sessionDir = sessionCopyDir(selected.id, PLUGIN_DATA_DIR, baseDir);
+  const engineLockFile =
+    engine !== null && engine.profileLock !== undefined && typeof engine.profileLock.file === 'string'
+      ? engine.profileLock.file
+      : null;
+  let plan;
+  try {
+    plan = planCopy(baseDir, { engineLockFile });
+    copyPlanToTarget(plan, sessionDir, { targetName: path.basename(sessionDir) });
+  } catch (error) {
+    const released = releaseProfileLock(held);
+    if (released.error !== null) {
+      log(released.error);
+    }
+    engineError =
+      `The copy-mode session copy failed: ${redactSecrets(error?.message ?? String(error))} ` +
+      'The backend was not started.';
+    log(engineError);
+    return null;
+  }
+  log(
+    `profile copy: base=${baseDir} copy=${sessionDir} files=${plan.files.length} ` +
+      `bytes=${plan.bytes}${baseCreated ? ' baseCreated=true' : ''}`,
+  );
+  // Mark the copy as owned by this broker before the engine starts, so an
+  // explicit --prune can never remove it in the window before the bridge writes
+  // its own lock. A failed marker write is logged and does not stop the session:
+  // the bridge lock takes over as soon as the backend starts.
+  try {
+    writeFileSync(
+      path.join(sessionDir, SESSION_OWNER_FILENAME),
+      `${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString(), baseDir }, null, 2)}\n`,
+    );
+  } catch (error) {
+    log(
+      `profile copy: cannot write the session owner marker in ${sessionDir}: ${error.message}; ` +
+        'the bridge lock protects the copy once the backend starts',
+    );
+  }
+  copyBaseLockHandle = held;
+  return {
+    baseDir,
+    sessionDir,
+    baseCreated,
+    baseLock: { path: held.path, owner: held.owner, reclaimed: held.reclaimed },
+    copied: {
+      files: plan.files.length,
+      directories: plan.directories.length,
+      bytes: plan.bytes,
+    },
+    discarded: false,
+  };
+}
+if (copyMode && engineError === null && profileApplies) {
+  copySession = prepareCopySession();
 }
 
 const runtimeHint = runtimeErrorHint(engine, process.env);
@@ -687,15 +820,20 @@ const state = {
   profile: {
     account: profileResolution.account,
     dir:
-      profileResolution.profileSource === 'account' ||
-      profileResolution.profileSource === 'workspace' ||
-      profileResolution.profileSource === 'pointer'
-        ? profileResolution.profileDir
-        : null,
+      copySession !== null
+        ? copySession.sessionDir
+        : profileResolution.profileSource === 'account' ||
+            profileResolution.profileSource === 'workspace' ||
+            profileResolution.profileSource === 'pointer'
+          ? profileResolution.profileDir
+          : null,
     source: profileResolution.profileSource,
     // True only for profile_isolation=isolated on an engine that uses the
     // broker's profile model; the spawn environment and both launchers key on it.
     isolated: profileResolution.profileSource === 'isolated',
+    // The copy-mode session (2.12.0), or null. Present only when the base was
+    // locked and copied; every later report reads it additively.
+    copy: copySession,
     ignored: profileIgnored,
     applies: profileResolution.accountApplies,
     defaultDir: profileResolution.defaultProfileDir,
@@ -1139,7 +1277,10 @@ function availableAccounts() {
   const accountRoot = path.join(PLUGIN_DATA_DIR, 'profiles', state.engine.id);
   try {
     for (const entry of readdirSync(accountRoot, { withFileTypes: true })) {
-      if (entry.isDirectory()) {
+      // Dot-directories are the engine's own metadata (profiles/<engine>/.sessions
+      // holds copy-mode working directories, and the pointer .default is a file);
+      // an account name cannot start with ".", so none is a selectable profile.
+      if (entry.isDirectory() && !entry.name.startsWith('.')) {
         names.add(entry.name);
       }
     }
@@ -1236,11 +1377,85 @@ function systemDependencyHint() {
   return missing.map((entry) => `${entry.label} is required. ${entry.installHint}`).join(' ');
 }
 
+// --- copy-mode reporting (2.12.0) -------------------------------------------
+// Additive only: in copy mode the meta-tools report the base, the session copy,
+// the lock the broker holds on the base and that the changes are discarded. The
+// leftover session copies are listed whenever one exists, so a crashed copy is
+// discoverable from any mode. Every other mode's payload is unchanged.
+function copyReport() {
+  const copy = state.profile.copy;
+  if (copy === null || copy === undefined) {
+    return null;
+  }
+  const baseLock = readProfileLock(copy.baseDir);
+  return {
+    baseDir: copy.baseDir,
+    sessionDir: copy.sessionDir,
+    baseCreated: copy.baseCreated,
+    baseLock: {
+      state: baseLock.state,
+      path: baseLock.path,
+      owner: baseLock.owner,
+      reclaimed: copy.baseLock.reclaimed,
+      heldByThisSession:
+        baseLock.state === 'live' && baseLock.owner !== null && baseLock.owner.pid === process.pid,
+    },
+    copied: { ...copy.copied },
+    discarded: copy.discarded,
+  };
+}
+
+function copyReportNote() {
+  const copy = state.profile.copy;
+  if (copy !== null && copy !== undefined) {
+    return profileCopyNote(copy.baseDir, copy.sessionDir);
+  }
+  if (state.profile.isolation === 'copy' && state.profile.appliesToEngine === false) {
+    return 'This engine manages its own browser profile, so profile_isolation "copy" does not apply to it.';
+  }
+  return null;
+}
+
+// The session copies under profiles/<engine>/.sessions, with the current one
+// marked "current" and any copy a live process still owns marked "active"; the
+// rest are "leftover". Null when there is nothing to report, so every other
+// mode's payload stays byte-identical on a clean machine.
+function sessionCopiesReport() {
+  if (state.engine === null || state.profile.appliesToEngine !== true) {
+    return null;
+  }
+  const currentDir =
+    state.profile.copy === null || state.profile.copy === undefined ? null : state.profile.copy.sessionDir;
+  const listed = listSessionCopies(state.engineId, PLUGIN_DATA_DIR, {
+    engineLockDescriptor: state.engine.profileLock === undefined ? null : state.engine.profileLock,
+    currentDir,
+  });
+  if (listed.copies.length === 0) {
+    return null;
+  }
+  return {
+    root: listed.root,
+    currentDir,
+    copies: listed.copies.map((copy) => ({
+      name: copy.name,
+      path: copy.path,
+      baseName: copy.baseName,
+      startedAtLocal: copy.startedAtLocal,
+      pid: copy.pid,
+      state: copy.state,
+    })),
+    ...(listed.error === undefined ? {} : { error: listed.error }),
+  };
+}
+
 function capabilitiesPayload(clientRoots) {
   const systemDeps = systemDependencyReport();
   const counts = state.toolsListed ? toolCounts() : null;
   const supported = state.toolsListed ? supportedCounts() : null;
   const accounts = availableAccounts();
+  const copyNow = copyReport();
+  const copyNoteNow = copyReportNote();
+  const sessionCopiesNow = sessionCopiesReport();
   const pointerNow =
     state.profile.appliesToEngine && state.engine !== null
       ? readProfileDefaultPointer(state.engineId, PLUGIN_DATA_DIR)
@@ -1335,6 +1550,21 @@ function capabilitiesPayload(clientRoots) {
     profileFallback: state.profile.fallback,
     profileLock: state.profile.lock,
     ...(state.profile.engineLock === null ? {} : { engineProfileLock: state.profile.engineLock }),
+    // Copy start (2.12.0), additive only in that mode. profileCopy names the
+    // base, the session copy, the lock this session holds on the base and the
+    // copy size; profileCopyNote states that changes are discarded. For an
+    // engine with profileApplies false the mode is refused loudly and
+    // profileCopySupported is false. sessionCopies lists leftover copies in
+    // every mode, but only when at least one exists, so a clean payload is
+    // unchanged.
+    ...(state.profile.isolation === 'copy'
+      ? {
+          profileCopy: copyNow,
+          profileCopySupported: state.profile.appliesToEngine,
+          ...(copyNoteNow === null ? {} : { profileCopyNote: copyNoteNow }),
+        }
+      : {}),
+    ...(sessionCopiesNow === null ? {} : { sessionCopies: sessionCopiesNow }),
     // Isolated start (2.11.0), additive only in that mode so every shared and
     // workspace payload stays byte-identical. profileIgnored lists the profile
     // settings the mode made inert, with the value that was supplied; the note
@@ -1388,6 +1618,9 @@ function capabilitiesPayload(clientRoots) {
 function statusPayload() {
   const counts = state.toolsListed ? toolCounts() : null;
   const now = Date.now();
+  const copyNow = copyReport();
+  const copyNoteNow = copyReportNote();
+  const sessionCopiesNow = sessionCopiesReport();
   const dependencyHint = systemDependencyHint();
   const rawLastError =
     dependencyHint === null
@@ -1448,6 +1681,18 @@ function statusPayload() {
     profileFallback: state.profile.fallback,
     profileLock: state.profile.lock,
     ...(state.profile.engineLock === null ? {} : { engineProfileLock: state.profile.engineLock }),
+    // Copy start (2.12.0), additive only in that mode, same values as
+    // browser_capabilities. profileSource is reported with it so a status read
+    // alone shows where the base came from.
+    ...(state.profile.isolation === 'copy'
+      ? {
+          profileSource: state.profile.source,
+          profileCopy: copyNow,
+          profileCopySupported: state.profile.appliesToEngine,
+          ...(copyNoteNow === null ? {} : { profileCopyNote: copyNoteNow }),
+        }
+      : {}),
+    ...(sessionCopiesNow === null ? {} : { sessionCopies: sessionCopiesNow }),
     // Isolated start (2.11.0), additive only in that mode. profileSource is
     // reported here as well so a status read alone can tell where the profile
     // would have come from (it is "isolated": none).
@@ -1567,6 +1812,17 @@ function profileStatePayload() {
     profileIsolation: state.profile.isolation,
     profileIsolationSource: state.profile.isolationSource,
     profileLock: lock === null ? null : { ...lock, fix: lockBlocksStart(lock) ? profileLockFix(lock) : null },
+    // Copy start (2.12.0), additive only in that mode: the base, the session
+    // copy this server runs on, the base lock this session holds and the note
+    // that changes are discarded. The lock above is the session copy's own
+    // bridge lock once the backend has started.
+    ...(state.profile.isolation === 'copy'
+      ? {
+          profileCopy: copyReport(),
+          profileCopySupported: state.profile.appliesToEngine,
+          ...(copyReportNote() === null ? {} : { profileCopyNote: copyReportNote() }),
+        }
+      : {}),
     // Isolated start (2.11.0), additive only in that mode: there is no profile
     // directory and no lock, and the settings supplied are reported as ignored.
     ...(state.profile.isolation === 'isolated'
@@ -1607,6 +1863,17 @@ function respondProfiles(id, args) {
       // A set-default call changes the next start only; this session keeps its
       // profile, so the two are reported separately.
       applies: 'next server start',
+      // Copy start (2.12.0), additive only in that mode; the current payload
+      // above names the base and the session copy, and the leftover copies are
+      // listed whenever one exists (in every mode) so a crashed copy is
+      // discoverable and prunable.
+      ...(state.profile.isolation === 'copy'
+        ? {
+            profileCopySupported: state.profile.appliesToEngine,
+            ...(copyReportNote() === null ? {} : { profileCopyNote: copyReportNote() }),
+          }
+        : {}),
+      ...(sessionCopiesReport() === null ? {} : { sessionCopies: sessionCopiesReport() }),
       ...(state.profile.isolation === 'isolated'
         ? {
             profileIsolationNote: state.profile.appliesToEngine
@@ -1826,6 +2093,61 @@ function killBackendTree() {
   }
 }
 
+// --- copy-mode session lifecycle --------------------------------------------
+// A clean shutdown is the broker's own shutdown path (the client closed stdin,
+// or the process received SIGINT/SIGTERM/SIGHUP): the backend is stopped first,
+// then the session tree is deleted and the base lock released. A hard kill runs
+// none of this: the copy stays on disk (data is never lost), the base lock is a
+// stale file whose dead pid every preflight and the bridge's own reclaim rule
+// accept, and browser_profiles / scripts/profile-copy.mjs --prune list it.
+function discardCopySession() {
+  const copy = state.profile.copy;
+  if (copy === null || copy === undefined || copy.discarded) {
+    return;
+  }
+  try {
+    rmSync(copy.sessionDir, { recursive: true, force: true });
+    copy.discarded = true;
+    log(`profile copy: discarded session copy ${copy.sessionDir} after a clean shutdown`);
+  } catch (error) {
+    // A file a dying browser still holds on Windows: keep the tree, say where
+    // it is and how to remove it later. Nothing is forced.
+    log(
+      `profile copy: could not discard the session copy ${copy.sessionDir}: ${error.message}; ` +
+        'it is left in place for browser_profiles list and scripts/profile-copy.mjs --prune',
+    );
+  }
+}
+
+function releaseCopyBaseLock() {
+  if (copyBaseLockHandle === null) {
+    return;
+  }
+  const released = releaseProfileLock(copyBaseLockHandle);
+  if (released.error !== null) {
+    log(released.error);
+  }
+  copyBaseLockHandle = null;
+}
+
+let shutdownCompleted = false;
+function completeShutdown() {
+  if (shutdownCompleted) {
+    return;
+  }
+  shutdownCompleted = true;
+  discardCopySession();
+  releaseCopyBaseLock();
+  process.exit(0);
+}
+
+// An uncaught error exits without beginShutdown; release the base lock there too
+// (the tree is kept). SIGKILL runs no hook, which is why every preflight also
+// reclaims by pid liveness.
+process.on('exit', () => {
+  releaseCopyBaseLock();
+});
+
 function beginShutdown() {
   if (state.shuttingDown) {
     return;
@@ -1834,7 +2156,8 @@ function beginShutdown() {
   log('stdin closed; stopping backend');
   const child = state.child;
   if (child === null || child.exitCode !== null || child.signalCode !== null) {
-    process.exit(0);
+    completeShutdown();
+    return;
   }
   try {
     child.stdin.end();
@@ -1846,7 +2169,7 @@ function beginShutdown() {
       log(`backend still alive after ${SHUTDOWN_GRACE_MS} ms; killing process tree pid=${child.pid}`);
       killBackendTree();
     }
-    setTimeout(() => process.exit(0), 100);
+    setTimeout(() => completeShutdown(), 100);
   }, SHUTDOWN_GRACE_MS);
 }
 
@@ -2068,6 +2391,9 @@ function handleBackendMessage(message, rawLine) {
     const parts = [
       current,
       state.profile.fallback === null ? '' : state.profile.fallback.reason,
+      // Copy start (2.12.0): one honest sentence, only when a copy is actually
+      // running, so shared/workspace/isolated text is unchanged.
+      state.profile.copy === null || state.profile.copy === undefined ? '' : (copyReportNote() ?? ''),
       state.profile.isolated && state.profile.appliesToEngine ? PROFILE_ISOLATED_NOTE : '',
       artifactDirectorySentence(),
     ];
@@ -2235,8 +2561,10 @@ function startBackend() {
     }
     if (state.shuttingDown) {
       // A client-initiated stdin EOF is a normal shutdown, including the
-      // forced taskkill path, so do not surface the child's signal code.
-      process.exit(0);
+      // forced taskkill path, so do not surface the child's signal code. The
+      // copy-mode session tree is discarded and the base lock released here,
+      // after the backend (and its browser tree) has exited.
+      completeShutdown();
     }
   });
 }

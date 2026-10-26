@@ -1,7 +1,7 @@
 {
   "name": "camoufox",
   "displayName": "Camoufox",
-  "version": "2.11.1",
+  "version": "2.12.0",
   "description": "Camoufox stealth Firefox through the Playwright MCP tool contract. Provisions a pinned uv, a managed Python and the engine venv automatically; the pinned Camoufox browser build downloads on first use. Portable profile by default; no CDP.",
   "author": {
     "name": "FiredMosquito831"
@@ -74,8 +74,8 @@
     "profile_isolation": {
       "type": "string",
       "title": "Profile isolation",
-      "description": "Session safety for the browser profile. shared keeps one profile per account for every Claude Code window, exactly as before. workspace gives each project folder its own profile (profiles/camoufox/ws-<hash>); that profile starts with a fresh login state, and if it is already in use the plugin uses a numbered sibling (ws-<hash>-2 to -5) and reports the switch. isolated uses no browser profile at all: no profile directory is created or locked, cookies, logins and storage are not saved, and nothing persists after the session; Profile directory, Account profile and the default-profile pointer are ignored and reported for that start, and several sessions can run at once. In shared and workspace, Profile directory and Account profile win over the mode. Restart Claude Code after changing it.",
-      "options": ["shared", "workspace", "isolated"],
+      "description": "Session safety for the browser profile. shared keeps one profile per account for every Claude Code window, exactly as before. workspace gives each project folder its own profile (profiles/camoufox/ws-<hash>); that profile starts with a fresh login state, and if it is already in use the plugin uses a numbered sibling (ws-<hash>-2 to -5) and reports the switch. isolated uses no browser profile at all: no profile directory is created or locked, cookies, logins and storage are not saved, and nothing persists after the session; Profile directory, Account profile and the default-profile pointer are ignored and reported for that start, and several sessions can run at once. copy runs the session on a temporary copy of the profile that Profile directory, Account profile, the default-profile pointer or the engine default resolves: the base profile is locked for the session and never written, the browser starts on the copy, and the copy is discarded when the session ends cleanly; a crashed session leaves it under profiles/<engine>/.sessions, where browser_profiles list shows it and scripts/profile-copy.mjs --prune removes it. copy does not combine with workspace in this version. In shared, workspace and copy, Profile directory and Account profile win over the mode. Restart Claude Code after changing it.",
+      "options": ["shared", "workspace", "isolated", "copy"],
       "default": "shared"
     },
     "account": {

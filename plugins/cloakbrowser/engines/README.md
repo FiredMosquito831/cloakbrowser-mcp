@@ -159,15 +159,22 @@ user-data-dir), an explicit `profile_dir`, the `account` name, a
 bridge's `<profile>/.cloakbrowser-mcp-profile.lock` before spawning and refuses a
 start when a live process holds it; in workspace mode it may move to the numbered
 siblings `-2` … `-5` and reports the switch as `profileFallback`. An isolated
-start reads no lock: no profile exists.
+start reads no lock: no profile exists. `profile_isolation=copy` resolves the base
+exactly like `shared` (never a workspace derivation), refuses a live base with the
+same preflights and no fallback, takes the base's lock, copies the base under
+`profiles/<engine>/.sessions/` through the shared copy plan and starts the engine
+on the copy; the base is never written. A clean shutdown discards the copy.
 
 An engine whose profile belongs to someone else declares `"profileApplies":
 false`. The broker then skips every step above, reports `profileApplies: false`
-and `profileLock: null`, and the engine's own profile setting governs. The
-shipped examples are `camoufox-native` (mcp-camoufox owns its profile and lease)
-and `kameleo` (CDP attach). `ignoredSettings` is a separate, additive fact: an
-engine can ignore one plugin setting without opting out of the profile model, and
-vice versa. The rule is manifest-driven; no engine id appears in `broker.mjs`.
+and `profileLock: null`, and the engine's own profile setting governs. `isolated`
+is inert for it (reported by `profileIsolationNote`), and `copy` is **refused
+loudly** (meta-only, no backend) because there is no profile the broker could
+copy; it never starts the engine another way. The shipped examples are
+`camoufox-native` (mcp-camoufox owns its profile and lease) and `kameleo` (CDP
+attach). `ignoredSettings` is a separate, additive fact: an engine can ignore one
+plugin setting without opting out of the profile model, and vice versa. The rule
+is manifest-driven; no engine id appears in `broker.mjs`.
 
 ## Engine profile lock (`profileLock`)
 
