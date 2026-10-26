@@ -555,15 +555,19 @@ describe('previous trees', () => {
     expect(profile.previousTreeName('D:/data/profiles/default', { now, suffix: 1 })).toBe(
       'default.previous-20261026-153005-2',
     );
+    // The sibling lives in the base's parent directory, resolved the same way on
+    // every platform (the base string itself is only data here).
+    const aliceBase = path.resolve('D:/data/profiles/cloak/alice');
     expect(profile.previousTreeDir('D:/data/profiles/cloak/alice', { now })).toBe(
-      path.join('D:/data/profiles/cloak', 'alice.previous-20261026-153005'),
+      path.join(path.dirname(aliceBase), 'alice.previous-20261026-153005'),
     );
+    const defaultParent = path.dirname(path.resolve('D:/data/profiles/default'));
     expect(
       profile.selectPreviousTreeDir('D:/data/profiles/default', {
         now,
         exists: (candidate) => candidate.endsWith('20261026-153005'),
       }),
-    ).toBe(path.join('D:/data/profiles', 'default.previous-20261026-153005-2'));
+    ).toBe(path.join(defaultParent, 'default.previous-20261026-153005-2'));
     expect(profile.selectPreviousTreeDir('D:/data/profiles/default', { now, exists: () => true })).toBeNull();
   });
 
