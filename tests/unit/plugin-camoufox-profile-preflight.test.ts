@@ -176,8 +176,19 @@ const CAPABILITIES_KEYS_293 = [
 // 2.10.0 appends the default-profile pointer facts last: the name, its source, the
 // pointer file, and (only for a broken pointer) the reason. These synthetic
 // engines have no pointer file, so profileDefaultError is absent here.
+// 2.14.0 appends the six device-identity keys after the profile block for every
+// engine; these synthetic engines cannot pin, so the note is always present.
+const IDENTITY_KEYS_2140 = [
+  'identityMode',
+  'identityApplies',
+  'identitySource',
+  'identityFile',
+  'identityCreatedAt',
+  'identityNote',
+];
 const CAPABILITIES_KEYS_295 = [
   ...CAPABILITIES_KEYS_293,
+  ...IDENTITY_KEYS_2140,
   'serverCwd',
   'outputDir',
   'clientRoots',
@@ -217,6 +228,7 @@ const STATUS_KEYS_293 = [
   'profileApplies',
   'profileFallback',
   'profileLock',
+  ...IDENTITY_KEYS_2140,
 ];
 
 // 2.11.1 declares the Chromium lockfile for cloak and playwright, so those two

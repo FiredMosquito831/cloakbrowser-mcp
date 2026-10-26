@@ -499,8 +499,15 @@ describe('browser_capabilities artifact diagnostics', () => {
     // 2.10.1 changes only the *value* of outputDir when output_dir is empty, so
     // that key is compared separately below against the new policy. 2.11.1 adds
     // the additive `engineProfileLock` key right after `profileLock` for the
-    // Chromium engines, which now declare their own lock file.
+    // Chromium engines, which now declare their own lock file. 2.14.0 adds the
+    // six device-identity keys after the profile block for every engine.
     const newKeys = [
+      'identityMode',
+      'identityApplies',
+      'identitySource',
+      'identityFile',
+      'identityCreatedAt',
+      'identityNote',
       'serverCwd',
       'outputDir',
       'clientRoots',

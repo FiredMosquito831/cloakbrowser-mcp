@@ -671,6 +671,265 @@ if (copyMode && engineError === null && profileApplies) {
   copySession = prepareCopySession();
 }
 
+// --- device identity (2.14.0) ----------------------------------------------
+// The camouflage identity of a persistent Camoufox profile. Camoufox draws a new
+// fingerprint on every launch unless the caller pins one, and its own code names
+// the changing-fonts-under-identical-cookies pattern as a spoof tell
+// (daijro/camoufox#442, #765, #378). The entry point (camoufox_entry.py) owns the
+// file and the generated config because only it runs inside the engine venv; the
+// broker reads the same file for the meta-tools and the initialize sentence.
+// The setting is inert for every other engine: cloak pins its own Chromium seed,
+// playwright and the native contract have no identity input, and the attach
+// engine owns its own profiles. The manifests are deliberately not edited — each
+// one feeds its engine's venv marker — so the inertness is reported from here and
+// documented in the READMEs.
+const IDENTITY_ENGINE_ID = 'camoufox';
+const IDENTITY_MODE_DEFAULT = 'profile';
+const IDENTITY_MODES = Object.freeze(['profile', 'random']);
+const IDENTITY_FILE_NAME = '.camoufox-identity.json';
+const IDENTITY_CONFIG_ENV_NAMES = ['CAMOUFOX_MCP_CONFIG', 'PLAYWRIGHT_MCP_CONFIG'];
+
+function resolveIdentityMode(value) {
+  const raw = typeof value === 'string' ? value : '';
+  const trimmed = raw.trim();
+  if (trimmed === '' || trimmed.includes('${')) {
+    return {
+      mode: IDENTITY_MODE_DEFAULT,
+      placeholder: trimmed.includes('${') ? trimmed : null,
+      ignored: null,
+    };
+  }
+  const folded = trimmed.toLowerCase();
+  if (IDENTITY_MODES.includes(folded)) {
+    return { mode: folded, placeholder: null, ignored: null };
+  }
+  return { mode: IDENTITY_MODE_DEFAULT, placeholder: null, ignored: trimmed };
+}
+
+const identityModeResolution = resolveIdentityMode(process.env.STEALTH_IDENTITY_MODE);
+if (identityModeResolution.placeholder !== null) {
+  log(`ignoring unsubstituted identity-mode placeholder: ${identityModeResolution.placeholder}`);
+}
+if (identityModeResolution.ignored !== null) {
+  log(`ignoring unknown identity mode: ${identityModeResolution.ignored}`);
+}
+
+// The profile directory the identity file lives in for this start: the same one
+// the engine runs on, including the copy-mode session tree and a workspace
+// fallback. Null when there is no profile (isolated, an engine that owns its
+// own, or a failed resolution).
+function identityProfileDirForStart() {
+  if (!profileApplies || profileResolution.profileSource === 'isolated') {
+    return null;
+  }
+  if (copyMode) {
+    return copySession === null || copySession === undefined ? null : copySession.sessionDir;
+  }
+  return effectiveProfileDir(profileResolution);
+}
+
+// A user's own wrapper config. The entry merges our identity into a plugin-data
+// copy when the file is a readable JSON object and leaves it untouched (today's
+// behaviour) when it is INI or unreadable; the meta-tools must say the same, so
+// they read the same variable and apply the same shape test.
+function userIdentityConfigPath() {
+  for (const name of IDENTITY_CONFIG_ENV_NAMES) {
+    const value = process.env[name];
+    if (typeof value === 'string' && value.trim() !== '') {
+      return path.resolve(value.trim());
+    }
+  }
+  return null;
+}
+
+function usableIdentityConfig(file) {
+  let text;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch {
+    return false;
+  }
+  let config;
+  try {
+    config = JSON.parse(text.replace(/^﻿/u, ''));
+  } catch {
+    return false;
+  }
+  if (config === null || typeof config !== 'object' || Array.isArray(config)) {
+    return false;
+  }
+  const browser = config.browser;
+  // null is "absent" for the entry too, so it is usable and gets filled in.
+  if (browser !== undefined && browser !== null && (typeof browser !== 'object' || Array.isArray(browser))) {
+    return false;
+  }
+  const options = browser === undefined || browser === null ? undefined : browser.camoufoxOptions;
+  return (
+    options === undefined || options === null || (typeof options === 'object' && !Array.isArray(options))
+  );
+}
+
+// The minimum stored shape the entry also requires. A file that parses but has no
+// usable fingerprint is corrupt and is regenerated on the next browser start.
+function validStoredIdentity(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const fingerprint = value.fingerprint;
+  const navigator = fingerprint?.navigator;
+  const screen = fingerprint?.screen;
+  if (navigator === null || typeof navigator !== 'object' || screen === null || typeof screen !== 'object') {
+    return false;
+  }
+  return (
+    typeof navigator.userAgent === 'string' &&
+    navigator.userAgent.trim() !== '' &&
+    Number.isFinite(screen.width) &&
+    screen.width > 0 &&
+    Number.isFinite(screen.height) &&
+    screen.height > 0
+  );
+}
+
+function readStoredIdentity(file) {
+  let text;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch (error) {
+    return { state: error?.code === 'ENOENT' ? 'missing' : 'corrupt', createdAt: null, regeneratedAt: null };
+  }
+  let data;
+  try {
+    data = JSON.parse(text.replace(/^﻿/u, ''));
+  } catch {
+    return { state: 'corrupt', createdAt: null, regeneratedAt: null };
+  }
+  if (!validStoredIdentity(data)) {
+    return { state: 'corrupt', createdAt: null, regeneratedAt: null };
+  }
+  const createdAt =
+    typeof data.createdAt === 'string' && data.createdAt.trim() !== '' ? data.createdAt : null;
+  const regeneratedAt =
+    typeof data.regeneratedAt === 'string' && data.regeneratedAt.trim() !== '' ? data.regeneratedAt : null;
+  return { state: 'present', createdAt, regeneratedAt };
+}
+
+const IDENTITY_RANDOM_NOTE =
+  'Device identity: identity_mode is "random", so each browser start draws a new one.';
+const IDENTITY_ISOLATED_NOTE =
+  'Device identity: this isolated start has no profile and draws a new one each time.';
+const IDENTITY_NATIVE_NOTE =
+  'Device identity: this native engine (mcp-camoufox 0.4.5) has no fingerprint input, so each browser start draws a new one; identity_mode has no effect.';
+const IDENTITY_NOT_APPLICABLE_NOTE =
+  'Device identity: identity_mode applies only to the camoufox engine; this engine has no generated identity file, so the setting has no effect.';
+
+// The identity facts for this start, computed once. The created-at value and the
+// corrupt/regenerated note are read fresh by identityReport(), because the entry
+// creates or regenerates the file when the backend starts.
+function identityFacts() {
+  const mode = identityModeResolution.mode;
+  if (native) {
+    return { mode, applies: false, source: 'native-unavailable', file: null, note: IDENTITY_NATIVE_NOTE };
+  }
+  if (engine === null || engine.id !== IDENTITY_ENGINE_ID) {
+    return { mode, applies: false, source: 'not-applicable', file: null, note: IDENTITY_NOT_APPLICABLE_NOTE };
+  }
+  if (profileResolution.profileSource === 'isolated') {
+    return { mode, applies: true, source: 'isolated', file: null, note: IDENTITY_ISOLATED_NOTE };
+  }
+  if (mode === 'random') {
+    return { mode, applies: true, source: 'random', file: null, note: IDENTITY_RANDOM_NOTE };
+  }
+  if (copyMode && (copySession === null || copySession === undefined)) {
+    return {
+      mode,
+      applies: true,
+      source: 'random',
+      file: null,
+      note: 'Device identity: no copy session started, so this start has no identity file.',
+    };
+  }
+  const theirs = userIdentityConfigPath();
+  if (theirs !== null && !usableIdentityConfig(theirs)) {
+    return {
+      mode,
+      applies: true,
+      source: 'random',
+      file: null,
+      note:
+        `Device identity: the config file ${theirs} is INI or unreadable, so it is left untouched and ` +
+        'identity_mode is not applied on this start.',
+    };
+  }
+  const dir = identityProfileDirForStart();
+  if (dir === null) {
+    return {
+      mode,
+      applies: true,
+      source: 'random',
+      file: null,
+      note: 'Device identity: no profile directory was resolved, so this start draws a new one.',
+    };
+  }
+  return {
+    mode,
+    applies: true,
+    source: 'profile-file',
+    file: path.join(dir, IDENTITY_FILE_NAME),
+    note: null,
+  };
+}
+
+const identityState = identityFacts();
+
+// The additive payload keys every engine gains. identityFile and
+// identityCreatedAt are null unless a profile file is actually used, and
+// identityNote appears only when there is something honest to say (inert engine,
+// random mode, isolation, or a corrupt/regenerated file).
+function identityReport() {
+  const report = {
+    identityMode: state.identity.mode,
+    identityApplies: state.identity.applies,
+    identitySource: state.identity.source,
+    identityFile: state.identity.file,
+    identityCreatedAt: null,
+  };
+  let note = state.identity.note;
+  if (state.identity.file !== null) {
+    const stored = readStoredIdentity(state.identity.file);
+    if (stored.state === 'present') {
+      report.identityCreatedAt = stored.createdAt;
+      if (stored.regeneratedAt !== null) {
+        note = `Device identity: the identity file was corrupt and was regenerated at ${stored.regeneratedAt}.`;
+      }
+    } else if (stored.state === 'corrupt') {
+      note = `Device identity: the identity file ${state.identity.file} is unreadable, so the next browser start removes it and draws a new identity.`;
+    }
+  }
+  return note === null ? report : { ...report, identityNote: note };
+}
+
+// One sentence for initialize.instructions, only for the engine that can pin, so
+// every other engine's handshake text stays byte-identical.
+function identitySentence() {
+  if (state.identity.applies !== true) {
+    return '';
+  }
+  if (state.identity.source === 'isolated') {
+    return IDENTITY_ISOLATED_NOTE;
+  }
+  if (state.identity.mode === 'random') {
+    return IDENTITY_RANDOM_NOTE;
+  }
+  if (state.identity.file === null) {
+    return state.identity.note ?? '';
+  }
+  return (
+    `Device identity: this profile keeps one device identity across launches (identity_mode "profile", file ` +
+    `${state.identity.file}); delete that file to draw a new one on the next start.`
+  );
+}
+
 const runtimeHint = runtimeErrorHint(engine, process.env);
 const profileSelection = resolveToolProfile(process.env.STEALTH_TOOL_PROFILE, engine, profiles);
 
@@ -901,6 +1160,9 @@ const state = {
     // reported whether or not it supplied this start's profile.
     pointer: profilePointer,
   },
+  // Device identity (2.14.0): the resolved mode and the file this start would
+  // use. The created-at value and corruption notes are read by identityReport().
+  identity: identityState,
   proxy: {
     source: proxyResolution.source,
     configured: proxyResolution.configured,
@@ -1684,6 +1946,12 @@ function capabilitiesPayload(clientRoots) {
             : PROFILE_ISOLATED_NATIVE_NOTE,
         }
       : {}),
+    // Device identity (2.14.0), additive. identitySource is profile-file,
+    // random, isolated or native-unavailable (or not-applicable on an engine
+    // that cannot pin); identityFile and identityCreatedAt describe the stored
+    // file when one is used, and identityNote explains an inert engine, the
+    // random and isolated modes, or a corrupt/regenerated file.
+    ...identityReport(),
     // Artifact diagnostics, additive and last, so every key above keeps its
     // position and value. serverCwd is the directory both allowlist values fall
     // back to; outputDir is the effective artifact directory (null for an engine
@@ -1814,6 +2082,9 @@ function statusPayload() {
               }),
         }
       : {}),
+    // Device identity (2.14.0), additive and the same values browser_capabilities
+    // reports, so a status read alone shows which identity this start uses.
+    ...identityReport(),
   };
 }
 
@@ -2674,6 +2945,7 @@ function handleBackendMessage(message, rawLine) {
       // previous tree is retained.
       state.profile.copy === null || state.profile.copy === undefined ? '' : (copyReportNote() ?? ''),
       state.profile.isolated && state.profile.appliesToEngine ? PROFILE_ISOLATED_NOTE : '',
+      identitySentence(),
       artifactDirectorySentence(),
     ];
     message.result = {
