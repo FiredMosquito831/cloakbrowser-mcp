@@ -131,7 +131,7 @@ class Cases:
             assert first['os'] is not None
             assert first['fingerprint']['navigator']['userAgent'].endswith('146.one) Gecko/20100101 Firefox/146.0')
             assert 'regeneratedAt' not in first
-            assert calls == ['windows']
+            assert calls == [self.entry.host_os()]
             assert env['CAMOUFOX_MCP_CONFIG'] == self.entry.launch_config_path(profile, env)
             config = json.loads(pathlib.Path(env['CAMOUFOX_MCP_CONFIG']).read_text(encoding='utf-8'))
             assert config['browser']['camoufoxOptions']['fingerprint'] == first['fingerprint']
