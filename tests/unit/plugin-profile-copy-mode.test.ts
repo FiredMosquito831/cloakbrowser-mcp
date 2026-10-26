@@ -453,13 +453,11 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<bool
   return predicate();
 }
 
+// A PID no process can have on any supported platform (see the copy suite): a
+// pid from an exited child can linger as a kernel process object on hosted
+// Windows runners, which would make a "stale" fixture flaky.
 function deadPid(): number {
-  const result = spawnSync(process.execPath, ['--version'], { windowsHide: true });
-  const pid = result.pid;
-  if (pid === undefined) {
-    throw new Error('could not obtain an exited pid');
-  }
-  return pid;
+  return 2_147_483_647;
 }
 
 // Hold a file like the browser holds its lock. Chromium's lockfile is shared for
