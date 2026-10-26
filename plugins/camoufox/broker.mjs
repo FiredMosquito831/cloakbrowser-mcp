@@ -574,6 +574,20 @@ function prepareCopySession() {
     log(engineError);
     return null;
   }
+  // The session copy lives under profiles/<engine>/.sessions. If the base
+  // contains that directory (for example profile_dir pointing at the engine's
+  // own profile folder), a whole-tree rename would move the session copy along
+  // with the base, so copy-keep refuses before it takes a lock or copies
+  // anything. "copy" is unaffected: it never renames the base.
+  const sessionDir = sessionCopyDir(selected.id, PLUGIN_DATA_DIR, baseDir);
+  if (copyKeepMode && isPathInsideRoot(sessionDir, baseDir)) {
+    engineError =
+      `profile_isolation "copy-keep" cannot replace the base profile ${baseDir} because it contains ` +
+      `this session's copy directory ${sessionDir}. Set "Profile directory" (profile_dir) to a profile ` +
+      "folder, not to the folder that holds the engine's profiles. The backend was not started.";
+    log(engineError);
+    return null;
+  }
   let baseCreated = false;
   try {
     if (!existsSync(baseDir)) {
@@ -597,7 +611,6 @@ function prepareCopySession() {
     log(engineError);
     return null;
   }
-  const sessionDir = sessionCopyDir(selected.id, PLUGIN_DATA_DIR, baseDir);
   const engineLockFile =
     engine !== null && engine.profileLock !== undefined && typeof engine.profileLock.file === 'string'
       ? engine.profileLock.file

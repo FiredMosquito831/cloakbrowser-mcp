@@ -74,6 +74,10 @@ interface CopyKeepModule {
     now?: Date;
     exists?: (candidate: string) => boolean;
     rename?: (from: string, to: string) => void;
+    retryMs?: number;
+    pollMs?: number;
+    sleep?: (ms: number) => void;
+    clock?: () => number;
   }): {
     ok: boolean;
     baseDir: string;
@@ -81,6 +85,7 @@ interface CopyKeepModule {
     previousDir: string | null;
     retainedPreviousDir?: string;
     restored: boolean;
+    retriedMs: number;
     error: string | null;
   };
   sessionCopyHasLiveLock(
@@ -633,6 +638,7 @@ describe('whole-tree swap', () => {
       sessionDir: path.resolve(session),
       previousDir: path.join(path.dirname(base), 'alice.previous-20261026-153005'),
       restored: false,
+      retriedMs: 0,
       error: null,
     });
     expect(existsSync(session)).toBe(false);
@@ -724,6 +730,74 @@ describe('whole-tree swap', () => {
       profile.swapSessionCopyIntoBase({ baseDir: base, sessionDir: path.join(session, 'nope'), now }).error,
     ).toContain('disappeared before the swap');
     expect(profile.swapSessionCopyIntoBase({ baseDir: base, sessionDir: base, now }).ok).toBe(false);
+    // A session copy inside the base would move with it: refused.
+    const inside = profile.swapSessionCopyIntoBase({
+      baseDir: base,
+      sessionDir: path.join(base, 'inner'),
+      now,
+    });
+    expect(inside.ok).toBe(false);
+    expect(inside.error).toContain('inside the base');
+  });
+
+  it('retries a transiently refused rename within the bounded window', () => {
+    const { base, session, now } = fixture();
+    let fakeNow = 0;
+    let attempts = 0;
+    // No retryMs override: the production default window applies.
+    const result = profile.swapSessionCopyIntoBase({
+      baseDir: base,
+      sessionDir: session,
+      now,
+      pollMs: 10,
+      sleep: (ms) => {
+        fakeNow += ms;
+      },
+      clock: () => fakeNow,
+      rename: (from, to) => {
+        attempts += 1;
+        // Windows refuses a directory rename while a dying browser still holds a
+        // handle: EPERM for the first two attempts, then the handle is gone.
+        if (attempts <= 2) {
+          const error = new Error('EPERM: operation not permitted, rename') as NodeJS.ErrnoException;
+          error.code = 'EPERM';
+          throw error;
+        }
+        renameSync(from, to);
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.retriedMs).toBe(20);
+    expect(existsSync(session)).toBe(false);
+    expect(readFileSync(path.join(base, 'new.txt'), 'utf8')).toBe('new-session\n');
+  });
+
+  it('stops retrying a refused rename at the bound and keeps both trees', () => {
+    const { base, session, now } = fixture();
+    let fakeNow = 0;
+    const baseHashBefore = hashTree(base);
+    const result = profile.swapSessionCopyIntoBase({
+      baseDir: base,
+      sessionDir: session,
+      now,
+      retryMs: 50,
+      pollMs: 10,
+      sleep: (ms) => {
+        fakeNow += ms;
+      },
+      clock: () => fakeNow,
+      rename: () => {
+        const error = new Error('EPERM: operation not permitted, rename') as NodeJS.ErrnoException;
+        error.code = 'EPERM';
+        throw error;
+      },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('after retrying the rename for 50 ms');
+    expect(result.error).toContain(path.resolve(base));
+    expect(result.error).toContain(path.resolve(session));
+    expect(hashTree(base)).toBe(baseHashBefore);
+    expect(existsSync(session)).toBe(true);
   });
 
   it('uses the next free previous-tree name when one already exists', () => {
@@ -924,6 +998,21 @@ describe('broker copy-keep mode', () => {
     await allowed.close();
     expect(await waitFor(() => !existsSync(profile.profileLockPath(outside)))).toBe(true);
     expect(hashTree(outside)).toBe(outsideHash);
+  });
+
+  it('refuses a base that contains the session copy root', async () => {
+    const dataDir = tempRoot('keep-broker-engine-root-');
+    createRuntime(dataDir);
+    const engineFolder = path.join(dataDir, 'profiles', 'cloak');
+    const session = startBroker({ dataDir, isolation: 'copy-keep', profileDir: engineFolder });
+    await initialize(session);
+    const caps = await capabilities(session);
+    const error = engineErrorText(caps);
+    expect(error).toContain('contains this session');
+    expect(error).toContain('The backend was not started.');
+    expect(existsSync(path.join(engineFolder, '.sessions'))).toBe(false);
+    expect(existsSync(path.join(engineFolder, '.cloakbrowser-mcp-profile.lock'))).toBe(false);
+    await session.close();
   });
 
   it('refuses copy-keep on engines that own their profile', async () => {

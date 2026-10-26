@@ -778,28 +778,83 @@ function samePath(left, right) {
 //   2. sessionCopy -> base
 // If the second rename fails, the base is renamed back from the previous tree and
 // the session copy is kept, so neither tree is lost. `exists` and `rename` are
-// injectable for tests.
+// injectable for tests, as are `retryMs`, `pollMs` and `sleep`: Windows can refuse
+// a directory rename transiently (EPERM/EBUSY) while a dying browser, an indexer
+// or antivirus still holds a handle inside a tree, so both renames are retried
+// within one bounded window — never forced, never longer than the window.
 //
-// Returns { ok, baseDir, sessionDir, previousDir, restored, error }:
+// Returns { ok, baseDir, sessionDir, previousDir, restored, retriedMs, error }:
 //   ok            both renames succeeded; previousDir is the retained tree
 //   restorable    false when a failed swap could not restore the base; then
 //                 previousDir names the retained tree that holds it
 //   error         the loud failure sentence, naming both paths
+export const SWAP_RENAME_RETRY_MS = 3000;
+const SWAP_RETRY_CODES = new Set(['EPERM', 'EBUSY', 'EACCES', 'ENOTEMPTY', 'EEXIST']);
+
 export function swapSessionCopyIntoBase({
   baseDir,
   sessionDir,
   now = new Date(),
   exists = existsSync,
   rename = renameSync,
+  retryMs = SWAP_RENAME_RETRY_MS,
+  pollMs = COPY_KEEP_LOCK_POLL_MS,
+  sleep = null,
+  clock = () => Date.now(),
 } = {}) {
   const resolvedBase = path.resolve(typeof baseDir === 'string' ? baseDir : '');
   const resolvedSession = path.resolve(typeof sessionDir === 'string' ? sessionDir : '');
-  const base = { baseDir: resolvedBase, sessionDir: resolvedSession, previousDir: null, restored: false };
+  const base = {
+    baseDir: resolvedBase,
+    sessionDir: resolvedSession,
+    previousDir: null,
+    restored: false,
+    retriedMs: 0,
+  };
+  const wait = (ms) => {
+    if (typeof sleep === 'function') {
+      sleep(ms);
+      return;
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  };
+  // Retry a rename only for the transient Windows refusals, and only inside one
+  // window shared by both renames. A test-injected plain Error is not retried.
+  let retriedMs = 0;
+  const deadline = clock() + (Number.isFinite(retryMs) && retryMs > 0 ? retryMs : 0);
+  const renameWithRetry = (from, to) => {
+    for (;;) {
+      try {
+        rename(from, to);
+        return null;
+      } catch (error) {
+        const retryable = SWAP_RETRY_CODES.has(error?.code);
+        const remaining = deadline - clock();
+        if (!retryable || remaining <= 0) {
+          return error;
+        }
+        const pause = Math.min(pollMs, remaining);
+        wait(pause);
+        retriedMs += pause;
+      }
+    }
+  };
   if (resolvedBase === resolvedSession) {
     return {
       ...base,
       ok: false,
       error: `The base ${resolvedBase} and the session copy are the same directory; nothing was swapped.`,
+    };
+  }
+  if (isPathInsideRoot(resolvedSession, resolvedBase)) {
+    // Renaming the base would move the session copy with it. A base that holds
+    // the session root is never a profile folder; nothing is renamed.
+    return {
+      ...base,
+      ok: false,
+      error:
+        `The session copy ${resolvedSession} is inside the base ${resolvedBase}, so a swap would move ` +
+        'both trees at once; nothing was swapped.',
     };
   }
   if (!exists(resolvedBase)) {
@@ -830,22 +885,22 @@ export function swapSessionCopyIntoBase({
         `the base profile and the session copy ${resolvedSession} were both kept.`,
     };
   }
-  try {
-    rename(resolvedBase, previousDir);
-  } catch (error) {
+  const retryText = () => (retriedMs > 0 ? ` (after retrying the rename for ${retriedMs} ms)` : '');
+  const firstError = renameWithRetry(resolvedBase, previousDir);
+  if (firstError !== null) {
     return {
       ...base,
       ok: false,
       previousDir: null,
       restored: false,
+      retriedMs,
       error:
-        `Cannot move the base profile ${resolvedBase} to ${previousDir}: ${error.message} ` +
-        `Nothing was swapped; the session copy ${resolvedSession} was kept.`,
+        `Cannot move the base profile ${resolvedBase} to ${previousDir}: ${firstError.message}` +
+        `${retryText()}. Nothing was swapped; the session copy ${resolvedSession} was kept.`,
     };
   }
-  try {
-    rename(resolvedSession, resolvedBase);
-  } catch (error) {
+  const secondError = renameWithRetry(resolvedSession, resolvedBase);
+  if (secondError !== null) {
     let restored = false;
     let restoreError = null;
     try {
@@ -864,9 +919,10 @@ export function swapSessionCopyIntoBase({
       previousDir: restored ? null : previousDir,
       retainedPreviousDir: previousDir,
       restored,
+      retriedMs,
       error:
-        `Cannot move the session copy ${resolvedSession} into ${resolvedBase}: ${error.message} ` +
-        `${restoreText} The session copy was kept.`,
+        `Cannot move the session copy ${resolvedSession} into ${resolvedBase}: ${secondError.message}` +
+        `${retryText()}. ${restoreText} The session copy was kept.`,
     };
   }
   return {
@@ -875,6 +931,7 @@ export function swapSessionCopyIntoBase({
     sessionDir: resolvedSession,
     previousDir,
     restored: false,
+    retriedMs,
     error: null,
   };
 }
