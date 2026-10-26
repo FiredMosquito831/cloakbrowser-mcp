@@ -369,6 +369,11 @@ export function profileCopyNote(baseDir, sessionDir) {
 // dot-directory the profile inventory deliberately skips: a session copy is a
 // working directory, never a profile a user can select.
 export const SESSION_ROOT_DIRNAME = '.sessions';
+// The broker writes this marker inside each session copy before the engine
+// starts, so an explicit prune can never remove a copy whose broker is still
+// copying or starting the backend (the bridge lock appears only once the
+// backend runs). It is not part of the profile and is removed with the tree.
+export const SESSION_OWNER_FILENAME = '.session-owner.json';
 // <baseName>-<YYYYMMDD-HHMMSS>-<pid>. The stamp is local time; the pid is the
 // broker that created the copy, so a leftover copy can be attributed and a
 // live one proven before pruning.
@@ -436,11 +441,40 @@ export function parseSessionCopyName(name) {
   return { name, baseName: match[1], startedAtLocal: stamp, pid };
 }
 
+// The broker's own marker inside a session copy: { pid, createdAt, baseDir }.
+// Missing, unreadable or malformed markers are ignored (the locks below remain
+// the proof); a valid marker naming a live process marks the copy active even
+// before the engine has written its own locks.
+export function readSessionOwner(copyDir) {
+  const file = path.join(path.resolve(typeof copyDir === 'string' ? copyDir : ''), SESSION_OWNER_FILENAME);
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+  if (!isPlainObject(parsed)) {
+    return null;
+  }
+  const pid = parsed.pid;
+  if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0) {
+    return null;
+  }
+  return {
+    pid,
+    createdAt:
+      typeof parsed.createdAt === 'string' && parsed.createdAt.trim() !== ''
+        ? parsed.createdAt.trim().slice(0, 64)
+        : null,
+  };
+}
+
 // List the session copies of one engine without creating, moving or deleting
 // anything. A copy is:
 //   current   the copy this broker started (currentDir), never prunable here
-//   active    a live process still owns it: its bridge lock or the engine's own
-//             lock proves a live holder (an orphaned browser after a broker crash)
+//   active    a live process still owns it: the broker's session-owner marker,
+//             its bridge lock or the engine's own lock proves a live holder (an
+//             orphaned browser after a broker crash)
 //   leftover  no live holder; safe for the explicit prune command to remove
 // The engine lock descriptor is the manifest's profileLock (Chromium lockfile,
 // Firefox parent.lock), or null for an engine that declares none.
@@ -478,10 +512,12 @@ export function listSessionCopies(
     const engineLock =
       engineLockDescriptor === null ? null : readEngineProfileLock(copyDir, engineLockDescriptor);
     const engineLive = engineLock !== null && engineLock.state === 'live';
+    const owner = readSessionOwner(copyDir);
+    const ownerLive = owner !== null && processLiveness(owner.pid) === 'live';
     const state =
       resolvedCurrent !== null && path.resolve(copyDir) === resolvedCurrent
         ? 'current'
-        : bridgeLock.state === 'live' || engineLive
+        : ownerLive || bridgeLock.state === 'live' || engineLive
           ? 'active'
           : 'leftover';
     copies.push({
@@ -491,6 +527,7 @@ export function listSessionCopies(
       startedAtLocal: parsed.startedAtLocal,
       pid: parsed.pid,
       state,
+      owner,
       bridgeLock: { state: bridgeLock.state, owner: bridgeLock.owner },
       engineLock:
         engineLock === null

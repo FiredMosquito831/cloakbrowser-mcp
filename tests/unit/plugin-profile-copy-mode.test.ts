@@ -700,6 +700,35 @@ describe('session copy names and listing', () => {
     expect(existsSync(path.join(sessionsRoot, 'not-a-session'))).toBe(true);
   });
 
+  it('keeps a copy whose owner marker names a live process, and prunes a dead one', () => {
+    const root = tempRoot('copy-owner-');
+    const sessionsRoot = path.join(root, 'profiles', 'cloak', '.sessions');
+    const live = path.join(sessionsRoot, 'default-20260101-010101-400');
+    const dead = path.join(sessionsRoot, 'default-20260101-010102-401');
+    for (const dir of [live, dead]) {
+      writeFile(path.join(dir, 'x'), 'x');
+    }
+    writeJson(path.join(live, '.session-owner.json'), {
+      pid: process.pid,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      baseDir: 'b',
+    });
+    writeJson(path.join(dead, '.session-owner.json'), {
+      pid: deadPid(),
+      createdAt: '2026-01-01T00:00:00.000Z',
+      baseDir: 'b',
+    });
+    const listed = profile.listSessionCopies('cloak', root);
+    expect(listed.copies.map((copy) => [path.basename(String(copy.path)), copy.state])).toEqual([
+      ['default-20260101-010101-400', 'active'],
+      ['default-20260101-010102-401', 'leftover'],
+    ]);
+    const pruned = profile.pruneSessionCopies('cloak', root);
+    expect(pruned.removed.map((copy) => copy.path)).toEqual([dead]);
+    expect(existsSync(live)).toBe(true);
+    expect(existsSync(dead)).toBe(false);
+  });
+
   it.skipIf(process.platform !== 'win32')('keeps a copy whose engine lock is held live', async () => {
     const root = tempRoot('copy-active-engine-');
     const sessionsRoot = path.join(root, 'profiles', 'cloak', '.sessions');

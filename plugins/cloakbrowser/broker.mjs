@@ -11,7 +11,7 @@
 // Windows rules: no detached children, stdin EOF is the shutdown signal, and the
 // backend process tree is killed with taskkill after a 300 ms grace period.
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
@@ -68,6 +68,7 @@ import {
   resolveProfileIsolation,
   selectFallbackProfile,
   sessionCopyDir,
+  SESSION_OWNER_FILENAME,
   validateAccountName,
   writeProfileDefaultPointer,
 } from './lib/profile.mjs';
@@ -587,6 +588,21 @@ function prepareCopySession() {
     `profile copy: base=${baseDir} copy=${sessionDir} files=${plan.files.length} ` +
       `bytes=${plan.bytes}${baseCreated ? ' baseCreated=true' : ''}`,
   );
+  // Mark the copy as owned by this broker before the engine starts, so an
+  // explicit --prune can never remove it in the window before the bridge writes
+  // its own lock. A failed marker write is logged and does not stop the session:
+  // the bridge lock takes over as soon as the backend starts.
+  try {
+    writeFileSync(
+      path.join(sessionDir, SESSION_OWNER_FILENAME),
+      `${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString(), baseDir }, null, 2)}\n`,
+    );
+  } catch (error) {
+    log(
+      `profile copy: cannot write the session owner marker in ${sessionDir}: ${error.message}; ` +
+        'the bridge lock protects the copy once the backend starts',
+    );
+  }
   copyBaseLockHandle = held;
   return {
     baseDir,
