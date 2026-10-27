@@ -869,8 +869,10 @@ describe('the overlay build mechanics', () => {
     const { marker, tempDir } = createFixtureOverlay(fixture);
     library.writeFileAtomic(overlays.overlayPolicyPath(tempDir), MANAGED_TEXT);
     // Replace the source file with a new inode of the same bytes.
+    const original = statSync(path.join(fixture.buildDir, 'xul.dll'));
     rmSync(path.join(fixture.buildDir, 'xul.dll'));
     writeFileSync(path.join(fixture.buildDir, 'xul.dll'), 'fake-xul-bytes');
+    utimesSync(path.join(fixture.buildDir, 'xul.dll'), original.atime, original.mtime);
     const inspection = overlays.inspectOverlay({
       target: tempDir,
       marker,
@@ -982,7 +984,7 @@ describe('the overlay build mechanics', () => {
         target: ghost,
         readMarker: () => ({ state: 'ours', marker: null, reason: null }),
       }),
-    ).toThrow(/cannot move the existing overlay aside/);
+    ).toThrow(/in use/);
   });
 
   it('prunes older overlays only when their marker is ours and keeps one previous', () => {
@@ -1047,6 +1049,10 @@ describe('the overlay build mechanics', () => {
     const fresh = path.join(root, 'build.tmp-2-abcdef');
     mkdirSync(stale);
     mkdirSync(fresh);
+    writeFileSync(
+      path.join(stale, 'overlay.json'),
+      JSON.stringify({ version: 1, engine: 'camoufox', pluginOverlayFormat: 1 }),
+    );
     const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
     utimesSync(stale, old, old);
     const result = overlays.cleanStaleTemps({ pluginDataDir: fixture.pluginData });
@@ -1897,10 +1903,10 @@ describe('the broker report', () => {
       expect(report(capabilities), `${engine}`).toEqual({
         passwordManagerEnabled: false,
         passwordManagerApplies: false,
-        passwordManagerSource: engine === 'camoufox-native' ? 'native-unavailable' : 'not-applicable',
+        passwordManagerSource: engine === 'camoufox-native' ? 'native-unavailable' : 'default',
         passwordManagerPolicyFile: null,
-        passwordManagerOverlay: null,
-        passwordManagerOverlayMode: null,
+        passwordManagerOverlay: undefined,
+        passwordManagerOverlayMode: undefined,
         passwordManagerStore: null,
       });
       expect(String(capabilities.passwordManagerNote), `${engine}`).toContain(

@@ -21,12 +21,14 @@
 
 import { createHash } from 'node:crypto';
 import {
+  closeSync,
   copyFileSync,
   cpSync,
   existsSync,
   linkSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readdirSync,
   readlinkSync,
@@ -220,7 +222,7 @@ export function readOverlayMarker(target) {
   if (marker.engine !== OVERLAY_ENGINE) {
     return { state: 'foreign', marker: null, reason: 'the marker names another engine' };
   }
-  if (!Number.isInteger(marker.version) || marker.version < 1) {
+  if (marker.version !== OVERLAY_MARKER_VERSION) {
     return { state: 'foreign', marker: null, reason: 'the marker version is not recognised' };
   }
   if (!Number.isInteger(marker.pluginOverlayFormat) || marker.pluginOverlayFormat < 1) {
@@ -261,7 +263,7 @@ export function planOverlay(sourceDir) {
       );
     }
     if (entry.name === OVERLAY_DISTRIBUTION_DIR) {
-      if (!entry.isDirectory() && !entry.isSymbolicLink()) {
+      if (!entry.isDirectory() || entry.isSymbolicLink()) {
         throw new OverlayError(
           'source',
           'the Camoufox build has a distribution entry that is not a directory',
@@ -301,8 +303,8 @@ export function planOverlay(sourceDir) {
 
 function ensureCopyBudget(remainingBytes, directory, freeBytes, marginBytes) {
   const free = freeBytes(directory);
-  if (free === null || free === undefined) {
-    return;
+  if (!Number.isFinite(free) || free < 0) {
+    throw new OverlayError('space', 'free space cannot be determined for the overlay copy');
   }
   if (free < remainingBytes + marginBytes) {
     throw new OverlayError(
@@ -456,7 +458,36 @@ export function inspectOverlay(options) {
   if (!existsSync(overlayExecutablePath(target))) {
     return { ok: false, reason: 'the overlay has no camoufox.exe' };
   }
+  if (
+    marker.engine !== OVERLAY_ENGINE ||
+    marker.sourcePolicySha256 !== sourcePolicyHash ||
+    marker.managedPolicySha256 !== managedPolicyHash ||
+    marker.probePolicySha256 !== probePolicyHash ||
+    !sameOverlayPath(marker.sourceExe, path.join(sourceDir, 'camoufox.exe')) ||
+    !['hardlink', 'copy'].includes(marker.mode) ||
+    !isRealDirectory(path.join(target, 'distribution'))
+  ) {
+    return { ok: false, reason: 'the overlay policy, source or mode manifest changed' };
+  }
+  let plan;
+  try {
+    plan = planOverlay(sourceDir);
+  } catch {
+    return { ok: false, reason: 'the source build manifest cannot be read' };
+  }
   const files = Array.isArray(marker.files) ? marker.files : [];
+  const names = (entries) =>
+    entries
+      .map((entry) => entry?.name)
+      .sort()
+      .join('\n');
+  if (
+    names(files) !== names(plan.files) ||
+    !Array.isArray(marker.junctions) ||
+    names(marker.junctions) !== names(plan.directories)
+  ) {
+    return { ok: false, reason: 'the overlay file or directory manifest changed' };
+  }
   if (files.length === 0) {
     return { ok: false, reason: 'the overlay marker lists no files' };
   }
@@ -477,19 +508,24 @@ export function inspectOverlay(options) {
     if (stats.size !== file.size) {
       return { ok: false, reason: `the overlay file ${file.name} changed size` };
     }
-    if (typeof file.mtimeMs === 'number' && Math.abs(stats.mtimeMs - file.mtimeMs) > 2) {
+    if (typeof file.mtimeMs !== 'number' || Math.abs(stats.mtimeMs - file.mtimeMs) > 2) {
       return { ok: false, reason: `the overlay file ${file.name} changed` };
     }
+    let sourceStats;
+    try {
+      sourceStats = statSync(path.join(sourceDir, file.name));
+    } catch {
+      return { ok: false, reason: `the source build file ${file.name} is gone` };
+    }
+    if (sourceStats.size !== file.size || Math.abs(sourceStats.mtimeMs - file.mtimeMs) > 2) {
+      return { ok: false, reason: `the source build file ${file.name} changed` };
+    }
     if (file.link === true) {
-      let sourceStats;
-      try {
-        sourceStats = statSync(path.join(sourceDir, file.name));
-      } catch {
-        return { ok: false, reason: `the source build file ${file.name} is gone` };
-      }
       if (String(sourceStats.dev) !== String(stats.dev) || String(sourceStats.ino) !== String(stats.ino)) {
         return { ok: false, reason: `the overlay file ${file.name} no longer shares the build's file` };
       }
+    } else if (file.link !== false) {
+      return { ok: false, reason: `the overlay file ${file.name} has no link mode` };
     }
   }
   const junctions = Array.isArray(marker.junctions) ? marker.junctions : [];
@@ -513,7 +549,11 @@ export function inspectOverlay(options) {
     } catch {
       return { ok: false, reason: `the overlay directory ${junctionEntry.name} cannot be read` };
     }
-    if (!sameOverlayPath(actual, junctionEntry.target)) {
+    if (
+      !sameOverlayPath(junctionEntry.target, path.join(sourceDir, junctionEntry.name)) ||
+      !sameOverlayPath(actual, junctionEntry.target) ||
+      !existsSync(linkPath)
+    ) {
       return { ok: false, reason: `the overlay directory ${junctionEntry.name} points somewhere else` };
     }
   }
@@ -521,7 +561,82 @@ export function inspectOverlay(options) {
 }
 
 function defaultRemove(target) {
-  rmSync(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  // No retries that chmod or otherwise force a busy browser's install tree.
+  rmSync(target, { recursive: true, force: false });
+}
+
+function livePid(pid) {
+  if (!Number.isInteger(pid) || pid < 1) return true;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code !== 'ESRCH';
+  }
+}
+
+// A lease belongs to the launcher, which stays alive for the wrapper's lifetime.
+// Unknown/unreadable leases fail closed; dead PIDs do not block a later start.
+export function overlayInUse(target, pidAlive = livePid) {
+  try {
+    for (const name of readdirSync(target)) {
+      if (!/^\.session-\d+\.json$/u.test(name)) continue;
+      const lease = readJsonFile(path.join(target, name));
+      if (lease?.engine !== OVERLAY_ENGINE || pidAlive(lease?.pid)) return true;
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+export function leaseOverlay(target) {
+  writeFileAtomic(
+    path.join(target, `.session-${process.pid}.json`),
+    JSON.stringify({
+      engine: OVERLAY_ENGINE,
+      pid: process.pid,
+    }),
+  );
+}
+
+// Serialize creation/probing/off/pruning across profiles in one plugin data dir.
+// No new path on the never-enabled off path. A live owner is bounded to one probe
+// deadline; stale owner locks are reclaimed only with our marker.
+export async function lockOverlayRoot(pluginDataDir, timeoutMs = 65000) {
+  const root = overlayRoot(pluginDataDir);
+  if (existsSync(root) && !isRealDirectory(root))
+    throw new OverlayError('foreign', 'the overlay root is not a real directory');
+  const lockDir = path.join(pluginDataDir, 'config', 'camoufox');
+  mkdirSync(lockDir, { recursive: true });
+  const file = path.join(lockDir, '.overlay-operation.json');
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    try {
+      const fd = openSync(file, 'wx');
+      try {
+        writeFileSync(fd, JSON.stringify({ engine: OVERLAY_ENGINE, pid: process.pid }));
+      } finally {
+        closeSync(fd);
+      }
+      return () => {
+        try {
+          rmSync(file);
+        } catch {
+          /* leave stale ownership for the next start */
+        }
+      };
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+      const owner = readJsonFile(file);
+      if (owner?.engine === OVERLAY_ENGINE && Number.isInteger(owner.pid) && !livePid(owner.pid)) {
+        rmSync(file);
+        continue;
+      }
+      if (Date.now() >= deadline) throw new OverlayError('busy', 'another start is preparing the overlay');
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
 }
 
 // Replace `target` with `tempDir` atomically as far as Windows allows: build in a
@@ -531,7 +646,11 @@ function defaultRemove(target) {
 export function swapOverlay(options) {
   const { tempDir, target, readMarker = readOverlayMarker, rm = defaultRemove, log = () => {} } = options;
   let old = null;
-  const hadTarget = readMarker(target).state !== 'missing';
+  const targetState = readMarker(target).state;
+  if (targetState === 'foreign') throw new OverlayError('foreign', 'the existing overlay is not ours');
+  if (targetState === 'ours' && overlayInUse(target))
+    throw new OverlayError('busy', 'the existing overlay is in use');
+  const hadTarget = targetState !== 'missing';
   if (hadTarget) {
     old = `${target}.old-${process.pid}`;
     try {
@@ -593,6 +712,7 @@ export function removeOverlay(options) {
   if (state.state !== 'ours') {
     return { removed: false, reason: state.reason ?? 'the overlay is not this plugin’s' };
   }
+  if (overlayInUse(target)) return { removed: false, reason: 'the overlay is in use by another session' };
   try {
     rm(target);
     return { removed: true, reason: null };
@@ -640,6 +760,7 @@ export function pruneOverlays(options) {
   const failed = [];
   for (const candidate of candidates.slice(keepCount)) {
     try {
+      if (overlayInUse(candidate.target)) throw new OverlayError('busy', 'the overlay is in use');
       rm(candidate.target);
       removed.push(candidate.name);
     } catch (error) {
@@ -685,6 +806,7 @@ export function cleanStaleTemps(options) {
     if (stats.isSymbolicLink()) {
       continue;
     }
+    if (readOverlayMarker(target).state !== 'ours' || overlayInUse(target)) continue;
     if (now - stats.mtimeMs < olderThanMs) {
       continue;
     }

@@ -253,6 +253,7 @@ async function main() {
     build,
     python: paths.python,
     bootstrap: path.join(PLUGIN_ROOT, BOOTSTRAP),
+    lease: true,
     log,
   });
 

@@ -32,6 +32,9 @@ import {
   createOverlay,
   inspectOverlay,
   isRealDirectory,
+  leaseOverlay,
+  lockOverlayRoot,
+  overlayInUse,
   overlayExecutablePath,
   overlayPolicyPath,
   overlayRoot,
@@ -96,7 +99,7 @@ export const PASSWORD_MANAGER_NATIVE_NOTE =
 
 export const PASSWORD_MANAGER_NOT_APPLICABLE_NOTE =
   'Saved logins: password_manager applies only to the camoufox engine; this engine has no Firefox login manager ' +
-  'or Camoufox build to overlay, so the setting has no effect.';
+  'or per-user policy file, so the setting has no effect.';
 
 export const PASSWORD_MANAGER_PENDING_NOTE =
   'Saved logins: the Camoufox overlay build is prepared and verified when the Camoufox backend starts; this ' +
@@ -401,7 +404,8 @@ function recordMatchesKey(record, key) {
     record.build === key.build &&
     record.sourcePolicyHash === key.sourcePolicyHash &&
     record.managedPolicyHash === key.managedPolicyHash &&
-    record.overlayFormat === key.overlayFormat
+    record.overlayFormat === key.overlayFormat &&
+    record.overlayMarkerVersion === key.overlayMarkerVersion
   );
 }
 
@@ -494,7 +498,7 @@ function disablePasswordManager({ env, pluginDataDir, log, overlayOps }) {
 // Returns { status, note, policyFile, overlay, overlayMode, executable } where
 // `executable` is the Camoufox executable the launcher must export. It never
 // throws on a normal failure path and never stops the server from starting.
-export async function applyPasswordManager(options) {
+async function applyPasswordManagerLocked(options) {
   const {
     env,
     pluginDataDir,
@@ -741,6 +745,8 @@ export async function applyPasswordManager(options) {
     (earlier.mode === 'hardlink' || earlier.mode === 'copy');
 
   try {
+    if (!verifiedForThisKey && overlayInUse(target))
+      throw new Error('the overlay is in use and cannot be probed');
     if (!verifiedForThisKey) {
       writeFileAtomic(overlayPolicyPath(target), probeText);
       log('saved logins: verifying that Firefox reads the overlay policy (one short headless start).');
@@ -805,6 +811,7 @@ export async function applyPasswordManager(options) {
       managedPolicyHash,
       probePolicyHash,
       overlayFormat: OVERLAY_FORMAT,
+      overlayMarkerVersion: OVERLAY_MARKER_VERSION,
       overlay: target,
       policyFile,
       mode: marker.mode,
@@ -813,6 +820,7 @@ export async function applyPasswordManager(options) {
       checkedAt: timestamp(),
       note: null,
     });
+    if (options.lease === true) leaseOverlay(target);
     env[PASSWORD_MANAGER_STATE_VAR] = PASSWORD_MANAGER_STATE_OVERLAY;
     log(
       `saved logins enabled: the Camoufox overlay build ${target} (${marker.mode}) carries the build's policies ` +
@@ -868,3 +876,27 @@ export function hasFirefoxLoginStore(profileDir) {
 // directory (a junction, a file) is not a usable overlay even when the record
 // says applied.
 export { isRealDirectory, overlayPolicyPath, overlayRoot };
+
+// The operation lock also covers verification: a second start cannot launch a
+// temporary probe policy or remove an overlay while another start verifies it.
+export async function applyPasswordManager(options) {
+  const enabled = resolvePasswordManager(options.env).enabled;
+  if (!enabled && readPasswordPolicyRecord(options.pluginDataDir) === null) {
+    return applyPasswordManagerLocked(options);
+  }
+  let unlock = null;
+  try {
+    unlock = await lockOverlayRoot(options.pluginDataDir, options.lockTimeoutMs);
+    return await applyPasswordManagerLocked(options);
+  } catch (error) {
+    return blockedResult({
+      ...options,
+      status: 'blocked-by-overlay',
+      executable: options.binary,
+      log: options.log ?? (() => {}),
+      note: `Saved logins: overlay setup could not complete (${error.message}); the stock build is used.`,
+    });
+  } finally {
+    if (unlock !== null) unlock();
+  }
+}

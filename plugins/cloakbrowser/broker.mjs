@@ -1060,8 +1060,6 @@ function passwordManagerFacts() {
       passwordManagerApplies: false,
       passwordManagerSource: 'native-unavailable',
       passwordManagerPolicyFile: null,
-      passwordManagerOverlay: null,
-      passwordManagerOverlayMode: null,
       passwordManagerStore: null,
       passwordManagerNote: PASSWORD_MANAGER_NATIVE_NOTE,
     };
@@ -1070,10 +1068,8 @@ function passwordManagerFacts() {
     return {
       passwordManagerEnabled: false,
       passwordManagerApplies: false,
-      passwordManagerSource: 'not-applicable',
+      passwordManagerSource: 'default',
       passwordManagerPolicyFile: null,
-      passwordManagerOverlay: null,
-      passwordManagerOverlayMode: null,
       passwordManagerStore: null,
       passwordManagerNote: PASSWORD_MANAGER_NOT_APPLICABLE_NOTE,
     };
