@@ -98,6 +98,7 @@ interface BrokerOptions {
   dataDir: string;
   cwd?: string;
   isolation?: string;
+  onLocked?: string;
   account?: string;
   profileDir?: string;
   proxyServer?: string;
@@ -339,6 +340,7 @@ function startBroker(options: BrokerOptions): BrokerSession {
   for (const name of [
     'STEALTH_ACCOUNT',
     'STEALTH_PROFILE_ISOLATION',
+    'STEALTH_ON_LOCKED',
     'PLAYWRIGHT_MCP_USER_DATA_DIR',
     'PLAYWRIGHT_MCP_PROXY_SERVER',
     'STUB_FAIL',
@@ -347,6 +349,7 @@ function startBroker(options: BrokerOptions): BrokerSession {
   }
   if (options.account !== undefined) childEnv.STEALTH_ACCOUNT = options.account;
   if (options.isolation !== undefined) childEnv.STEALTH_PROFILE_ISOLATION = options.isolation;
+  if (options.onLocked !== undefined) childEnv.STEALTH_ON_LOCKED = options.onLocked;
   if (options.profileDir !== undefined) childEnv.PLAYWRIGHT_MCP_USER_DATA_DIR = options.profileDir;
   if (options.proxyServer !== undefined) childEnv.PLAYWRIGHT_MCP_PROXY_SERVER = options.proxyServer;
   if (options.failBackend === true) childEnv.STUB_FAIL = '1';
@@ -856,7 +859,9 @@ describe('broker profile preflight', () => {
     const dataDir = createRuntime(tempRoot('pr10-broker-locked-'));
     const lockDir = path.join(dataDir, 'profiles', 'default');
     writeLock(lockDir, process.pid, '2026-10-25T01:09:50.197Z');
-    const session = startBroker({ dataDir });
+    // on_locked=block is the 2.15 behaviour; the default since 2.16.0 is
+    // "fallback", which is asserted separately below.
+    const session = startBroker({ dataDir, onLocked: 'block' });
     const initialized = await initialize(session);
     const instructions = initialized.result?.instructions ?? '';
     expect(instructions).toContain(lockDir);
@@ -980,13 +985,19 @@ describe('broker profile preflight', () => {
     expect(String(caps.engineError)).toContain('numbered workspace fallbacks');
   });
 
-  it('keeps an account above the workspace derivation and does not fall it back', async () => {
+  it('keeps an account above the workspace derivation and does not fall it back under block', async () => {
     const dataDir = createRuntime(tempRoot('pr10-broker-account-'));
     const workspace = path.join(tempRoot('pr10-workspace-account-'), 'project');
     mkdirSync(workspace, { recursive: true });
     const accountDir = path.join(dataDir, 'profiles', 'cloak', 'alice');
     writeLock(accountDir, process.pid);
-    const session = startBroker({ dataDir, isolation: 'workspace', cwd: workspace, account: 'alice' });
+    const session = startBroker({
+      dataDir,
+      isolation: 'workspace',
+      cwd: workspace,
+      account: 'alice',
+      onLocked: 'block',
+    });
     const initialized = await initialize(session);
     expect(initialized.result?.instructions).toContain(accountDir);
     expect(await toolNames(session)).toEqual([

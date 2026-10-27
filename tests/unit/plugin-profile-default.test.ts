@@ -105,6 +105,7 @@ interface BrokerOptions {
   dataDir: string;
   cwd?: string;
   isolation?: string;
+  onLocked?: string;
   account?: string;
   profileDir?: string;
   engine?: string;
@@ -212,11 +213,17 @@ function startBroker(options: BrokerOptions): BrokerSession {
     STEALTH_ENGINE: options.engine ?? 'cloak',
     STEALTH_TOOL_PROFILE: 'full',
   };
-  for (const name of ['STEALTH_ACCOUNT', 'STEALTH_PROFILE_ISOLATION', 'PLAYWRIGHT_MCP_USER_DATA_DIR']) {
+  for (const name of [
+    'STEALTH_ACCOUNT',
+    'STEALTH_PROFILE_ISOLATION',
+    'STEALTH_ON_LOCKED',
+    'PLAYWRIGHT_MCP_USER_DATA_DIR',
+  ]) {
     delete childEnv[name];
   }
   if (options.account !== undefined) childEnv.STEALTH_ACCOUNT = options.account;
   if (options.isolation !== undefined) childEnv.STEALTH_PROFILE_ISOLATION = options.isolation;
+  if (options.onLocked !== undefined) childEnv.STEALTH_ON_LOCKED = options.onLocked;
   if (options.profileDir !== undefined) childEnv.PLAYWRIGHT_MCP_USER_DATA_DIR = options.profileDir;
   const broker = options.pluginDir === undefined ? brokerPath : path.join(options.pluginDir, 'broker.mjs');
   const child = spawn(process.execPath, [broker], {
@@ -730,7 +737,9 @@ describe('browser_profiles meta-tool', () => {
     const dataDir = createRuntime(tempRoot('pr-default-tool-locked-'));
     const lockDir = path.join(dataDir, 'profiles', 'default');
     writeLock(lockDir, process.pid);
-    const session = startBroker({ dataDir });
+    // The meta-only start is the on_locked=block behaviour (2.15); the 2.16.0
+    // default is "fallback", asserted in the on_locked suite.
+    const session = startBroker({ dataDir, onLocked: 'block' });
     const initialized = await initialize(session);
     expect(String(initialized.result?.instructions)).toContain('Only broker meta-tools are exposed');
     expect(await toolNames(session)).toEqual([

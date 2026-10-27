@@ -66,10 +66,13 @@ import {
   listSessionCopies,
   lockBlocksStart,
   planCopy,
+  PROFILE_FALLBACK_FIRST_SUFFIX,
+  PROFILE_FALLBACK_LAST_SUFFIX,
   PROFILE_ISOLATED_NATIVE_NOTE,
   PROFILE_ISOLATED_NOTE,
   PROFILE_ISOLATED_POINTER_NOTE,
   PROFILE_LOCK_FILENAME,
+  PROFILE_ON_LOCKED_ISOLATED_NOTE,
   profileCopyKeepNote,
   profileCopyNotApplicableNote,
   profileCopyNote,
@@ -79,6 +82,7 @@ import {
   profileIgnoredReason,
   profileLockFix,
   profileLockMessage,
+  profileOnLockedIsolatedReason,
   readAccountProxy,
   readEngineProfileLock,
   readProfileDefaultPointer,
@@ -86,6 +90,7 @@ import {
   readSwapRecord,
   redactSecrets,
   releaseProfileLock,
+  resolveOnLocked,
   resolveProfile,
   resolveProfileIsolation,
   selectFallbackProfile,
@@ -131,13 +136,13 @@ const META_TOOLS = [
   {
     name: 'browser_capabilities',
     description:
-      'Report the selected browser engine, its Playwright MCP contract, the active tool profile, the backend tool count, per-tool support and how to change engines. It also reports the default-profile pointer, the server working directory, the effective artifact directory and the MCP roots the client advertised, which together explain a file-access refusal. This is a local broker tool; it does not start a browser. When another session already uses the browser profile, it also reports the profile directory, the owning process and the fix.',
+      'Report the selected browser engine, its Playwright MCP contract, the active tool profile, the backend tool count, per-tool support and how to change engines. It also reports the default-profile pointer, the server working directory, the effective artifact directory and the MCP roots the client advertised, which together explain a file-access refusal. This is a local broker tool; it does not start a browser. When another session already uses the browser profile, it also reports the profile directory, the owning process and the fix, plus the on_locked policy: with "fallback" this session runs on a numbered sibling profile, and with "isolated" it runs with no profile, both reported under onLocked and profileFallback.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'browser_engine_status',
     description:
-      'Report the selected engine, backend process state, backend version when the handshake has completed, startup timing and the last error. A backend that rejected the initialize handshake but still answers tools reports `initializeRejected: true` and stays running. This is a local broker tool; it does not start a browser. When another session already uses the browser profile, it also reports the profile directory, the owning process and the fix.',
+      'Report the selected engine, backend process state, backend version when the handshake has completed, startup timing and the last error. A backend that rejected the initialize handshake but still answers tools reports `initializeRejected: true` and stays running. This is a local broker tool; it does not start a browser. When another session already uses the browser profile, it also reports the profile directory, the owning process and the fix, plus the on_locked policy: with "fallback" this session runs on a numbered sibling profile, and with "isolated" it runs with no profile, both reported under onLocked and profileFallback.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
@@ -290,6 +295,21 @@ if (profileIsolation.placeholder !== null) {
 if (profileIsolation.ignored !== null) {
   log(`ignoring unknown profile isolation: ${profileIsolation.ignored}`);
 }
+// on_locked (2.16.0). What this start does when the profile it resolved is held
+// by another process: "block" is the 2.15 behaviour (meta-only, loud), "fallback"
+// starts on the first free numbered sibling of the same profile, and "isolated"
+// starts with no profile at all. Unset, empty, a placeholder and an unknown value
+// all mean "fallback"; an unknown value is logged once and never fails a start.
+const onLockedSetting =
+  typeof process.env.STEALTH_ON_LOCKED === 'string' ? process.env.STEALTH_ON_LOCKED : '';
+const onLockedResolution = resolveOnLocked(onLockedSetting);
+if (onLockedResolution.placeholder !== null) {
+  log(`ignoring unsubstituted on-locked placeholder: ${onLockedResolution.placeholder.trim()}`);
+}
+if (onLockedResolution.ignored !== null) {
+  log(`ignoring unknown on-locked policy: ${onLockedResolution.ignored}`);
+}
+const onLocked = onLockedResolution.mode;
 // An engine that owns its profile elsewhere, or attaches to one, declares
 // profileApplies: false; the whole profile model is inert for it.
 const profileApplies = engine !== null && manifestProfileApplies(engine);
@@ -326,7 +346,21 @@ const rawAccount = typeof process.env.STEALTH_ACCOUNT === 'string' ? process.env
 if (rawAccount.includes('${')) {
   log(`ignoring unsubstituted account placeholder: ${rawAccount.trim()}`);
 }
-const profileResolution =
+const profileResolutionArgs =
+  engine === null
+    ? null
+    : {
+        account: rawAccount,
+        profileDir: process.env.PLAYWRIGHT_MCP_USER_DATA_DIR,
+        pointer: profilePointer === null ? null : profilePointer.name,
+        engineId: engine.id,
+        dataDir: PLUGIN_DATA_DIR,
+        launcherName: resolveLauncherName(engine),
+        ignoredSettings: Array.isArray(engine.ignoredSettings) ? engine.ignoredSettings : [],
+        profileApplies,
+        cwd: process.cwd(),
+      };
+let profileResolution =
   engine === null
     ? {
         profileDir: null,
@@ -337,23 +371,14 @@ const profileResolution =
         ignored: [],
         error: null,
       }
-    : resolveProfile({
-        account: rawAccount,
-        profileDir: process.env.PLAYWRIGHT_MCP_USER_DATA_DIR,
-        pointer: profilePointer === null ? null : profilePointer.name,
-        engineId: engine.id,
-        dataDir: PLUGIN_DATA_DIR,
-        launcherName: resolveLauncherName(engine),
-        ignoredSettings: Array.isArray(engine.ignoredSettings) ? engine.ignoredSettings : [],
-        profileApplies,
-        isolation: profileIsolation.mode,
-        cwd: process.cwd(),
-      });
+    : resolveProfile({ ...profileResolutionArgs, isolation: profileIsolation.mode });
 // What an isolated start ignored, in the order the resolution checked it. A
 // pointer file that exists but cannot be used has no name to pass, so the broker
-// adds it here; the report is the same shape either way.
-const profileIgnored =
-  profileResolution.profileSource === 'isolated'
+// adds it here; the report is the same shape either way. It is a function because
+// on_locked=isolated can turn this start into an isolated one during the lock
+// preflight, after the first resolution.
+function profileIgnoredForStart() {
+  return profileResolution.profileSource === 'isolated'
     ? [
         ...(profileResolution.ignored ?? []),
         ...(profilePointer !== null && profilePointer.exists === true && profilePointer.name === null
@@ -361,8 +386,6 @@ const profileIgnored =
           : []),
       ]
     : [];
-if (profileIgnored.length > 0) {
-  log(profileIgnoredReason(profileIgnored));
 }
 if (profileResolution.profileSource === 'pointer') {
   log(`using the default profile "${profilePointer.name}" from ${profilePointer.path}`);
@@ -396,37 +419,87 @@ if (copyMode && engineError === null && engine !== null && !profileApplies) {
 // start-up, so starting a backend against a profile a live process owns only
 // produces "Backend exited" and a two-tool surface. The broker reads the same
 // lock file first (never writes, moves, copies or deletes a lock or a profile).
-//   shared / account / profile_dir: a busy profile stops the spawn; the owner and
-//                                   the fix are reported instead.
-//   workspace:                      a busy derived profile moves to its first
-//                                   free numbered sibling (-2 ... -5) and the
-//                                   fallback is always reported.
-//   isolated:                       no profile exists, so no lock is read at all.
+//   on_locked=block:                a busy profile stops the spawn; the owner and
+//                                   the fix are reported instead (the 2.15 shape).
+//   on_locked=fallback:             a busy profile the plugin manages moves to its
+//                                   first free numbered sibling (-2 ... -5), whose
+//                                   bridge lock and engine lock must both be free;
+//                                   the switch is always reported.
+//   on_locked=isolated:             a busy profile the plugin manages becomes an
+//                                   isolated start: no profile, no lock, nothing
+//                                   saved, also always reported.
+//   workspace (profile_isolation):  its own numbered fallback, unchanged.
+//   profile_dir (explicit path):    always the block behaviour, whatever
+//                                   on_locked says: creating <path>-2 in a folder
+//                                   the plugin does not own would be unpredictable.
+//   isolated (profile_isolation):   no profile exists, so no lock is read at all.
 let profileLock = null;
 let profileFallback = null;
 let engineProfileLock = null;
+// True when on_locked=isolated turned this start into an isolated one. The
+// configured profile_isolation is reported unchanged; this flag reports why.
+let onLockedIsolated = false;
+// The base profile an on_locked=fallback moved this start away from, or null. It
+// is not reported: the profile .proxy file beside the base still applies (a proxy
+// is configuration, not identity) and a fresh sibling has no file of its own. The
+// workspace rule keeps reading the sibling's own file, as it always has.
+let onLockedFallbackBase = null;
 if (engineError === null && profileApplies && profileResolution.profileSource !== 'isolated') {
   const lockDir = effectiveProfileDir(profileResolution);
   if (lockDir !== null) {
     const lock = readProfileLock(lockDir);
-    if (lockBlocksStart(lock)) {
+    // An engine that declares its own lock file (Camoufox: Firefox's parent.lock)
+    // adds a second check. It is read here, once, so a live holder of either lock
+    // can trigger the on_locked policy; the reporting below is unchanged.
+    const engineOwnerLock =
+      engine !== null && engine.profileLock !== undefined
+        ? readEngineProfileLock(lockDir, engine.profileLock)
+        : null;
+    const bridgeBlocks = lockBlocksStart(lock);
+    const engineBlocks = engineOwnerLock !== null && engineLockBlocksStart(engineOwnerLock);
+    // Only a profile the plugin manages is given a sibling or an isolated start.
+    const pluginManaged = profileResolution.profileSource !== 'profile_dir';
+    // The engine lock is read from the directory this start will actually use. The
+    // workspace rule keeps its 2.15 reading (the base directory) so its bytes and
+    // outcome do not change; an on_locked fallback reads the sibling it chose.
+    let engineLockDir = lockDir;
+    if ((bridgeBlocks || engineBlocks) && onLocked === 'isolated' && pluginManaged) {
+      const blocking = bridgeBlocks ? lock : engineOwnerLock;
+      profileResolution = resolveProfile({ ...profileResolutionArgs, isolation: 'isolated' });
+      onLockedIsolated = true;
+      profileFallback = { from: lockDir, to: null, reason: profileOnLockedIsolatedReason(blocking) };
+      log(profileFallback.reason);
+    } else if (bridgeBlocks) {
       const workspaceProfile =
         profileIsolation.mode === 'workspace' && profileResolution.profileSource === 'workspace';
-      const fallbackDir = workspaceProfile
-        ? selectFallbackProfile(lockDir, (candidate) => lockBlocksStart(readProfileLock(candidate)))
-        : null;
+      const fallbackKind = workspaceProfile ? 'workspace' : 'on-locked';
+      const wantsFallback = workspaceProfile || (onLocked === 'fallback' && pluginManaged);
+      // A sibling is free only when both of its locks are free. The workspace rule
+      // keeps its original bridge-lock-only test so its outcome does not change.
+      const siblingBlocked = workspaceProfile
+        ? (candidate) => lockBlocksStart(readProfileLock(candidate))
+        : (candidate) =>
+            lockBlocksStart(readProfileLock(candidate)) ||
+            (engine !== null &&
+              engine.profileLock !== undefined &&
+              engineLockBlocksStart(readEngineProfileLock(candidate, engine.profileLock)));
+      const fallbackDir = wantsFallback ? selectFallbackProfile(lockDir, siblingBlocked) : null;
       if (fallbackDir !== null) {
         profileFallback = {
           from: lockDir,
           to: fallbackDir,
-          reason: profileFallbackReason(lock, fallbackDir),
+          reason: profileFallbackReason(lock, fallbackDir, fallbackKind),
         };
         profileResolution.profileDir = fallbackDir;
         profileLock = readProfileLock(fallbackDir);
+        if (fallbackKind !== 'workspace') {
+          engineLockDir = fallbackDir;
+          onLockedFallbackBase = lockDir;
+        }
         log(profileFallback.reason);
       } else {
         profileLock = { ...lock, fix: profileLockFix(lock) };
-        engineError = profileLockMessage(lock, { fallbackExhausted: workspaceProfile });
+        engineError = profileLockMessage(lock, { fallbackExhausted: wantsFallback, fallbackKind });
         if (copyMode) {
           // Copy mode never falls back to another profile: the base is either
           // safe to copy or the start is refused, loudly.
@@ -443,35 +516,82 @@ if (engineError === null && profileApplies && profileResolution.profileSource !=
         );
       }
     }
-    // An engine that declares its own lock file (Camoufox: Firefox's parent.lock)
-    // gets a second, additive check. The bridge's lock missed it before, and a
-    // busy Firefox profile is a 180 s hang or an exitCode=0 launch failure, so a
-    // live owner stops the spawn with the same loud, actionable start. The file is
-    // never written, moved or deleted; a stale one is reported and allowed.
-    if (engineError === null && engine !== null && engine.profileLock !== undefined) {
-      const engineOwnerLock = readEngineProfileLock(lockDir, engine.profileLock);
-      engineProfileLock = { ...engineOwnerLock, fix: engineProfileLockFix(engineOwnerLock) };
-      if (engineLockBlocksStart(engineOwnerLock)) {
-        engineError = engineProfileLockMessage(engineOwnerLock);
+    // The engine's own lock is reported on the directory this start uses. A live
+    // owner stops the spawn with the same loud, actionable start, unless
+    // on_locked=fallback can move this start to a free numbered sibling instead
+    // (only when no fallback has happened yet, so at most one switch per start).
+    // The file is never written, moved or deleted; a stale one is reported and
+    // allowed.
+    if (!onLockedIsolated && engineError === null && engine !== null && engine.profileLock !== undefined) {
+      let engineOwnerLockNow =
+        engineLockDir === lockDir && engineOwnerLock !== null
+          ? engineOwnerLock
+          : readEngineProfileLock(engineLockDir, engine.profileLock);
+      let attemptedFallback = false;
+      if (
+        engineLockBlocksStart(engineOwnerLockNow) &&
+        onLocked === 'fallback' &&
+        pluginManaged &&
+        profileFallback === null
+      ) {
+        attemptedFallback = true;
+        const siblingBlocked = (candidate) =>
+          lockBlocksStart(readProfileLock(candidate)) ||
+          engineLockBlocksStart(readEngineProfileLock(candidate, engine.profileLock));
+        const fallbackDir = selectFallbackProfile(engineLockDir, siblingBlocked);
+        if (fallbackDir !== null) {
+          profileFallback = {
+            from: engineLockDir,
+            to: fallbackDir,
+            reason: profileFallbackReason(engineOwnerLockNow, fallbackDir, 'on-locked'),
+          };
+          profileResolution.profileDir = fallbackDir;
+          profileLock = readProfileLock(fallbackDir);
+          engineOwnerLockNow = readEngineProfileLock(fallbackDir, engine.profileLock);
+          onLockedFallbackBase = engineLockDir;
+          log(profileFallback.reason);
+        }
+      }
+      engineProfileLock = { ...engineOwnerLockNow, fix: engineProfileLockFix(engineOwnerLockNow) };
+      if (engineLockBlocksStart(engineOwnerLockNow)) {
+        engineError = engineProfileLockMessage(
+          engineOwnerLockNow,
+          attemptedFallback
+            ? {
+                trailing:
+                  `The numbered sibling profiles (suffixes ${PROFILE_FALLBACK_FIRST_SUFFIX} to ` +
+                  `${PROFILE_FALLBACK_LAST_SUFFIX}) are also in use. The backend was not started.`,
+              }
+            : {},
+        );
         if (copyMode) {
           engineError += ` Profile isolation is "${copyModeLabel}", so the base profile was not copied.`;
         }
         log(engineError);
-      } else if (engineOwnerLock.state === 'stale') {
+      } else if (engineOwnerLockNow.state === 'stale') {
         log(
-          `engine profile lock ${engineOwnerLock.path} is stale (no live process holds it); ` +
+          `engine profile lock ${engineOwnerLockNow.path} is stale (no live process holds it); ` +
             'the browser replaces it',
         );
-      } else if (engineOwnerLock.state === 'unknown') {
-        log(engineOwnerLock.error);
+      } else if (engineOwnerLockNow.state === 'unknown') {
+        log(engineOwnerLockNow.error);
       }
     }
   }
+}
+const profileIgnored = profileIgnoredForStart();
+if (profileIgnored.length > 0) {
+  log(profileIgnoredReason(profileIgnored));
 }
 
 // The profile directory an optional .proxy file sits beside: an account or
 // workspace profile, or the default profile when the broker sets nothing.
 function proxyCandidate() {
+  // An on_locked fallback keeps the base profile's proxy file: a proxy is
+  // configuration, not identity, and the new sibling has no file of its own.
+  if (onLockedFallbackBase !== null) {
+    return onLockedFallbackBase;
+  }
   const source = profileResolution.profileSource;
   if (source === 'account' || source === 'workspace' || source === 'pointer') {
     return profileResolution.profileDir;
@@ -680,7 +800,10 @@ function prepareCopySession() {
     swap: copyKeepMode ? { state: 'pending', previousDir: null, restored: false, error: null } : null,
   };
 }
-if (copyMode && engineError === null && profileApplies) {
+// on_locked=isolated (2.16.0) before a copy: the busy base turned this start
+// into an isolated one, so there is nothing to copy and no profile to hold. The
+// switch is reported by profileFallback and onLocked on every surface.
+if (copyMode && engineError === null && profileApplies && !onLockedIsolated) {
   copySession = prepareCopySession();
 }
 
@@ -1335,12 +1458,16 @@ const state = {
         ? copySession.sessionDir
         : profileResolution.profileSource === 'account' ||
             profileResolution.profileSource === 'workspace' ||
-            profileResolution.profileSource === 'pointer'
+            profileResolution.profileSource === 'pointer' ||
+            // on_locked=fallback (2.16.0) can move the engine default to a numbered
+            // sibling; the broker sets that directory exactly like an account.
+            profileFallback !== null
           ? profileResolution.profileDir
           : null,
     source: profileResolution.profileSource,
-    // True only for profile_isolation=isolated on an engine that uses the
-    // broker's profile model; the spawn environment and both launchers key on it.
+    // True only for an isolated start on an engine that uses the broker's profile
+    // model (profile_isolation=isolated, or on_locked=isolated after a busy
+    // profile); the spawn environment and both launchers key on it.
     isolated: profileResolution.profileSource === 'isolated',
     // The copy-mode session (2.12.0), or null. Present only when the base was
     // locked and copied; every later report reads it additively.
@@ -1351,6 +1478,10 @@ const state = {
     error: profileResolution.error,
     isolation: profileIsolation.mode,
     isolationSource: profileIsolation.source,
+    // The resolved on_locked policy (2.16.0) and whether it turned this start into
+    // an isolated one because the resolved profile was busy.
+    onLocked,
+    onLockedIsolated,
     appliesToEngine: profileApplies,
     lock: profileLock,
     // The engine's own lock (manifest "profileLock"). Always null for an engine
@@ -2011,6 +2142,25 @@ function sessionCopiesReport() {
   };
 }
 
+// True for any start with no profile at all: the configured
+// profile_isolation=isolated, or an on_locked=isolated switch after a busy
+// profile (2.16.0). The payload branches that describe "no profile" key on this,
+// so both report the same facts about the pointer, the ignored settings and the
+// nothing-persists rule.
+function isolatedStartNow() {
+  return state.profile.isolation === 'isolated' || state.profile.onLockedIsolated === true;
+}
+
+// The one note that says what "no profile" means for this start. A configured
+// isolated start reports the pointer/native note it always has; an on_locked
+// switch says why instead, because the profile_isolation setting is unchanged.
+function profileIsolationNoteNow() {
+  if (state.profile.onLockedIsolated === true) {
+    return PROFILE_ON_LOCKED_ISOLATED_NOTE;
+  }
+  return state.profile.appliesToEngine ? PROFILE_ISOLATED_POINTER_NOTE : PROFILE_ISOLATED_NATIVE_NOTE;
+}
+
 function capabilitiesPayload(clientRoots) {
   const systemDeps = systemDependencyReport();
   const counts = state.toolsListed ? toolCounts() : null;
@@ -2111,6 +2261,9 @@ function capabilitiesPayload(clientRoots) {
     profileIsolation: state.profile.isolation,
     profileIsolationSource: state.profile.isolationSource,
     profileApplies: state.profile.appliesToEngine,
+    // on_locked (2.16.0), additive and only where it can act: an engine whose
+    // manifest declares profileApplies false keeps its exact previous payload.
+    ...(state.profile.appliesToEngine ? { onLocked: state.profile.onLocked } : {}),
     profileFallback: state.profile.fallback,
     profileLock: state.profile.lock,
     ...(state.profile.engineLock === null ? {} : { engineProfileLock: state.profile.engineLock }),
@@ -2122,7 +2275,7 @@ function capabilitiesPayload(clientRoots) {
     // profileCopySupported is false. sessionCopies lists leftover copies and
     // lastSwap the last completed clean-close swap, both only when they exist, so
     // a clean payload is unchanged.
-    ...(isCopyIsolation(state.profile.isolation)
+    ...(isCopyIsolation(state.profile.isolation) && !state.profile.onLockedIsolated
       ? {
           profileCopy: copyNow,
           profileCopySupported: state.profile.appliesToEngine,
@@ -2134,18 +2287,18 @@ function capabilitiesPayload(clientRoots) {
     // Isolated start (2.11.0), additive only in that mode so every shared and
     // workspace payload stays byte-identical. profileIgnored lists the profile
     // settings the mode made inert, with the value that was supplied; the note
-    // says what the pointer and set-default mean (nothing) for this session.
+    // says what the pointer and set-default mean (nothing) for this session. Since
+    // 2.16.0 an on_locked=isolated switch reports the same facts, with its own
+    // note because the profile_isolation setting is unchanged.
     ...(state.profile.ignored.length === 0
       ? {}
       : {
           profileIgnored: state.profile.ignored,
           profileIgnoredReason: profileIgnoredReason(state.profile.ignored),
         }),
-    ...(state.profile.isolation === 'isolated'
+    ...(isolatedStartNow()
       ? {
-          profileIsolationNote: state.profile.appliesToEngine
-            ? PROFILE_ISOLATED_POINTER_NOTE
-            : PROFILE_ISOLATED_NATIVE_NOTE,
+          profileIsolationNote: profileIsolationNoteNow(),
         }
       : {}),
     // Device identity (2.14.0), additive. identitySource is profile-file,
@@ -2260,13 +2413,15 @@ function statusPayload() {
     // Session safety, additive; every existing value above is unchanged.
     profileIsolation: state.profile.isolation,
     profileApplies: state.profile.appliesToEngine,
+    // on_locked (2.16.0), additive and only where it can act.
+    ...(state.profile.appliesToEngine ? { onLocked: state.profile.onLocked } : {}),
     profileFallback: state.profile.fallback,
     profileLock: state.profile.lock,
     ...(state.profile.engineLock === null ? {} : { engineProfileLock: state.profile.engineLock }),
     // Copy start (2.12.0) and copy-keep (2.13.0), additive only in those modes,
     // same values as browser_capabilities. profileSource is reported with it so a
     // status read alone shows where the base came from.
-    ...(isCopyIsolation(state.profile.isolation)
+    ...(isCopyIsolation(state.profile.isolation) && !state.profile.onLockedIsolated
       ? {
           profileSource: state.profile.source,
           profileCopy: copyNow,
@@ -2278,13 +2433,12 @@ function statusPayload() {
     ...(lastSwapNow === null ? {} : { lastSwap: lastSwapNow }),
     // Isolated start (2.11.0), additive only in that mode. profileSource is
     // reported here as well so a status read alone can tell where the profile
-    // would have come from (it is "isolated": none).
-    ...(state.profile.isolation === 'isolated'
+    // would have come from (it is "isolated": none). Since 2.16.0 an
+    // on_locked=isolated switch reports the same facts.
+    ...(isolatedStartNow()
       ? {
           profileSource: state.profile.source,
-          profileIsolationNote: state.profile.appliesToEngine
-            ? PROFILE_ISOLATED_POINTER_NOTE
-            : PROFILE_ISOLATED_NATIVE_NOTE,
+          profileIsolationNote: profileIsolationNoteNow(),
           ...(state.profile.ignored.length === 0
             ? {}
             : {
@@ -2405,12 +2559,15 @@ function profileStatePayload() {
     defaultProfileDir: state.profile.defaultDir,
     profileIsolation: state.profile.isolation,
     profileIsolationSource: state.profile.isolationSource,
+    // on_locked (2.16.0), additive and only where it can act: the policy that
+    // decided what this start did when the profile was in use.
+    ...(state.profile.appliesToEngine ? { onLocked: state.profile.onLocked } : {}),
     profileLock: lock === null ? null : { ...lock, fix: lockBlocksStart(lock) ? profileLockFix(lock) : null },
     // Copy start (2.12.0) and copy-keep (2.13.0), additive only in those modes:
     // the base, the session copy this server runs on, the base lock this session
     // holds and the note on what happens to the changes. The lock above is the
     // session copy's own bridge lock once the backend has started.
-    ...(isCopyIsolation(state.profile.isolation)
+    ...(isCopyIsolation(state.profile.isolation) && !state.profile.onLockedIsolated
       ? {
           profileCopy: copyReport(),
           profileCopySupported: state.profile.appliesToEngine,
@@ -2419,11 +2576,10 @@ function profileStatePayload() {
       : {}),
     // Isolated start (2.11.0), additive only in that mode: there is no profile
     // directory and no lock, and the settings supplied are reported as ignored.
-    ...(state.profile.isolation === 'isolated'
+    // Since 2.16.0 an on_locked=isolated switch reports the same facts.
+    ...(isolatedStartNow()
       ? {
-          profileIsolationNote: state.profile.appliesToEngine
-            ? PROFILE_ISOLATED_POINTER_NOTE
-            : PROFILE_ISOLATED_NATIVE_NOTE,
+          profileIsolationNote: profileIsolationNoteNow(),
           ...(state.profile.ignored.length === 0
             ? {}
             : {
@@ -2474,11 +2630,9 @@ function respondProfiles(id, args) {
       ...(sessionCopiesReport() === null ? {} : { sessionCopies: sessionCopiesReport() }),
       ...(previousTreesNow === null ? {} : { previousTrees: previousTreesNow }),
       ...(lastSwapNow === null ? {} : { lastSwap: lastSwapNow }),
-      ...(state.profile.isolation === 'isolated'
+      ...(isolatedStartNow()
         ? {
-            profileIsolationNote: state.profile.appliesToEngine
-              ? PROFILE_ISOLATED_POINTER_NOTE
-              : PROFILE_ISOLATED_NATIVE_NOTE,
+            profileIsolationNote: profileIsolationNoteNow(),
           }
         : {}),
       brokerVersion: BROKER_VERSION,
@@ -2528,8 +2682,12 @@ function respondProfiles(id, args) {
           ? 'The default profile is written; this server started with profile_isolation "isolated", so it ' +
             'uses no profile and the pointer has no effect on this session. It applies at the next server ' +
             'start once profile_isolation is "shared" or "workspace"; restart Claude Code to use it.'
-          : 'The default profile is written and applies at the next server start; this session keeps its ' +
-            'current profile and no browser was started or restarted. Restart Claude Code to use it.',
+          : state.profile.onLockedIsolated === true
+            ? 'The default profile is written; this server started with no profile because on_locked is ' +
+              '"isolated" and the profile it resolved was in use, so the pointer has no effect on this ' +
+              'session. It applies at the next server start.'
+            : 'The default profile is written and applies at the next server start; this session keeps its ' +
+              'current profile and no browser was started or restarted. Restart Claude Code to use it.',
       brokerVersion: BROKER_VERSION,
     });
     return;
@@ -2627,7 +2785,9 @@ function synthesizeInitialize(id, reason) {
     'Call browser_engine_status for details. Only broker meta-tools are exposed until Claude Code restarts the MCP server.' +
     (state.profile.fallback === null ? '' : ` ${state.profile.fallback.reason}`) +
     (dependencyHint === null ? '' : ` ${dependencyHint}`) +
-    (state.profile.isolated && state.profile.appliesToEngine ? ` ${PROFILE_ISOLATED_NOTE}` : '') +
+    (state.profile.isolated && state.profile.appliesToEngine && !state.profile.onLockedIsolated
+      ? ` ${PROFILE_ISOLATED_NOTE}`
+      : '') +
     ` ${artifactDirectorySentence()}`;
   sendResult(id, {
     protocolVersion: state.requestedProtocolVersion ?? '2025-06-18',
@@ -3163,7 +3323,9 @@ function handleBackendMessage(message, rawLine) {
       // unchanged. The copy-keep sentence says the changes are kept and the
       // previous tree is retained.
       state.profile.copy === null || state.profile.copy === undefined ? '' : (copyReportNote() ?? ''),
-      state.profile.isolated && state.profile.appliesToEngine ? PROFILE_ISOLATED_NOTE : '',
+      state.profile.isolated && state.profile.appliesToEngine && !state.profile.onLockedIsolated
+        ? PROFILE_ISOLATED_NOTE
+        : '',
       identitySentence(),
       passwordManagerSentence(),
       artifactDirectorySentence(),

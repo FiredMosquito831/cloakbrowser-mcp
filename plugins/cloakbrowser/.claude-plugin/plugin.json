@@ -1,7 +1,7 @@
 {
   "name": "cloakbrowser",
   "displayName": "CloakBrowser",
-  "version": "2.15.1",
+  "version": "2.16.0",
   "description": "CloakBrowser stealth Chromium through the Playwright MCP tool contract, via cloakbrowser-mcp.",
   "author": {
     "name": "FiredMosquito831"
@@ -134,6 +134,13 @@
       "description": "Session safety for the browser profile. shared keeps one profile per account for every Claude Code window, exactly as before. workspace gives each project folder its own profile (profiles/<engine>/ws-<hash>) so two projects do not collide; that profile starts with a fresh login state, and if it is already in use the plugin uses a numbered sibling (ws-<hash>-2 to -5) and reports the switch. isolated uses no browser profile at all: no profile directory is created or locked, cookies, logins and storage are not saved, and nothing persists after the session; Profile directory, Account profile and the default-profile pointer are ignored and reported for that start, and several sessions can run at once. copy runs the session on a temporary copy of the profile that Profile directory, Account profile, the default-profile pointer or the engine default resolves: the base profile is locked for the session and never written, the browser starts on the copy, and the copy is discarded when the session ends cleanly; a crashed session leaves it under profiles/<engine>/.sessions, where browser_profiles list shows it and scripts/profile-copy.mjs --prune removes it. copy-keep does the same and keeps the changes: when the session ends cleanly the base profile is replaced by the session copy and the old base is retained beside it as <name>.previous-<timestamp>; those retained trees are never deleted automatically and accumulate until you remove them. A crash or a hard kill performs no swap: the base stays untouched and the session copy is kept. copy-keep is refused when the base is outside the plugin data directory. copy does not combine with workspace in this version, and neither does copy-keep. In shared, workspace, copy and copy-keep, Profile directory and Account profile win over the mode. The free CloakBrowser tier still allows one browser at a time. Restart Claude Code after changing it.",
       "options": ["shared", "workspace", "isolated", "copy", "copy-keep"],
       "default": "shared"
+    },
+    "on_locked": {
+      "type": "string",
+      "title": "When the profile is in use",
+      "description": "What this session does when the browser profile it resolved is already in use by another process. block stops the backend and exposes only the broker meta-tools until Claude Code restarts the MCP server. fallback, the default, starts on the first free numbered sibling of the profile (profiles/.../<name>-2 to -5) and reports the switch everywhere: that profile has separate cookies, logins and fingerprint seed, and it is never the profile the other session is using; when -2 to -5 are all in use, no backend starts and the message names the owner. isolated starts with no profile at all: nothing is saved and nothing persists. Only profiles the plugin manages are given siblings or an isolated start; an explicit Profile directory is never duplicated and keeps the block behaviour. It applies to shared, workspace, pointer and account profiles and to the copy modes, where the sibling becomes the copy base; it has no effect on camoufox-native or kameleo, which manage their own profiles. Restart Claude Code after changing it.",
+      "options": ["block", "fallback", "isolated"],
+      "default": "fallback"
     },
     "identity_mode": {
       "type": "string",

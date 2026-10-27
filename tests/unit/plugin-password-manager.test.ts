@@ -322,10 +322,10 @@ describe('password_manager in the shipped manifests', () => {
     expect(Object.values(env).filter((value) => value === '${user_config.password_manager}')).toHaveLength(1);
   });
 
-  it('keeps the settings counts at 31 and 20', () => {
+  it('keeps the settings counts at 32 and 21', () => {
     for (const [name, count] of [
-      ['cloakbrowser', 31],
-      ['camoufox', 20],
+      ['cloakbrowser', 32],
+      ['camoufox', 21],
     ] as const) {
       const plugin = JSON.parse(
         readFileSync(path.join(repoRoot, 'plugins', name, '.claude-plugin', 'plugin.json'), 'utf8'),
