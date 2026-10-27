@@ -39,11 +39,14 @@ import {
   PASSWORD_MANAGER_NATIVE_NOTE,
   PASSWORD_MANAGER_NOT_APPLICABLE_NOTE,
   PASSWORD_MANAGER_PENDING_NOTE,
+  PASSWORD_MANAGER_PREFS_SENTENCE,
   passwordUserConfigProblem,
   readPasswordPolicyRecord,
   resolvePasswordManager,
+  SEARCH_ENGINE_DEFAULT,
   sha256File,
 } from './lib/password-manager.mjs';
+import { isRealDirectory, overlayPolicyPath, overlayRoot } from './lib/camoufox-overlay.mjs';
 import { PING_TIMEOUT_ENGINE_ID, pingTimeoutProblemNote, resolvePingTimeout } from './lib/ping-timeout.mjs';
 import { readToolCache, toolCacheKey, toolCachePath, writeToolCache } from './lib/tool-cache.mjs';
 import {
@@ -1193,15 +1196,19 @@ function pingTimeoutReport() {
   };
 }
 
-// --- saved logins and autofill (2.15.0; Windows route withdrawn in 2.15.1) ---
+// --- saved logins and autofill (2.16.0; overlay always-on in 2.17.0) --------
 // The `password_manager` setting. The pinned Camoufox build locks Firefox's
-// login manager off through its own enterprise policy; 2.15.1 no longer tries the
-// per-user policy file on Windows because this build has no readable per-user
-// policy directory there, so the launcher records a blocked state and the broker
-// reports it. The broker never writes anything: it reports the launcher's
-// ownership record and the store's *file existence* only. Off (the default) adds
-// no key to any payload, so every engine stays byte-identical; on, the applying
-// engine reports what happened and the engines that cannot apply it say so.
+// login manager off through its own enterprise policy, so enabling it needs a
+// plugin-owned overlay of the build (hardlinks/junctions plus a policy document
+// with only the two password values true; see lib/camoufox-overlay.mjs). Since
+// 2.17.0 that overlay is always built for the camoufox engine (it also restores
+// the stock search-engine list), so this group reports the password side only
+// when the setting is on and adds no key otherwise. The broker never creates or
+// writes the overlay: it reports the launcher's ownership record and the store's
+// *file existence* only, re-checking the recorded overlay directory and policy
+// hash cheaply. Off (the default) adds no key to any payload, so every engine
+// stays byte-identical; on, the applying engine reports what happened and the
+// engines that cannot apply it say so.
 const passwordManagerResolution = resolvePasswordManager(process.env);
 
 // The profile's Firefox login store: file existence only, never opened. A copy
@@ -1215,11 +1222,40 @@ function passwordStoreState() {
   return dir !== null && hasFirefoxLoginStore(dir) ? 'firefox-logins-db-present' : 'missing';
 }
 
+const PASSWORD_MANAGER_BLOCKED_NOTES = Object.freeze({
+  'blocked-by-overlay':
+    'Saved logins: the Camoufox overlay build could not be created or verified, so the stock build is in use ' +
+    'and the setting stays off for this start.',
+  'blocked-by-existing-overlay':
+    'Saved logins: the overlay path already holds something this plugin did not write, so it is left untouched ' +
+    'and the setting stays off for this start.',
+  'blocked-config':
+    'Saved logins: the wrapper config cannot carry the saved-login prefs, so the setting stays off for this start.',
+  'blocked-by-build-policy':
+    'Saved logins: the Camoufox build policy is missing or unreadable, so the overlay cannot be derived and the ' +
+    'setting stays off for this start.',
+  // Written only by the retained per-user route (2.15.0), which no shipped
+  // platform reaches; kept readable so an old record is still understood.
+  'blocked-by-existing-policy':
+    'Saved logins: a per-user policy file written by something else is present at the Firefox policy path, so it ' +
+    'is left untouched and the setting stays off for this start.',
+});
+
 function passwordBlockedNote(status) {
-  if (status === 'blocked-by-existing-policy') {
-    return 'Saved logins: a per-user policy file written by something else is present at the Firefox policy path, so it is left untouched and the setting stays off for this start.';
+  return PASSWORD_MANAGER_BLOCKED_NOTES[status] ?? 'Saved logins: the setting stays off for this start.';
+}
+
+// The recorded overlay, re-checked with lstat and containment: a junction, a
+// file, a foreign directory or a path outside the plugin overlay root is not a
+// usable overlay even when the record says applied.
+function passwordOverlayDirectory(record) {
+  if (!nonEmptyString(record.overlay)) {
+    return null;
   }
-  return 'Saved logins: the per-user policy file could not be derived from the Camoufox build policy, so the setting stays off for this start.';
+  if (!isPathInsideRoot(record.overlay, overlayRoot(PLUGIN_DATA_DIR))) {
+    return null;
+  }
+  return isRealDirectory(record.overlay) ? record.overlay : null;
 }
 
 // The additive keys, only when the setting is on. `passwordManagerEnabled` is
@@ -1258,6 +1294,8 @@ function passwordManagerFacts() {
     passwordManagerApplies: true,
     passwordManagerSource: 'default',
     passwordManagerPolicyFile: null,
+    passwordManagerOverlay: null,
+    passwordManagerOverlayMode: null,
     passwordManagerStore: passwordStoreState(),
   };
   const configProblem = passwordUserConfigProblem(process.env);
@@ -1268,51 +1306,70 @@ function passwordManagerFacts() {
   if (record === null) {
     return { ...facts, passwordManagerNote: PASSWORD_MANAGER_PENDING_NOTE };
   }
-  if (record.status === 'blocked-by-existing-policy' || record.status === 'blocked-by-build-policy') {
+  if (record.status === 'prefs') {
+    return {
+      ...facts,
+      passwordManagerEnabled: true,
+      passwordManagerSource: 'prefs',
+      passwordManagerNote:
+        'Saved logins: this Camoufox build does not lock the password manager off, so the stock build is used ' +
+        'with the signon prefs and no overlay is created.',
+    };
+  }
+  if (record.status === 'stock') {
+    // Written by a start with the setting off (the overlay itself is always on for
+    // search). If the setting is on now, the launcher has not rewritten the
+    // record yet; report the pending state rather than inventing a source.
+    return { ...facts, passwordManagerNote: PASSWORD_MANAGER_PENDING_NOTE };
+  }
+  if (record.status !== 'applied') {
     return {
       ...facts,
       passwordManagerSource: record.status,
-      passwordManagerPolicyFile:
-        record.status === 'blocked-by-existing-policy' && typeof record.policyFile === 'string'
-          ? record.policyFile
-          : null,
       passwordManagerNote:
         typeof record.note === 'string' && record.note !== ''
           ? record.note
           : passwordBlockedNote(record.status),
     };
   }
-  if (record.status !== 'applied') {
-    return { ...facts, passwordManagerNote: PASSWORD_MANAGER_PENDING_NOTE };
-  }
-  const file = typeof record.policyFile === 'string' && record.policyFile !== '' ? record.policyFile : null;
-  if (file !== null && existsSync(file)) {
-    const hash = sha256File(file);
-    if (typeof record.contentHash === 'string' && hash === record.contentHash) {
-      return {
-        ...facts,
-        passwordManagerEnabled: true,
-        passwordManagerSource: 'setting',
-        passwordManagerPolicyFile: file,
-      };
-    }
-    if (typeof record.probeHash === 'string' && hash === record.probeHash) {
-      return {
-        ...facts,
-        passwordManagerNote:
-          'Saved logins: the per-user policy file holds the temporary verification document of an interrupted ' +
-          'start; the next Camoufox start rewrites it before the setting is used.',
-      };
-    }
+  const overlay = passwordOverlayDirectory(record);
+  if (overlay === null) {
     return {
       ...facts,
-      passwordManagerSource: 'blocked-by-existing-policy',
-      passwordManagerNote:
-        `Saved logins: ${file} no longer matches the file this plugin wrote, so it is left untouched and the ` +
-        'setting stays off for this start.',
+      passwordManagerSource: 'blocked-by-overlay',
+      passwordManagerNote: nonEmptyString(record.overlay)
+        ? `Saved logins: the recorded overlay ${record.overlay} is missing, or is not a real directory inside ` +
+          'the plugin overlay directory, so the setting stays off for this start.'
+        : passwordBlockedNote('blocked-by-overlay'),
     };
   }
-  return { ...facts, passwordManagerNote: PASSWORD_MANAGER_PENDING_NOTE };
+  const file = overlayPolicyPath(overlay);
+  const hash = sha256File(file);
+  if (typeof record.managedPolicyHash === 'string' && hash === record.managedPolicyHash) {
+    return {
+      ...facts,
+      passwordManagerEnabled: record.passwordOn !== false,
+      passwordManagerSource: 'overlay',
+      passwordManagerPolicyFile: file,
+      passwordManagerOverlay: overlay,
+      passwordManagerOverlayMode: record.mode === 'hardlink' || record.mode === 'copy' ? record.mode : null,
+    };
+  }
+  if (typeof record.probePolicyHash === 'string' && hash === record.probePolicyHash) {
+    return {
+      ...facts,
+      passwordManagerNote:
+        'Saved logins: the overlay policy holds the temporary verification document of an interrupted start; ' +
+        'the next Camoufox start rewrites it before the setting is used.',
+    };
+  }
+  return {
+    ...facts,
+    passwordManagerSource: 'blocked-by-overlay',
+    passwordManagerNote:
+      `Saved logins: ${file} ${hash === null ? 'is missing' : 'no longer matches the policy this plugin wrote'}, ` +
+      'so the setting stays off for this start; the next Camoufox start rebuilds the overlay.',
+  };
 }
 
 function passwordManagerReport() {
@@ -1331,16 +1388,113 @@ function passwordManagerSentence() {
   if (facts === null) {
     return '';
   }
-  if (facts.passwordManagerSource === 'setting') {
+  if (facts.passwordManagerSource === 'overlay') {
     return PASSWORD_MANAGER_APPLIED_SENTENCE;
   }
+  if (facts.passwordManagerSource === 'prefs') {
+    return PASSWORD_MANAGER_PREFS_SENTENCE;
+  }
   if (
-    facts.passwordManagerSource === 'blocked-by-existing-policy' ||
-    facts.passwordManagerSource === 'blocked-by-build-policy'
+    facts.passwordManagerSource === 'blocked-by-overlay' ||
+    facts.passwordManagerSource === 'blocked-by-existing-overlay' ||
+    facts.passwordManagerSource === 'blocked-config' ||
+    facts.passwordManagerSource === 'blocked-by-build-policy' ||
+    facts.passwordManagerSource === 'blocked-by-existing-policy'
   ) {
     return facts.passwordManagerNote ?? '';
   }
   return '';
+}
+
+// --- search engines (2.17.0) -------------------------------------------------
+// The pinned Camoufox build replaces the stock search-engine list with one dummy
+// engine. The launcher's always-on overlay replaces that policy block with
+// `{ Default: "Google", PreventInstalls: false }`, which restores the build's own
+// per-locale engine set, seeds Google as the default once and leaves the browser
+// UI editable. This group is additive and appears for the camoufox engine only
+// (every other engine keeps its payload byte-identical): it says whether the
+// overlay carrying that policy is in use, what the default is, where the policy
+// file is, and - in one sentence - anything the user must know (a blocked
+// overlay, or the one-time profile migration).
+const SEARCH_ENGINES_PENDING_NOTE =
+  'Search engines: the Camoufox overlay is prepared when the Camoufox backend starts; this report was taken ' +
+  'before that step finished.';
+
+function searchEnginesFacts() {
+  if (native || engine === null || engine.id !== PASSWORD_MANAGER_ENGINE_ID) {
+    return null;
+  }
+  const facts = {
+    searchEnginesSource: 'stock',
+    searchEnginesDefault: null,
+    searchEnginesPolicyFile: null,
+    searchEnginesNote: null,
+  };
+  const record = readPasswordPolicyRecord(PLUGIN_DATA_DIR);
+  if (record === null) {
+    return { ...facts, searchEnginesNote: SEARCH_ENGINES_PENDING_NOTE };
+  }
+  if (record.status === 'prefs' || record.status === 'stock') {
+    // The build's own policy already ships the stock list (or no overlay was ever
+    // needed); the stock build is what runs.
+    return facts;
+  }
+  if (record.status !== 'applied') {
+    return {
+      ...facts,
+      searchEnginesSource: 'blocked-by-overlay',
+      searchEnginesNote:
+        typeof record.note === 'string' && record.note !== ''
+          ? record.note
+          : 'Search engines: the Camoufox overlay build could not be created or verified, so the stock build is ' +
+            'in use and its own search-engine policy stays in force.',
+    };
+  }
+  const overlay = passwordOverlayDirectory(record);
+  if (overlay === null) {
+    return {
+      ...facts,
+      searchEnginesSource: 'blocked-by-overlay',
+      searchEnginesNote:
+        'Search engines: the recorded overlay is missing, or is not a real directory inside the plugin overlay ' +
+        'directory, so the stock build and its own search-engine policy are in force for this start.',
+    };
+  }
+  const file = overlayPolicyPath(overlay);
+  const hash = sha256File(file);
+  const managed = typeof record.managedPolicyHash === 'string' && hash === record.managedPolicyHash;
+  const probe = typeof record.probePolicyHash === 'string' && hash === record.probePolicyHash;
+  if (!managed && !probe) {
+    return {
+      ...facts,
+      searchEnginesSource: 'blocked-by-overlay',
+      searchEnginesNote:
+        `Search engines: the overlay policy ${file} ` +
+        (hash === null ? 'is missing' : 'no longer matches the policy this plugin wrote') +
+        ', so the next Camoufox start rebuilds the overlay.',
+    };
+  }
+  if (record.searchSource !== 'overlay') {
+    // The overlay is in use for the password policies only; this build's own
+    // policy already carries the stock search list.
+    return facts;
+  }
+  return {
+    searchEnginesSource: 'overlay',
+    searchEnginesDefault: SEARCH_ENGINE_DEFAULT,
+    searchEnginesPolicyFile: file,
+    searchEnginesNote: probe
+      ? 'Search engines: the overlay policy holds the temporary verification document of an interrupted start; ' +
+        'the next Camoufox start rewrites it.'
+      : typeof record.searchNote === 'string' && record.searchNote !== ''
+        ? record.searchNote
+        : null,
+  };
+}
+
+function searchEnginesReport() {
+  const facts = searchEnginesFacts();
+  return facts === null ? {} : facts;
 }
 
 // Artifact directory policy (2.10.1). Upstream's file-access allowlist is
@@ -2691,11 +2845,17 @@ function capabilitiesPayload(clientRoots) {
     // meta-tools: whether ping_timeout_ms applies to this engine, the effective
     // deadline, its source and whether the wrapper heartbeat runs at all.
     ...pingTimeoutReport(),
-    // Saved logins (2.15.0), additive and only when password_manager is on. The
-    // values match browser_engine_status; the policy file path is reported only
-    // when this plugin's managed file is in use, and passwordManagerStore is the
+    // Saved logins (2.15.0; the overlay is always on in 2.17.0), additive and
+    // only when password_manager is on. The values match browser_engine_status;
+    // the policy file path and overlay directory are reported only when the
+    // plugin-owned overlay build is in use, and passwordManagerStore is the
     // profile's logins.db *file existence* only (never opened).
     ...passwordManagerReport(),
+    // Search engines (2.17.0), additive and for the camoufox engine only: whether
+    // the overlay that restores the build's stock engine list is in use, the
+    // seeded default, the overlay policy path, and one honest note (blocked
+    // overlay or the one-time profile migration). Other engines add no key.
+    ...searchEnginesReport(),
     // Artifact diagnostics, additive and last, so every key above keeps its
     // position and value. serverCwd is the directory both allowlist values fall
     // back to; outputDir is the effective artifact directory (null for an engine
@@ -2838,11 +2998,15 @@ function statusPayload() {
     // Server heartbeat (2.14.1), additive and the same values browser_capabilities
     // reports, so a status read alone shows whether the wrapper heartbeat runs.
     ...pingTimeoutReport(),
-    // Saved logins (2.15.0), additive and only when password_manager is on. The
-    // values match browser_engine_status; the policy file path is reported only
-    // when this plugin's managed file is in use, and passwordManagerStore is the
+    // Saved logins (2.15.0; the overlay is always on in 2.17.0), additive and
+    // only when password_manager is on. The values match browser_engine_status;
+    // the policy file path and overlay directory are reported only when the
+    // plugin-owned overlay build is in use, and passwordManagerStore is the
     // profile's logins.db *file existence* only (never opened).
     ...passwordManagerReport(),
+    // Search engines (2.17.0), the same additive camoufox-only group
+    // browser_capabilities reports.
+    ...searchEnginesReport(),
   };
 }
 

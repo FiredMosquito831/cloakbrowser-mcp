@@ -85,6 +85,7 @@ describe('shared plugin core', () => {
       'engine-registry.mjs',
       'engines/profiles.json',
       'lib/attach.mjs',
+      'lib/camoufox-overlay.mjs',
       'lib/password-manager.mjs',
       'lib/ping-timeout.mjs',
       'lib/profile.mjs',

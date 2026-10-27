@@ -4,6 +4,7 @@ Run by ``launch-camoufox.mjs`` with the vendored venv interpreter:
 
     <venv>/.../python -I camoufox_bootstrap.py ensure-build v156.0.1-beta.39
     <venv>/.../python -I camoufox_bootstrap.py binary-path v156.0.1-beta.39
+    <venv>/.../python -I camoufox_bootstrap.py overlay-probe <executable>
     <venv>/.../python -I camoufox_bootstrap.py password-path
     <venv>/.../python -I camoufox_bootstrap.py password-probe <executable>
 
@@ -12,18 +13,20 @@ version index and fetcher; it never installs a different build and never install
 Python. ``binary-path`` prints the launch executable for that build on stdout and
 nothing else; every log line goes to stderr so the MCP stdout stays pure JSON-RPC.
 
-``password-path`` prints the Windows KnownFolder LocalAppData and the per-user
-Firefox policy directory derived from it, as one JSON line. It calls
-``SHGetKnownFolderPath`` rather than reading ``%LOCALAPPDATA%``: Windows ignores
-the environment variable when the real folder is asked for, and a redirected
-variable must never make a scratch run believe it proved the real path.
+``overlay-probe`` starts one short headless Camoufox from the given executable
+(the plugin-owned overlay build) and asks a loopback page for the geolocation
+permission state. The caller writes a temporary ``Permissions: Location:
+BlockNewRequests`` policy document into the overlay's own
+``distribution/policies.json``, so ``denied`` proves that Firefox read the
+overlay's install policy; anything else means it did not. No
+``toolkit.policies.perUserDir`` is set: with that pref and no readable per-user
+file Firefox would apply no policies at all. It prints one JSON line and never
+writes a credential or reads a profile.
 
-``password-probe`` starts one short headless Camoufox with
-``toolkit.policies.perUserDir=true`` and asks a loopback page for the geolocation
-permission state. ``denied`` proves the per-user policy file at the resolved path
-was read (the caller adds a temporary ``Permissions: Location:
-BlockNewRequests`` policy to it); anything else means it was not. It prints one
-JSON line and never writes a credential or reads a profile.
+``password-path`` and ``password-probe`` are the retained 2.15.0 per-user route
+(``SHGetKnownFolderPath`` plus a probe that sets ``toolkit.policies.perUserDir``).
+No shipped platform reaches them in 2.17.0; they stay so a future build or
+platform with a readable per-user directory can use them unchanged.
 
 The helper deliberately does not activate a build. Camoufox's installer activates
 the build it installs, but the launched build is pinned by the caller through
@@ -101,9 +104,10 @@ def local_app_data() -> str:
     """The Windows KnownFolder LocalAppData, independent of %LOCALAPPDATA%.
 
     ``SHGetKnownFolderPath(FOLDERID_LocalAppData)`` is what Windows itself uses;
-    the investigation confirmed that setting ``$env:LOCALAPPDATA`` does not change
-    the answer. Non-Windows platforms return nothing: the per-user Firefox policy
-    path was only verified on Windows.
+    the 2026-10-26 investigation confirmed that setting ``$env:LOCALAPPDATA`` does
+    not change the answer. Non-Windows platforms return nothing: the per-user
+    Firefox policy path was only ever verified on Windows. Retained for the
+    2.15.0 per-user route, which no shipped platform reaches in 2.17.0.
     """
     if sys.platform != 'win32':
         raise LookupError('the per-user Firefox policy path is resolved on Windows only')
@@ -164,14 +168,14 @@ def password_path() -> dict:
     }
 
 
-def password_probe(binary: str) -> dict:
-    """One short headless start; is the per-user policy file actually read?
+def _permission_state(binary: str, firefox_user_prefs=None) -> dict:
+    """One short headless start; return the loopback page's geolocation state.
 
-    The caller writes a temporary policy file that adds
-    ``Permissions: {Location: {BlockNewRequests: true}}`` to the managed policy.
-    Firefox maps it to ``permissions.default.geo=2``, so a loopback page's
+    The caller writes a temporary policy document that adds
+    ``Permissions: {Location: {BlockNewRequests: true}}`` to the document under
+    test. Firefox maps it to ``permissions.default.geo=2``, so a loopback page's
     ``navigator.permissions.query({name: 'geolocation'})`` reports ``denied`` only
-    when that file was read. ``prompt`` (or anything else) means it was not.
+    when that document was read. ``prompt`` (or anything else) means it was not.
     """
     import os
     import threading
@@ -200,14 +204,16 @@ def password_probe(binary: str) -> dict:
     thread.start()
     try:
         port = server.server_address[1]
-        with Camoufox(
-            headless=True,
-            executable_path=binary,
-            firefox_user_prefs={'toolkit.policies.perUserDir': True},
-            geoip=False,
-            humanize=False,
-            exclude_addons=list(DefaultAddons),
-        ) as browser:
+        launch_kwargs = {
+            'headless': True,
+            'executable_path': binary,
+            'geoip': False,
+            'humanize': False,
+            'exclude_addons': list(DefaultAddons),
+        }
+        if isinstance(firefox_user_prefs, dict) and firefox_user_prefs:
+            launch_kwargs['firefox_user_prefs'] = firefox_user_prefs
+        with Camoufox(**launch_kwargs) as browser:
             page = browser.new_page()
             page.goto(f'http://127.0.0.1:{port}/', wait_until='domcontentloaded', timeout=20000)
             state = page.evaluate(
@@ -220,6 +226,26 @@ def password_probe(binary: str) -> dict:
     if state in ('denied', 'prompt', 'granted'):
         return {'state': state}
     return {'state': 'error', 'detail': f'unexpected permission state {state!r}'}
+
+
+def overlay_probe(binary: str) -> dict:
+    """Is the overlay's own install policy read? (no per-user flag is set)
+
+    With ``toolkit.policies.perUserDir`` and no readable per-user file Firefox
+    would apply no policies at all, so the overlay probe must not set it: the
+    overlay's ``distribution/policies.json`` is the only policy document in play.
+    """
+    return _permission_state(binary)
+
+
+def password_probe(binary: str) -> dict:
+    """Is the retained 2.15.0 per-user policy file read? (per-user flag set)
+
+    Kept for the retained per-user route, which no shipped platform reaches in
+    2.17.0. The caller writes the temporary geolocation document into the
+    per-user file this probe makes Firefox read.
+    """
+    return _permission_state(binary, firefox_user_prefs={'toolkit.policies.perUserDir': True})
 
 
 def main(argv: list[str]) -> int:
@@ -240,19 +266,20 @@ def main(argv: list[str]) -> int:
             protocol_stdout.write(f'{json.dumps(password_path())}\n')
             protocol_stdout.flush()
             return 0
-        if len(argv) == 3 and argv[1] == 'password-probe':
-            protocol_stdout.write(f'{json.dumps(password_probe(argv[2]))}\n')
+        if len(argv) == 3 and argv[1] in ('overlay-probe', 'password-probe'):
+            function = overlay_probe if argv[1] == 'overlay-probe' else password_probe
+            protocol_stdout.write(f'{json.dumps(function(argv[2]))}\n')
             protocol_stdout.flush()
             return 0
         print(
             'usage: camoufox_bootstrap.py ensure-build <version> | binary-path <version> | '
-            'password-path | password-probe <executable>',
+            'password-path | overlay-probe <executable> | password-probe <executable>',
             file=sys.stderr,
         )
         return USAGE_EXIT_STATUS
     except Exception as exc:  # noqa: BLE001 - one actionable line, never a traceback
         detail = f'{type(exc).__name__}: {exc}'
-        if 'password-probe' in argv or 'password-path' in argv:
+        if 'overlay-probe' in argv or 'password-probe' in argv or 'password-path' in argv:
             protocol_stdout.write(f'{json.dumps({"state": "error", "detail": detail})}\n')
             protocol_stdout.flush()
         print(detail, file=sys.stderr)

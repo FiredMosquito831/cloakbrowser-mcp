@@ -18,16 +18,20 @@ blocks while the MCP stdio reader has a ``readline()`` outstanding, freezing the
 whole event loop until the client sends another line. Importing it here, before
 the wrapper starts serving stdio, removes that concurrency.
 
-A fourth step carries the opt-in saved-logins setting (plugin 2.15.0). When the
-launcher has resolved `password_manager` and written its managed per-user Firefox
-policy file, it sets `STEALTH_PASSWORD_MANAGER_STATE=applied`; this entry then
-merges the four Firefox prefs that use that file into the same per-profile
-`CAMOUFOX_MCP_CONFIG` the identity uses (one file, never two writers racing).
-Nothing here formats, reads or logs a credential: the plugin never opens the
-profile's login store. With the setting off or blocked the environment is left
-exactly as before. (2.15.1: this build has no readable per-user policy directory
-on Windows, so the launcher never writes that file and never sets the state
-variable; it reports `blocked-by-build-policy` instead and this step is inert.)
+A fourth step carries the plugin-owned overlay build (plugin 2.17.0). The
+`camoufox` launcher always runs on that overlay, so it sets
+`STEALTH_CAMOUFOX_OVERLAY_STATE=applied`; this entry then removes a user
+`browser.camoufoxOptions.executable_path` from this session's copy of the wrapper
+config so it cannot silently bypass the overlay (the search transform and - with
+`password_manager` on - the password policies live in the overlay's own
+`distribution/policies.json`, so no pref is needed for search). When the password
+keys are in that document the launcher also sets
+`STEALTH_PASSWORD_MANAGER_STATE=overlay`, and this entry merges the three signon
+prefs into the same per-profile `CAMOUFOX_MCP_CONFIG` the identity uses (one
+file, never two writers racing). A build that no longer locks the login manager
+off is used as-is with the same prefs (`state=prefs`). Nothing here formats, reads
+or logs a credential: the plugin never opens the profile's login store. With the
+overlay blocked or stock the environment is left exactly as before.
 """
 
 from __future__ import annotations
@@ -54,16 +58,30 @@ CONFIG_DIR_PARTS = ('config', 'camoufox')
 LOG_PREFIX = 'camoufox identity:'
 
 PASSWORD_MANAGER_STATE_ENV = 'STEALTH_PASSWORD_MANAGER_STATE'
-PASSWORD_MANAGER_STATE_APPLIED = 'applied'
+PASSWORD_MANAGER_STATE_OVERLAY = 'overlay'
+PASSWORD_MANAGER_STATE_PREFS = 'prefs'
+PASSWORD_MANAGER_STATES = (PASSWORD_MANAGER_STATE_OVERLAY, PASSWORD_MANAGER_STATE_PREFS)
+# The launcher's overlay state (2.17.0). `applied` means the session runs the
+# plugin-owned overlay build; the search transform is in that build's policy, so
+# nothing else is merged for it - only a user `executable_path` is stripped from
+# this session's config copy, because it would silently bypass the overlay.
+OVERLAY_STATE_ENV = 'STEALTH_CAMOUFOX_OVERLAY_STATE'
+OVERLAY_STATE_APPLIED = 'applied'
 PASSWORD_LOG_PREFIX = 'camoufox passwords:'
-# The four prefs this setting owns. Plain-HTTP autofill stays off (USER DECISION
+# The three prefs this setting owns. Plain-HTTP autofill stays off (USER DECISION
 # P3); address/credit-card autofill and form history are not touched (P9).
+# `toolkit.policies.perUserDir` is deliberately never set: with the overlay the
+# install policies are already the modified ones, and that pref with no readable
+# file disables every policy (the 2.15.0 finding).
 PASSWORD_PREFS = {
-    'toolkit.policies.perUserDir': True,
     'signon.rememberSignons': True,
     'signon.autofillForms': True,
     'signon.autofillForms.http': False,
 }
+# The one user key that would silently win over the launcher's overlay
+# executable: the wrapper turns `camoufoxOptions.executable_path` into an explicit
+# `launch_options` kwarg, which outranks `CAMOUFOX_EXECUTABLE_PATH`.
+PASSWORD_EXECUTABLE_KEY = 'executable_path'
 
 
 def _log(message: str) -> None:
@@ -413,18 +431,30 @@ def apply_identity(env=None, generate=None, log=_log):
     return {'mode': mode, 'applied': True, 'identityFile': path, 'configFile': config}
 
 
-def password_manager_applied(env=None) -> bool:
-    """True only when the launcher resolved and verified the managed policy file."""
+def password_manager_enabled(env=None) -> bool:
+    """True when the launcher prepared saved logins for this start.
+
+    `overlay` means the plugin-owned overlay build is in use; `prefs` means the
+    build no longer locks the manager off and the stock build gets the prefs.
+    Both merge the same three signon prefs.
+    """
     source = os.environ if env is None else env
     value = source.get(PASSWORD_MANAGER_STATE_ENV)
-    return isinstance(value, str) and value.strip().lower() == PASSWORD_MANAGER_STATE_APPLIED
+    return isinstance(value, str) and value.strip().lower() in PASSWORD_MANAGER_STATES
+
+
+def overlay_applied(env=None) -> bool:
+    """True when the launcher is running this session on the plugin overlay build."""
+    source = os.environ if env is None else env
+    value = source.get(OVERLAY_STATE_ENV)
+    return isinstance(value, str) and value.strip().lower() == OVERLAY_STATE_APPLIED
 
 
 def merge_password_prefs(config):
-    """Merge the four prefs this setting owns into a wrapper config document.
+    """Merge the three prefs this setting owns into a wrapper config document.
 
     The user's other keys and their other `firefox_user_prefs` are preserved; our
-    four win in the plugin-data copy. Returns a list of pref names that the user's
+    three win in the plugin-data copy. Returns a list of pref names that the user's
     config already set to a different value (for one honest log line), or None
     when the document cannot hold prefs at all.
     """
@@ -447,21 +477,57 @@ def merge_password_prefs(config):
     return overridden
 
 
-def apply_password_manager(env=None, log=_password_log):
-    """Merge the saved-login prefs into the wrapper config when the launcher says so.
+def strip_bypass_executable(config, user_path, log=_password_log):
+    """Remove a user `camoufoxOptions.executable_path` from this session's copy.
 
-    Never raises for a normal failure path and never starts a browser: the file and
-    its verification belong to the launcher. Returns a small status dict.
+    Only the plugin-data copy is changed; the user's own file is never edited.
+    Returns the removed value when the key was present.
+    """
+    browser = config.get('browser')
+    options = browser.get('camoufoxOptions') if isinstance(browser, dict) else None
+    if not isinstance(options, dict) or PASSWORD_EXECUTABLE_KEY not in options:
+        return None
+    removed = options.pop(PASSWORD_EXECUTABLE_KEY)
+    where = user_path if user_path is not None else 'the session config'
+    log(
+        f'the config file {where} sets browser.camoufoxOptions.executable_path; this session uses the plugin '
+        'overlay build instead (your file is unchanged)'
+    )
+    return removed
+
+
+def apply_password_manager(env=None, log=_password_log):
+    """Apply the launcher's overlay/prefs decision to this session's config copy.
+
+    Two independent inputs: the overlay state (`applied` => strip a bypassing
+    user `camoufoxOptions.executable_path` from the plugin-data copy) and the
+    saved-login state (`overlay`/`prefs` => merge the three signon prefs). The
+    search transform needs no pref at all: it lives in the overlay's policy
+    document. Never raises for a normal failure path and never starts a browser:
+    the overlay and its verification belong to the launcher. Returns a small
+    status dict.
     """
     source = os.environ if env is None else env
-    if not password_manager_applied(source):
+    overlay = overlay_applied(source)
+    if not password_manager_enabled(source) and not overlay:
         return {'applied': False, 'reason': 'off'}
+    state = source.get(PASSWORD_MANAGER_STATE_ENV)
+    state_value = state.strip().lower() if isinstance(state, str) else ''
+    merge_prefs = state_value in PASSWORD_MANAGER_STATES
     theirs = user_config_path(source)
     user_config = None
     if theirs is not None:
         user_config, reason = usable_json_config(theirs)
         if user_config is None:
-            log(f'the config file {theirs} {reason}; leaving it untouched and starting without the saved-login prefs')
+            if merge_prefs:
+                log(
+                    f'the config file {theirs} {reason}; leaving it untouched and starting without the saved-login prefs'
+                )
+            else:
+                log(
+                    f'the config file {theirs} {reason}; leaving it untouched, so a user executable_path cannot be '
+                    'removed from this session'
+                )
             return {'applied': False, 'reason': 'config'}
     raw_profile = source.get(USER_DATA_ENV)
     profile_dir = raw_profile.strip() if isinstance(raw_profile, str) else ''
@@ -470,27 +536,46 @@ def apply_password_manager(env=None, log=_password_log):
     # directory so two isolated servers in one project share one document.
     scope = profile_dir if profile_dir != '' else os.getcwd()
     config = user_config if user_config is not None else {}
-    overridden = merge_password_prefs(config)
-    if overridden is None:
-        log(
-            f'the config file {theirs} has a "browser.camoufoxOptions.firefox_user_prefs" value that is not an '
-            'object; leaving it untouched and starting without the saved-login prefs'
-        )
-        return {'applied': False, 'reason': 'config'}
-    if overridden:
-        log(
-            f'the config file {theirs} already sets {", ".join(overridden)}; this session uses the saved-login '
-            'values instead (your file is unchanged)'
-        )
+    bypass = None
+    if overlay:
+        bypass = strip_bypass_executable(config, theirs, log)
+    if not merge_prefs and bypass is None:
+        # The overlay is in use and nothing about this session's config needs to
+        # change: leave the environment exactly as it was.
+        return {'applied': False, 'reason': 'overlay-clean'}
+    overridden = []
+    if merge_prefs:
+        overridden = merge_password_prefs(config)
+        if overridden is None:
+            log(
+                f'the config file {theirs} has a "browser.camoufoxOptions.firefox_user_prefs" value that is not an '
+                'object; leaving it untouched and starting without the saved-login prefs'
+            )
+            return {'applied': False, 'reason': 'config'}
+        if overridden:
+            log(
+                f'the config file {theirs} already sets {", ".join(overridden)}; this session uses the saved-login '
+                'values instead (your file is unchanged)'
+            )
     target = launch_config_path(os.path.abspath(scope), source)
     try:
         _write_config_file(target, config)
     except OSError as exc:
-        log(f'cannot write the launch config {target}: {exc}; starting without the saved-login prefs')
+        log(f'cannot write the launch config {target}: {exc}; starting without the session config')
         return {'applied': False, 'reason': 'config'}
     source['CAMOUFOX_MCP_CONFIG'] = target
-    log(f'merged the saved-login prefs into {target}')
-    return {'applied': True, 'configFile': target, 'overridden': overridden}
+    if merge_prefs:
+        log(f'merged the saved-login prefs into {target}')
+    else:
+        log(f'wrote the session config {target} for the overlay build')
+    return {
+        'applied': True,
+        'configFile': target,
+        'overridden': overridden,
+        'state': state_value,
+        'overlayState': 'applied' if overlay else 'stock',
+        'executablePathRemoved': bypass is not None,
+    }
 
 
 def _apply_password_manager_safely() -> None:
