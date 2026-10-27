@@ -24,7 +24,6 @@ DEFAULT_ENTRY = (
 )
 
 PASSWORD_PREFS = {
-    'toolkit.policies.perUserDir': True,
     'signon.rememberSignons': True,
     'signon.autofillForms': True,
     'signon.autofillForms.http': False,
@@ -109,35 +108,40 @@ class Cases:
                 assert logs == [], logs
                 assert not os.path.exists(os.path.join(root, 'data')), 'off must not create the data directory'
 
-    def test_state_must_be_the_applied_spelling(self):
+    def test_state_must_be_the_launcher_spellings(self):
         for value, expected in [
-            ('applied', True),
-            (' APPLIED ', True),
-            ('blocked-by-build-policy', False),
+            ('overlay', True),
+            (' OVERLAY ', True),
+            ('prefs', True),
+            (' PREFS ', True),
+            ('applied', False),
+            ('blocked-by-overlay', False),
             ('true', False),
             ('', False),
             (None, False),
         ]:
-            assert self.entry.password_manager_applied({'STEALTH_PASSWORD_MANAGER_STATE': value}) is expected, value
+            assert self.entry.password_manager_enabled({'STEALTH_PASSWORD_MANAGER_STATE': value}) is expected, value
 
     # --- the main path -----------------------------------------------------
-    def test_applied_with_identity_writes_one_document(self):
+    def test_overlay_state_with_identity_writes_one_document(self):
         with tempfile.TemporaryDirectory() as root:
             profile = self.profile(root)
             env = self.env(
                 root,
                 PLAYWRIGHT_MCP_USER_DATA_DIR=profile,
-                STEALTH_PASSWORD_MANAGER_STATE='applied',
+                STEALTH_PASSWORD_MANAGER_STATE='overlay',
             )
             identity = self.identity(env)
             assert identity['applied'] is True, identity
             identity_file = env['CAMOUFOX_MCP_CONFIG']
             status, logs = self.passwords(env)
             assert status['applied'] is True, status
+            assert status['state'] == 'overlay', status
             assert env['CAMOUFOX_MCP_CONFIG'] == identity_file, 'one merged file, not a second one'
             config = self.config(env)
             options = config['browser']['camoufoxOptions']
             assert options['firefox_user_prefs'] == PASSWORD_PREFS, options
+            assert 'toolkit.policies.perUserDir' not in options['firefox_user_prefs']
             assert 'fingerprint' in options and options['os'] == self.entry.host_os()
             assert any('merged the saved-login prefs' in line for line in logs), logs
             # The identity file itself is untouched by this step.
@@ -146,30 +150,137 @@ class Cases:
             )
             assert stored['fingerprint'] == options['fingerprint']
 
-    def test_applied_in_random_mode_still_writes_the_prefs(self):
+    def test_prefs_state_merges_the_same_three_prefs(self):
         with tempfile.TemporaryDirectory() as root:
             profile = self.profile(root)
             env = self.env(
                 root,
                 PLAYWRIGHT_MCP_USER_DATA_DIR=profile,
                 STEALTH_IDENTITY_MODE='random',
-                STEALTH_PASSWORD_MANAGER_STATE='applied',
+                STEALTH_PASSWORD_MANAGER_STATE='prefs',
             )
             assert self.identity(env) == {'mode': 'random', 'applied': False, 'reason': 'mode'}
             status, _logs = self.passwords(env)
             assert status['applied'] is True, status
+            assert status['state'] == 'prefs', status
             options = self.config(env)['browser']['camoufoxOptions']
             assert options['firefox_user_prefs'] == PASSWORD_PREFS
             assert 'fingerprint' not in options and 'os' not in options
 
     def test_isolated_start_keys_the_document_on_the_working_directory(self):
         with tempfile.TemporaryDirectory() as root:
-            env = self.env(root, PLAYWRIGHT_MCP_ISOLATED='true', STEALTH_PASSWORD_MANAGER_STATE='applied')
+            env = self.env(root, PLAYWRIGHT_MCP_ISOLATED='true', STEALTH_PASSWORD_MANAGER_STATE='overlay')
             status, _logs = self.passwords(env)
             assert status['applied'] is True, status
             assert env['CAMOUFOX_MCP_CONFIG'] == self.entry.launch_config_path(os.getcwd(), env)
             options = self.config(env)['browser']['camoufoxOptions']
             assert options['firefox_user_prefs'] == PASSWORD_PREFS
+
+    # --- the executable override ------------------------------------------
+    def test_user_executable_path_is_stripped_from_the_copy_only(self):
+        with tempfile.TemporaryDirectory() as root:
+            profile = self.profile(root)
+            theirs = os.path.join(root, 'user.json')
+            original = {
+                'browser': {
+                    'camoufoxOptions': {
+                        'executable_path': 'C:/somewhere/else/camoufox.exe',
+                        'humanize': True,
+                    }
+                }
+            }
+            pathlib.Path(theirs).write_text(json.dumps(original, indent=2), encoding='utf-8')
+            before = pathlib.Path(theirs).read_bytes()
+            env = self.env(
+                root,
+                PLAYWRIGHT_MCP_USER_DATA_DIR=profile,
+                CAMOUFOX_MCP_CONFIG=theirs,
+                STEALTH_PASSWORD_MANAGER_STATE='overlay',
+                STEALTH_CAMOUFOX_OVERLAY_STATE='applied',
+            )
+            status, logs = self.passwords(env)
+            assert status['applied'] is True, status
+            assert status['executablePathRemoved'] is True, status
+            assert status['overlayState'] == 'applied', status
+            options = self.config(env)['browser']['camoufoxOptions']
+            assert 'executable_path' not in options, options
+            assert options['humanize'] is True
+            assert pathlib.Path(theirs).read_bytes() == before, 'the user file must never be edited'
+            assert any('executable_path' in line for line in logs), logs
+
+    def test_prefs_state_keeps_a_user_executable_path(self):
+        with tempfile.TemporaryDirectory() as root:
+            profile = self.profile(root)
+            theirs = os.path.join(root, 'user.json')
+            original = {'browser': {'camoufoxOptions': {'executable_path': 'C:/elsewhere/camoufox.exe'}}}
+            pathlib.Path(theirs).write_text(json.dumps(original), encoding='utf-8')
+            env = self.env(
+                root,
+                PLAYWRIGHT_MCP_USER_DATA_DIR=profile,
+                CAMOUFOX_MCP_CONFIG=theirs,
+                STEALTH_PASSWORD_MANAGER_STATE='prefs',
+            )
+            status, _logs = self.passwords(env)
+            assert status['applied'] is True, status
+            assert status['executablePathRemoved'] is False, status
+            options = self.config(env)['browser']['camoufoxOptions']
+            assert options['executable_path'] == 'C:/elsewhere/camoufox.exe', options
+            assert json.loads(pathlib.Path(theirs).read_text(encoding='utf-8')) == original
+
+    # --- the overlay state without the password setting (2.17.0) ----------
+    def test_overlay_state_alone_changes_nothing_in_the_session_config(self):
+        # Search needs no pref: with password_manager off and no user
+        # executable_path, the overlay state must leave the environment alone.
+        with tempfile.TemporaryDirectory() as root:
+            profile = self.profile(root)
+            env = self.env(
+                root,
+                PLAYWRIGHT_MCP_USER_DATA_DIR=profile,
+                STEALTH_CAMOUFOX_OVERLAY_STATE='applied',
+            )
+            status, logs = self.passwords(env)
+            assert status == {'applied': False, 'reason': 'overlay-clean'}, status
+            assert 'CAMOUFOX_MCP_CONFIG' not in env
+            assert not os.path.exists(self.entry.launch_config_path(profile, env))
+            assert logs == [], logs
+
+    def test_overlay_state_strips_a_bypassing_executable_path_without_prefs(self):
+        with tempfile.TemporaryDirectory() as root:
+            profile = self.profile(root)
+            theirs = os.path.join(root, 'user.json')
+            original = {'browser': {'camoufoxOptions': {'executable_path': 'C:/elsewhere/camoufox.exe'}}}
+            pathlib.Path(theirs).write_text(json.dumps(original), encoding='utf-8')
+            env = self.env(
+                root,
+                PLAYWRIGHT_MCP_USER_DATA_DIR=profile,
+                CAMOUFOX_MCP_CONFIG=theirs,
+                STEALTH_CAMOUFOX_OVERLAY_STATE='applied',
+            )
+            status, _logs = self.passwords(env)
+            assert status['applied'] is True, status
+            assert status['executablePathRemoved'] is True, status
+            options = self.config(env)['browser']['camoufoxOptions']
+            assert 'executable_path' not in options, options
+            # No signon pref is merged when password_manager is off.
+            assert 'firefox_user_prefs' not in options, options
+            assert json.loads(pathlib.Path(theirs).read_text(encoding='utf-8')) == original
+
+    def test_only_the_applied_overlay_state_strips_the_executable_path(self):
+        for value in ['blocked', 'stock', '', 'yes']:
+            with tempfile.TemporaryDirectory() as root:
+                profile = self.profile(root)
+                theirs = os.path.join(root, 'user.json')
+                original = {'browser': {'camoufoxOptions': {'executable_path': 'C:/elsewhere/camoufox.exe'}}}
+                pathlib.Path(theirs).write_text(json.dumps(original), encoding='utf-8')
+                env = self.env(
+                    root,
+                    PLAYWRIGHT_MCP_USER_DATA_DIR=profile,
+                    CAMOUFOX_MCP_CONFIG=theirs,
+                    STEALTH_CAMOUFOX_OVERLAY_STATE=value,
+                )
+                status, _logs = self.passwords(env)
+                assert status == {'applied': False, 'reason': 'off'}, (value, status)
+                assert env['CAMOUFOX_MCP_CONFIG'] == theirs
 
     # --- the user's own wrapper config -------------------------------------
     def test_user_json_config_is_merged_and_never_edited(self):
@@ -193,7 +304,7 @@ class Cases:
                 root,
                 PLAYWRIGHT_MCP_USER_DATA_DIR=profile,
                 CAMOUFOX_MCP_CONFIG=theirs,
-                STEALTH_PASSWORD_MANAGER_STATE='applied',
+                STEALTH_PASSWORD_MANAGER_STATE='overlay',
             )
             status, _logs = self.passwords(env)
             assert status['applied'] is True, status
@@ -227,7 +338,7 @@ class Cases:
                 root,
                 PLAYWRIGHT_MCP_USER_DATA_DIR=profile,
                 CAMOUFOX_MCP_CONFIG=theirs,
-                STEALTH_PASSWORD_MANAGER_STATE='applied',
+                STEALTH_PASSWORD_MANAGER_STATE='overlay',
             )
             status, logs = self.passwords(env)
             assert status['applied'] is True, status
@@ -246,7 +357,7 @@ class Cases:
                 root,
                 PLAYWRIGHT_MCP_USER_DATA_DIR=profile,
                 CAMOUFOX_MCP_CONFIG=theirs,
-                STEALTH_PASSWORD_MANAGER_STATE='applied',
+                STEALTH_PASSWORD_MANAGER_STATE='overlay',
             )
             status, logs = self.passwords(env)
             assert status['applied'] is False and status['reason'] == 'config', status
@@ -265,7 +376,7 @@ class Cases:
                 root,
                 PLAYWRIGHT_MCP_USER_DATA_DIR=profile,
                 CAMOUFOX_MCP_CONFIG=theirs,
-                STEALTH_PASSWORD_MANAGER_STATE='applied',
+                STEALTH_PASSWORD_MANAGER_STATE='overlay',
             )
             status, logs = self.passwords(env)
             assert status['applied'] is False and status['reason'] == 'config', status
@@ -278,7 +389,7 @@ class Cases:
             env = self.env(
                 root,
                 PLAYWRIGHT_MCP_USER_DATA_DIR=profile,
-                STEALTH_PASSWORD_MANAGER_STATE='applied',
+                STEALTH_PASSWORD_MANAGER_STATE='overlay',
             )
             original = self.entry._write_config_file
 
@@ -300,7 +411,7 @@ class Cases:
             env = self.env(
                 root,
                 PLAYWRIGHT_MCP_USER_DATA_DIR=profile,
-                STEALTH_PASSWORD_MANAGER_STATE='applied',
+                STEALTH_PASSWORD_MANAGER_STATE='overlay',
             )
             assert self.passwords(env)[0]['applied'] is True
             path = env['CAMOUFOX_MCP_CONFIG']

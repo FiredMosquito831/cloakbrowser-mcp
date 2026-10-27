@@ -18,7 +18,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { applyPingTimeout, pingTimeoutProblemNote } from './lib/ping-timeout.mjs';
-import { applyPasswordManager } from './lib/password-manager.mjs';
+import { applyCamoufoxOverlay } from './lib/password-manager.mjs';
 import { ensurePython, ensureUv, ensureVenv } from './lib/provision.mjs';
 
 const PLUGIN_ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -237,28 +237,46 @@ async function main() {
   ensureBuild(env, paths, build);
   const binary = resolveBinary(env, paths, build);
 
-  // Saved logins (2.15.0). Off by default and byte-identical when off: without a
-  // record from an earlier on start this only reads the setting and returns.
-  // 2.15.1: with the setting on, this build has no readable per-user policy
-  // directory on Windows, so the step records and reports the block and returns
-  // at once: no path lookup, no policy file, no verification browser start and no
-  // pref, so the MCP handshake is never delayed by it. The other platforms keep
-  // their honest refusal. The plugin-owned overlay build is the future route.
-  await applyPasswordManager({
+  // The plugin-owned overlay build (2.17.0) is always on for this engine. It
+  // creates or reuses an overlay under the plugin data directory (hardlinks and
+  // junctions to the build; only `distribution/policies.json` is ours, with the
+  // search block replaced and - only when `password_manager` is on - the two
+  // password values true), verifies once with a short headless start that Firefox
+  // reads it, renames the profile's old `search.json.mozlz4` aside once so the
+  // stock engine list is rebuilt, and sets the state variables the entry point
+  // uses (overlay applied; password prefs only when the password keys are in the
+  // document). Any failure is reported and leaves the stock build in use for this
+  // start; it never stops the server, and a directory this plugin did not write
+  // is never touched.
+  //
+  // The profile is resolved first because the one-time search migration targets
+  // it. applyDefaultProfile only fills in the default when neither `isolated` nor
+  // an explicit user-data-dir is set, so this ordering changes nothing else.
+  applyDefaultProfile(env);
+  const overlay = await applyCamoufoxOverlay({
     env,
     pluginDataDir: dataDir(env),
     binary,
     build,
     python: paths.python,
     bootstrap: path.join(PLUGIN_ROOT, BOOTSTRAP),
+    profileDir:
+      typeof env.PLAYWRIGHT_MCP_USER_DATA_DIR === 'string' && env.PLAYWRIGHT_MCP_USER_DATA_DIR.trim() !== ''
+        ? env.PLAYWRIGHT_MCP_USER_DATA_DIR
+        : null,
+    lease: true,
     log,
   });
 
-  applyDefaultProfile(env);
   applyToolGroups(env);
-  env.CAMOUFOX_EXECUTABLE_PATH = binary;
+  env.CAMOUFOX_EXECUTABLE_PATH =
+    overlay !== null && typeof overlay.executable === 'string' && overlay.executable !== ''
+      ? overlay.executable
+      : binary;
 
-  log(`starting process pinned to build ${build.replace(/^v/, '')}; executable ${binary}`);
+  log(
+    `starting process pinned to build ${build.replace(/^v/, '')}; executable ${env.CAMOUFOX_EXECUTABLE_PATH}`,
+  );
   const entry = path.join(PLUGIN_ROOT, ENTRY);
   const child = spawn(paths.python, ['-I', entry], { stdio: 'inherit', env, windowsHide: true });
 
