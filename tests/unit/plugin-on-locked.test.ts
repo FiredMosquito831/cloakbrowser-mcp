@@ -590,7 +590,12 @@ describe('broker on_locked: a live profile lock', () => {
     workspaceRule: true,
     base: (dataDir, workspace) =>
       path.join(dataDir, 'profiles', 'playwright', profileWorkspaceName(workspace)),
-    options: (dataDir, workspace) => ({ dataDir, isolation: 'workspace', cwd: workspace, engine: 'playwright' }),
+    options: (dataDir, workspace) => ({
+      dataDir,
+      isolation: 'workspace',
+      cwd: workspace,
+      engine: 'playwright',
+    }),
   };
 
   // The sibling mechanism belongs to the engines that may run more than one

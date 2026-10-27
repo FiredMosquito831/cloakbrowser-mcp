@@ -37,7 +37,8 @@ export function toolCacheKey({ engineId, toolProfile, caps }) {
     .update(JSON.stringify({ engineId, toolProfile, caps: isPlainObject(caps) ? caps : {} }))
     .digest('hex')
     .slice(0, KEY_LENGTH);
-  const profile = typeof toolProfile === 'string' && toolProfile.trim() !== '' ? toolProfile.trim() : 'default';
+  const profile =
+    typeof toolProfile === 'string' && toolProfile.trim() !== '' ? toolProfile.trim() : 'default';
   return `${profile}-${digest}`;
 }
 
