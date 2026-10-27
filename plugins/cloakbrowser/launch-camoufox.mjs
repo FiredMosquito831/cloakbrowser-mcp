@@ -239,11 +239,11 @@ async function main() {
 
   // Saved logins (2.15.0). Off by default and byte-identical when off: without a
   // record from an earlier on start this only reads the setting and returns.
-  // When on, it writes the per-user Firefox policy file next to the Camoufox
-  // cache (a copy of the build's own policies with only the two password values
-  // flipped), verifies once that Firefox reads it, and sets the state variable
-  // the entry point uses to merge the four prefs. Any failure is reported and
-  // leaves the setting off for this start; it never stops the server.
+  // 2.15.1: with the setting on, this build has no readable per-user policy
+  // directory on Windows, so the step records and reports the block and returns
+  // at once: no path lookup, no policy file, no verification browser start and no
+  // pref, so the MCP handshake is never delayed by it. The other platforms keep
+  // their honest refusal. The plugin-owned overlay build is the future route.
   await applyPasswordManager({
     env,
     pluginDataDir: dataDir(env),
