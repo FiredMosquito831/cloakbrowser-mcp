@@ -300,6 +300,11 @@ async function toolNames(session: BrokerSession): Promise<string[]> {
   return (list.result?.tools ?? []).map((tool) => tool.name);
 }
 
+function engineErrorText(payload: Record<string, unknown>): string {
+  const value = payload.engineError;
+  return typeof value === 'string' ? value : '';
+}
+
 async function childFacts(session: BrokerSession): Promise<ChildFacts> {
   const response = await session.request('tools/call', {
     name: 'browser_navigate',
@@ -448,7 +453,7 @@ describe('extension path list parsing', () => {
   it('builds one complete sentence for a bad value', () => {
     const root = tempRoot('ext-text-');
     const resolution = extensions.resolveExtensionPaths({ [SETTING_VAR]: path.join(root, 'absent') });
-    const text = extensions.extensionPathsProblemText(resolution.error as ExtensionError);
+    const text = extensions.extensionPathsProblemText(resolution.error!);
     expect(text).toContain('Unpacked extensions: entry 1');
     expect(text).toContain('absolute unpacked-extension directories');
   });
@@ -514,12 +519,8 @@ describe('the engine manifest declares support', () => {
       notes: 'probe',
       extensionPaths: 'yes',
     };
-    expect(registry.validateManifest(manifest, 'probe', ['full'])).toBe(
-      'extensionPaths must be a boolean',
-    );
-    expect(
-      registry.validateManifest({ ...manifest, extensionPaths: true }, 'probe', ['full']),
-    ).toBeNull();
+    expect(registry.validateManifest(manifest, 'probe', ['full'])).toBe('extensionPaths must be a boolean');
+    expect(registry.validateManifest({ ...manifest, extensionPaths: true }, 'probe', ['full'])).toBeNull();
     expect(
       registry.validateManifest({ ...manifest, extensionPaths: undefined }, 'probe', ['full']),
     ).toBeNull();
@@ -614,7 +615,7 @@ describe('broker: a list it cannot honour refuses the start', () => {
   it('names the entry that is not an absolute path and spawns no backend', async () => {
     const dataDir = createRuntime(tempRoot('ext-refuse-relative-'));
     const { caps, state, instructions } = await refused({ dataDir, setting: 'extensions/one' });
-    const sentence = String(caps.engineError ?? '');
+    const sentence = engineErrorText(caps);
     expect(sentence).toContain('Unpacked extensions: entry 1');
     expect(sentence).toContain('is not an absolute path');
     expect(sentence).toContain('The backend was not started.');
@@ -631,7 +632,7 @@ describe('broker: a list it cannot honour refuses the start', () => {
     const root = tempRoot('ext-refuse-missing-');
     const dataDir = createRuntime(root);
     const { caps } = await refused({ dataDir, setting: path.join(root, 'absent') });
-    expect(String(caps.engineError ?? '')).toContain('does not exist');
+    expect(engineErrorText(caps)).toContain('does not exist');
   });
 
   it('names a duplicate entry', async () => {
@@ -642,7 +643,7 @@ describe('broker: a list it cannot honour refuses the start', () => {
       dataDir,
       setting: `${directory},${path.join(directory, '.')}`,
     });
-    expect(String(caps.engineError ?? '')).toContain('repeats entry 1');
+    expect(engineErrorText(caps)).toContain('repeats entry 1');
   });
 
   it('refuses an isolated start, because extensions need a persistent profile', async () => {
@@ -654,8 +655,8 @@ describe('broker: a list it cannot honour refuses the start', () => {
       setting: directory,
       isolation: 'isolated',
     });
-    expect(String(caps.engineError ?? '')).toContain('Unpacked extensions need a persistent browser profile');
-    expect(String(caps.engineError ?? '')).toContain('The backend was not started.');
+    expect(engineErrorText(caps)).toContain('Unpacked extensions need a persistent browser profile');
+    expect(engineErrorText(caps)).toContain('The backend was not started.');
     expect(instructions).toContain('persistent browser profile');
     expect(state.backendPid).toBeNull();
     expect(caps.extensionPaths).toMatchObject({ configured: true, applies: false });
@@ -677,7 +678,7 @@ describe('broker: a list it cannot honour refuses the start', () => {
       setting: directory,
       onLocked: 'isolated',
     });
-    expect(String(caps.engineError ?? '')).toContain('persistent browser profile');
+    expect(engineErrorText(caps)).toContain('persistent browser profile');
     expect(caps.onLocked).toBe('isolated');
     expect(caps.profileSource).toBe('isolated');
   });
@@ -710,7 +711,10 @@ describe('documentation and manifests', () => {
     const { readFileSync } = await import('node:fs');
     const universal = JSON.parse(
       readFileSync(path.join(pluginDir, '.claude-plugin', 'plugin.json'), 'utf8'),
-    ) as { version: string; userConfig: Record<string, { type?: string; default?: unknown; description?: string }> };
+    ) as {
+      version: string;
+      userConfig: Record<string, { type?: string; default?: unknown; description?: string }>;
+    };
     expect(universal.version).toBe('2.18.0');
     const setting = universal.userConfig.extension_paths;
     expect(setting).toBeDefined();

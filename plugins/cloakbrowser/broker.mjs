@@ -704,10 +704,12 @@ if (extensionResolution.configured && !extensionSupported) {
     log(engineError);
   }
 } else if (extensionResolution.configured && extensionIsolated) {
-  extensionNote = `${EXTENSION_PATHS_ISOLATED_REASON} Set Profile isolation (profile_isolation) to shared, ` +
+  extensionNote =
+    `${EXTENSION_PATHS_ISOLATED_REASON} Set Profile isolation (profile_isolation) to shared, ` +
     'or to copy or copy-keep, which keep a persistent profile.';
   if (engineError === null) {
-    engineError = `${EXTENSION_PATHS_ISOLATED_REASON} Set Profile isolation (profile_isolation) to shared, ` +
+    engineError =
+      `${EXTENSION_PATHS_ISOLATED_REASON} Set Profile isolation (profile_isolation) to shared, ` +
       'or to copy or copy-keep, which keep a persistent profile, and restart the MCP server. ' +
       'The backend was not started.';
     log(engineError);
