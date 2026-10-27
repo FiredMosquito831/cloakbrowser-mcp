@@ -556,6 +556,27 @@ export function manifestSingleSeat(manifest) {
   return manifest?.singleSeat === true;
 }
 
+// Optional boolean: whether this engine can load unpacked Chromium extensions
+// from local directories (2.18.0). The cloak engine sets it: its bridge converts
+// the configured directories into --load-extension and
+// --disable-extensions-except for a persistent profile. Every other engine
+// declares nothing, so the setting is inert and reported as not applicable
+// rather than silently applied somewhere it does not work.
+function validateExtensionPaths(manifest) {
+  if (manifest.extensionPaths === undefined) {
+    return null;
+  }
+  if (typeof manifest.extensionPaths !== 'boolean') {
+    return 'extensionPaths must be a boolean';
+  }
+  return null;
+}
+
+// True only for an engine that declares unpacked-extension support.
+export function manifestExtensionPaths(manifest) {
+  return manifest?.extensionPaths === true;
+}
+
 // Optional capability facts. Only the names the broker understands are allowed,
 // so a typo cannot silently disappear from browser_capabilities.
 function validateCapabilities(manifest) {
@@ -775,6 +796,7 @@ export function validateManifest(manifest, expectedId, profileNames, launcherDir
     validateCapabilities,
     validateProfileApplies,
     validateSingleSeat,
+    validateExtensionPaths,
     validateProfileLock,
     validateSystemDependencies,
   ]) {

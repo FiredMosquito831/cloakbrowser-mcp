@@ -108,6 +108,7 @@ const CLOAKBROWSER_SETTINGS = [
   'engine_version',
   'output_dir',
   'allow_unrestricted_file_access',
+  'extension_paths',
 ].sort();
 
 const CAMOUFOX_SETTINGS = [

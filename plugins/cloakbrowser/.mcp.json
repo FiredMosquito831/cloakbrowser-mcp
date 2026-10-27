@@ -11,6 +11,7 @@
       "STEALTH_IDENTITY_MODE": "${user_config.identity_mode}",
       "STEALTH_PING_TIMEOUT_MS": "${user_config.ping_timeout_ms}",
       "STEALTH_PASSWORD_MANAGER": "${user_config.password_manager}",
+      "STEALTH_EXTENSION_PATHS": "${user_config.extension_paths}",
       "CLOAK_PLAYWRIGHT_MCP_PACKAGE": "cloakbrowser-mcp@1.15.1",
       "CAMOUFOX_MCP_PACKAGE": "camoufox-playwright-mcp==0.1.5",
       "CAMOUFOX_BROWSER_BUILD": "v156.0.1-beta.39",

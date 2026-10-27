@@ -22,6 +22,7 @@ import {
   engineChangeHelp,
   firstMissingRequiredEnv,
   loadEngineConfiguration,
+  manifestExtensionPaths,
   manifestProfileApplies,
   manifestSingleSeat,
   manifestSupport,
@@ -62,6 +63,7 @@ import {
   engineLockBlocksStart,
   engineProfileLockFix,
   engineProfileLockMessage,
+  extensionPathsProblemText,
   INVALID_ACCOUNT_HINT,
   ISOLATED_IGNORED_POINTER,
   isCopyIsolation,
@@ -95,6 +97,7 @@ import {
   readSwapRecord,
   redactSecrets,
   releaseProfileLock,
+  resolveExtensionPaths,
   resolveOnLocked,
   resolveProfile,
   resolveProfileIsolation,
@@ -666,6 +669,70 @@ if (engineError === null && profileApplies && profileResolution.profileSource !=
     }
   }
 }
+// --- unpacked extensions (2.18.0) -------------------------------------------
+// An opt-in list of unpacked Chromium extension directories. The setting is
+// resolved here, after the profile preflight, so an isolated start (the setting
+// itself, or an on_locked switch) is already known, and before any copy is
+// prepared, so a refused start copies nothing. The manifest decides whether the
+// active engine can load unpacked extensions at all; an engine that does not
+// declare support reports the setting as not applicable and never receives it,
+// so it can never be applied somewhere it does not work.
+//
+// Refusals are loud and meta-only, exactly like the profile ones: an extension is
+// arbitrary code inside the browser, and a start that silently dropped the list
+// would look like it loaded something it did not. Nothing is ever partially
+// applied: one bad entry refuses the whole list.
+const EXTENSION_PATHS_ISOLATED_REASON =
+  'Unpacked extensions need a persistent browser profile, and this start is isolated ' +
+  '(profile_isolation "isolated", or on_locked "isolated" after a busy profile), so no profile is ' +
+  'created, locked or saved and the configured extension directories cannot be loaded.';
+const extensionResolution = resolveExtensionPaths(process.env);
+if (extensionResolution.problem === 'placeholder') {
+  log(`ignoring unsubstituted extension-paths placeholder: ${String(extensionResolution.raw)}`);
+}
+const extensionSupported = engine !== null && manifestExtensionPaths(engine);
+const extensionIsolated = profileResolution.profileSource === 'isolated';
+let extensionApplies = false;
+let extensionNote = null;
+if (extensionResolution.configured && !extensionSupported) {
+  extensionNote =
+    `The "${selected.id}" engine does not declare unpacked-extension support, so the extension_paths ` +
+    'setting is ignored and no extension path was passed to the backend.';
+} else if (extensionResolution.configured && extensionResolution.error !== null) {
+  if (engineError === null) {
+    engineError = `${extensionPathsProblemText(extensionResolution.error)} The backend was not started.`;
+    log(engineError);
+  }
+} else if (extensionResolution.configured && extensionIsolated) {
+  extensionNote = `${EXTENSION_PATHS_ISOLATED_REASON} Set Profile isolation (profile_isolation) to shared, ` +
+    'or to copy or copy-keep, which keep a persistent profile.';
+  if (engineError === null) {
+    engineError = `${EXTENSION_PATHS_ISOLATED_REASON} Set Profile isolation (profile_isolation) to shared, ` +
+      'or to copy or copy-keep, which keep a persistent profile, and restart the MCP server. ' +
+      'The backend was not started.';
+    log(engineError);
+  }
+} else if (extensionResolution.configured) {
+  extensionApplies = true;
+  const count = extensionResolution.paths.length;
+  log(
+    `unpacked extensions: ${String(count)} director${count === 1 ? 'y' : 'ies'} from the ` +
+      `${extensionResolution.source} will be loaded`,
+  );
+}
+// The facts every payload and the spawn environment read. `paths` is null unless
+// the whole list resolved, so a caller can never pass a partial list on.
+const extensionState = {
+  configured: extensionResolution.configured,
+  supported: extensionSupported,
+  applies: extensionApplies,
+  source: extensionResolution.source,
+  entries: extensionResolution.entries,
+  paths: extensionResolution.paths,
+  error: extensionResolution.error,
+  note: extensionNote,
+};
+
 const profileIgnored = profileIgnoredForStart();
 if (profileIgnored.length > 0) {
   log(profileIgnoredReason(profileIgnored));
@@ -1738,6 +1805,10 @@ const state = {
   // A single-seat hold (2.16.0): a busy profile this server waits for instead of
   // moving aside. Reported only while (or after) such a hold.
   hold: holdState,
+  // Unpacked extensions (2.18.0): the resolved list, whether the active engine
+  // supports it, and why it does not apply when it does not. Only a configured
+  // list adds any payload key, so every other start stays byte-identical.
+  extensions: extensionState,
   proxy: {
     source: proxyResolution.source,
     configured: proxyResolution.configured,
@@ -2690,6 +2761,36 @@ function profileIsolationNoteNow() {
   return state.profile.appliesToEngine ? PROFILE_ISOLATED_POINTER_NOTE : PROFILE_ISOLATED_NATIVE_NOTE;
 }
 
+// --- unpacked-extension reporting (2.18.0) ----------------------------------
+// Additive and only when the setting names something: an unconfigured start gains
+// no key at all, so every payload stays byte-identical to 2.17.0. The paths are
+// the canonical absolute directories the backend receives; a directory path is
+// not a secret and profile directories are already reported. `supported` says
+// whether the active engine can load unpacked extensions at all, `applies` says
+// whether this start will load them, and `note` explains every case where a
+// configured list is not applied — the setting is never silently ignored.
+function extensionReport() {
+  const ext = state.extensions;
+  if (!ext.configured) {
+    return {};
+  }
+  return {
+    extensionPathsSupported: ext.supported,
+    extensionPaths: {
+      configured: true,
+      count: ext.entries === null ? null : ext.entries.length,
+      source: ext.source,
+      applies: ext.applies,
+      // Only a list this start will load is shown: an engine that cannot load it
+      // or an isolated start reports the count and the note instead, so the
+      // directories can never read as "in use" when they are not.
+      ...(ext.applies && ext.paths !== null ? { paths: ext.paths } : {}),
+      ...(ext.error === null ? {} : { error: extensionPathsProblemText(ext.error) }),
+      ...(ext.note === null ? {} : { note: ext.note }),
+    },
+  };
+}
+
 function capabilitiesPayload(clientRoots) {
   const systemDeps = systemDependencyReport();
   const counts = state.toolsListed ? toolCounts() : null;
@@ -2856,6 +2957,11 @@ function capabilitiesPayload(clientRoots) {
     // seeded default, the overlay policy path, and one honest note (blocked
     // overlay or the one-time profile migration). Other engines add no key.
     ...searchEnginesReport(),
+    // Unpacked extensions (2.18.0), additive and only when extension_paths names
+    // something: whether the engine can load them, the count and source, the
+    // canonical directories this start will load, and a note when a configured
+    // list is not applied.
+    ...extensionReport(),
     // Artifact diagnostics, additive and last, so every key above keeps its
     // position and value. serverCwd is the directory both allowlist values fall
     // back to; outputDir is the effective artifact directory (null for an engine
@@ -3007,6 +3113,9 @@ function statusPayload() {
     // Search engines (2.17.0), the same additive camoufox-only group
     // browser_capabilities reports.
     ...searchEnginesReport(),
+    // Unpacked extensions (2.18.0), the same additive group browser_capabilities
+    // reports, so a status read alone shows whether this start loads them.
+    ...extensionReport(),
   };
 }
 
@@ -4048,6 +4157,10 @@ function startBackend() {
       proxyServer: state.proxy.appliedProxy,
       outputDir: OUTPUT_DIR_SOURCE === 'default' ? outputDirState.dir : null,
       isolated: state.profile.isolated,
+      // Unpacked extensions (2.18.0): the canonical absolute directories of a
+      // fully resolved list for an engine that declares support. Null otherwise,
+      // so the variable is not written and the child environment is unchanged.
+      extensionPaths: state.extensions.applies ? state.extensions.paths : null,
     }),
     windowsHide: true,
     detached: false,
