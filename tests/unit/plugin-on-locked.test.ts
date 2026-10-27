@@ -979,6 +979,31 @@ describe('broker on_locked: copy and copy-keep use the sibling base', () => {
     expect(session.stderr()).toContain('so this session uses');
   });
 
+  it('uses the sibling of the pointer-named profile as the base for copy mode', async () => {
+    // The reported real configuration: profile_isolation=copy, a .default pointer
+    // naming the profile "chrome", and that profile held by a live session.
+    const dataDir = createRuntime(tempRoot('on-locked-copy-pointer-'));
+    const profilesDir = path.join(dataDir, 'profiles', 'cloak');
+    mkdirSync(profilesDir, { recursive: true });
+    writeFileSync(path.join(profilesDir, '.default'), 'chrome\n');
+    const base = path.join(profilesDir, 'chrome');
+    seedBase(base);
+    writeLock(base, process.pid);
+    const session = startBroker({ dataDir, isolation: 'copy' });
+    const initialized = await initialize(session);
+    const caps = await capabilities(session);
+    expect(caps.profileSource).toBe('pointer');
+    expect(caps.profileFallback).toMatchObject({ from: base, to: `${base}-2` });
+    const copy = caps.profileCopy as Record<string, unknown>;
+    expect(copy.baseDir).toBe(`${base}-2`);
+    expect(String(copy.sessionDir)).toContain('chrome-2-');
+    expect((copy.baseLock as Record<string, unknown>).heldByThisSession).toBe(true);
+    expect(String(initialized.result?.instructions)).toContain(`${base}-2`);
+    // The pointer-named profile keeps its bytes and its live owner's lock.
+    expect(readFileSync(path.join(base, 'Default', 'Cookies'), 'utf8')).toBe('cookie-bytes');
+    expect(profile.readProfileLock(base)).toMatchObject({ state: 'live', owner: { pid: process.pid } });
+  });
+
   it('swaps the session copy into the sibling base on a clean close (copy-keep)', async () => {
     const dataDir = createRuntime(tempRoot('on-locked-copy-keep-'));
     const base = path.join(dataDir, 'profiles', 'default');
