@@ -1963,11 +1963,6 @@ export function readAccountProxy(file) {
   return { value: parsed.value, error: null, exists: true };
 }
 
-// Hide the credentials of any URL that carries user information. The bridge
-// strips a credentialed proxy from the child environment it builds; the broker
-// must not reintroduce it through a relayed stderr line or a status payload.
-// Ordinary URLs and timestamps do not match. A literal "@" inside a password
-// must be percent-encoded, or redaction stops at the first one.
 // --- unpacked extension paths (2.18.0) --------------------------------------
 // An opt-in list of unpacked Chromium extension directories for the cloak
 // engine. The bridge (cloakbrowser-mcp) reads CLOAK_PLAYWRIGHT_MCP_EXTENSION_PATHS
@@ -2177,6 +2172,11 @@ export function resolveExtensionPaths(env = {}) {
   return { ...base, configured: true, entries, paths, error: null, problem: null };
 }
 
+// Hide the credentials of any URL that carries user information. The bridge
+// strips a credentialed proxy from the child environment it builds; the broker
+// must not reintroduce it through a relayed stderr line or a status payload.
+// Ordinary URLs and timestamps do not match. A literal "@" inside a password
+// must be percent-encoded, or redaction stops at the first one.
 export function redactSecrets(text) {
   if (typeof text !== 'string') {
     return text;
