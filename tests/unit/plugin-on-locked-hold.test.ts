@@ -431,20 +431,20 @@ describe('single-seat hold: recovery', () => {
 
   it('reports a copy that cannot be made when the base frees', async () => {
     const dataDir = createRuntime(tempRoot('seat-recover-fail-'));
-    const base = path.join(dataDir, 'profiles', 'default');
+    // copy-keep refuses a base outside the plugin data directory, and that refusal
+    // is reported identically on every platform. The base starts outside it.
+    const base = path.join(tempRoot('seat-outside-'), 'profile');
     const lockFile = writeLock(base, process.pid);
-    const session = startBroker({ dataDir, isolation: 'copy' });
+    const session = startBroker({ dataDir, isolation: 'copy-keep', profileDir: base });
     await initialize(session);
-    // The base is freed, but it is not a usable directory any more: the deferred
-    // copy refuses loudly instead of starting a session on nothing.
+    expect((await capabilities(session)).hold).toMatchObject({ state: 'waiting' });
     rmSync(lockFile);
-    rmSync(base, { recursive: true, force: true });
-    writeFileSync(base, 'not a directory');
     const response = await callTool(session, 'browser_navigate');
     expect(response.result?.isError).toBe(true);
-    expect(callText(response)).toContain('cannot use the base profile');
+    expect(callText(response)).toContain('inside the plugin data directory');
     const caps = await capabilities(session);
     expect((caps.hold as Record<string, unknown>).state).toBe('failed');
     expect((await status(session)).backendPid).toBeNull();
+    expect(existsSync(path.join(base, 'Default', 'Cookies'))).toBe(false);
   });
 });
