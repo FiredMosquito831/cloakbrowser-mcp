@@ -101,6 +101,7 @@ interface PasswordModule {
   CAMOUFOX_OVERLAY_STATE_BLOCKED: string;
   CAMOUFOX_OVERLAY_STATE_STOCK: string;
   SEARCH_ENGINE_DEFAULT: string;
+  SEARCH_ENGINE_SET: readonly Record<string, string>[];
   SEARCH_ENGINES_POLICY: Record<string, unknown>;
   SEARCH_PROFILE_FILENAME: string;
   SEARCH_MIGRATION_MARKER_FILENAME: string;
@@ -580,10 +581,17 @@ describe('the shared password-manager helpers', () => {
     expect(JSON.stringify(BUILD_POLICY), 'the build document is never mutated').toBe(before);
     expect(managed.policies.PasswordManagerEnabled).toBe(true);
     expect(managed.policies.OfferToSaveLogins).toBe(true);
-    // The shipped block (Remove/Default None/Add) is replaced by exactly the two
-    // documented keys: no engine entries are added and nothing is locked.
-    expect(managed.policies.SearchEngines).toEqual({ Default: 'Google', PreventInstalls: false });
+    // The shipped block (Remove/Default None/Add None) is replaced by exactly the
+    // documented keys: the five stock engines, Google once as the default, no
+    // engine installs blocked and nothing locked. See the comment on
+    // SEARCH_ENGINE_SET for why explicit entries are required in this build.
+    expect(managed.policies.SearchEngines).toEqual({
+      Default: 'Google',
+      PreventInstalls: false,
+      Add: [...library.SEARCH_ENGINE_SET],
+    });
     expect(Object.keys(managed.policies.SearchEngines as object).sort()).toEqual([
+      'Add',
       'Default',
       'PreventInstalls',
     ]);
@@ -593,7 +601,11 @@ describe('the shared password-manager helpers', () => {
         ...BUILD_POLICY.policies,
         PasswordManagerEnabled: true,
         OfferToSaveLogins: true,
-        SearchEngines: { Default: 'Google', PreventInstalls: false },
+        SearchEngines: {
+          Default: 'Google',
+          PreventInstalls: false,
+          Add: [...library.SEARCH_ENGINE_SET],
+        },
       },
     };
     expect(managed).toEqual(expected);
@@ -608,17 +620,20 @@ describe('the shared password-manager helpers', () => {
     );
     // Re-deriving from the same source is stable (idempotent, no drift).
     expect(library.managedPolicy(BUILD_POLICY, { passwordOn: true })).toEqual(managed);
-    // The serialized search subtree is exactly two keys and carries no lock.
+    // The serialized block carries no lock and no suggestion/partner machinery.
     const searchText = JSON.stringify(managed.policies.SearchEngines);
-    expect(searchText).toBe('{"Default":"Google","PreventInstalls":false}');
-    for (const lockKey of ['Locked', 'Allow', 'DefaultPrivate', 'Remove', 'Add']) {
-      expect(searchText).not.toContain(lockKey);
-      expect(managed.policies).not.toHaveProperty(lockKey);
+    for (const lockKey of ['Locked', 'Allow', 'DefaultPrivate', 'SuggestURLTemplate', 'PostData']) {
+      expect(searchText, `${lockKey}`).not.toContain(lockKey);
+      expect(managed.policies, `${lockKey}`).not.toHaveProperty(lockKey);
     }
     // Password off (2.17.0): the search block is still replaced, the password
     // values are untouched.
     const searchOnly = library.managedPolicy(BUILD_POLICY) as { policies: Record<string, unknown> };
-    expect(searchOnly.policies.SearchEngines).toEqual({ Default: 'Google', PreventInstalls: false });
+    expect(searchOnly.policies.SearchEngines).toEqual({
+      Default: 'Google',
+      PreventInstalls: false,
+      Add: [...library.SEARCH_ENGINE_SET],
+    });
     expect(searchOnly.policies.PasswordManagerEnabled).toBe(false);
     expect(searchOnly.policies.OfferToSaveLogins).toBe(false);
     expect(library.managedPolicy({})).toBeNull();
@@ -626,9 +641,43 @@ describe('the shared password-manager helpers', () => {
     expect(library.managedPolicy({ policies: [] })).toBeNull();
   });
 
+  it('ships the five stock engines the build can no longer load itself', () => {
+    expect(library.SEARCH_ENGINE_SET.map((entry: Record<string, string>) => entry.Name)).toEqual([
+      'Google',
+      'DuckDuckGo',
+      'Bing',
+      'Wikipedia (en)',
+      'Perplexity',
+    ]);
+    for (const entry of library.SEARCH_ENGINE_SET as Record<string, string>[]) {
+      expect(entry.Method, `${entry.Name}`).toBe('GET');
+      expect(entry.URLTemplate, `${entry.Name}`).toContain('{searchTerms}');
+      expect(entry.URLTemplate, `${entry.Name}`).toMatch(/^https:\/\//u);
+      expect(Object.keys(entry).sort(), `${entry.Name}`).toEqual([
+        'Description',
+        'Method',
+        'Name',
+        'URLTemplate',
+      ]);
+    }
+    expect((library.SEARCH_ENGINE_SET as Record<string, string>[]).map((entry) => entry.URLTemplate)).toEqual(
+      [
+        'https://www.google.com/search?q={searchTerms}',
+        'https://duckduckgo.com/?q={searchTerms}',
+        'https://www.bing.com/search?q={searchTerms}',
+        'https://en.wikipedia.org/wiki/Special:Search?search={searchTerms}',
+        'https://www.perplexity.ai/search?q={searchTerms}',
+      ],
+    );
+  });
+
   it('decides when the search transform applies and asserts it is lock-free', () => {
     expect(library.SEARCH_ENGINE_DEFAULT).toBe('Google');
-    expect(library.SEARCH_ENGINES_POLICY).toEqual({ Default: 'Google', PreventInstalls: false });
+    expect(library.SEARCH_ENGINES_POLICY).toEqual({
+      Default: 'Google',
+      PreventInstalls: false,
+      Add: [...library.SEARCH_ENGINE_SET],
+    });
     expect(library.searchPolicyApplies(BUILD_POLICY)).toBe(true);
     expect(library.searchPolicyApplies({ policies: { SearchEngines: {} } })).toBe(true);
     expect(library.searchPolicyApplies({ policies: {} })).toBe(false);
@@ -659,7 +708,11 @@ describe('the shared password-manager helpers', () => {
     expect(probe.policies.Permissions).toEqual({ Location: { BlockNewRequests: true } });
     expect(probe.policies.PasswordManagerEnabled).toBe(true);
     expect(probe.policies.OfferToSaveLogins).toBe(true);
-    expect(probe.policies.SearchEngines).toEqual({ Default: 'Google', PreventInstalls: false });
+    expect(probe.policies.SearchEngines).toEqual({
+      Default: 'Google',
+      PreventInstalls: false,
+      Add: [...library.SEARCH_ENGINE_SET],
+    });
     expect(managed.policies.Permissions).toBeUndefined();
     const searchOnly = library.probePolicy(library.managedPolicy(BUILD_POLICY)) as {
       policies: Record<string, unknown>;
@@ -1313,6 +1366,15 @@ describe('applyPasswordManager', () => {
       });
       expect(readFileSync(overlays.overlayPolicyPath(fixture.target), 'utf8')).toContain(
         '"Default": "Google"',
+      );
+      for (const name of ['Google', 'DuckDuckGo', 'Bing', 'Wikipedia (en)', 'Perplexity']) {
+        expect(
+          readFileSync(overlays.overlayPolicyPath(fixture.target), 'utf8'),
+          `policy names ${name}`,
+        ).toContain(`"Name": "${name}"`);
+      }
+      expect(readFileSync(overlays.overlayPolicyPath(fixture.target), 'utf8')).toContain(
+        '"PreventInstalls": false',
       );
       expect(readFileSync(overlays.overlayPolicyPath(fixture.target), 'utf8')).toContain(
         '"PasswordManagerEnabled": false',

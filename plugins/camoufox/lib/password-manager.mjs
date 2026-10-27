@@ -99,15 +99,57 @@ export const CAMOUFOX_OVERLAY_STATE_BLOCKED = 'blocked';
 export const CAMOUFOX_OVERLAY_STATE_STOCK = 'stock';
 
 // The search transform (2.17.0). The build policy hides every stock engine and
-// points the default at a policy-only dummy; replacing the whole block with this
-// minimal object restores the stock list, seeds Google as the default once (the
-// policy language has no lock: the user's later choice persists) and leaves the
-// Add-engine UI usable (USER DECISION D2). No explicit engine entries are added,
-// so the build's own per-locale set stays intact.
+// points the default at a policy-only dummy, and this Camoufox build hard-disables
+// its own app-provided engine configuration: `SearchEngineSelector` in
+// `browser/omni.ja` returns one inert `None` engine instead of reading the
+// packaged search-config-v2 (the source comment says "Camoufox ships no search
+// engines"), and `services.settings.server` is empty. Dropping `Remove`/`Add`
+// alone therefore restores nothing (measured 2026-10-27: a fresh profile on the
+// overlay still held only `None`). The one offline route the build supports is
+// the policy `Add` list, so the transform supplies the same five engines the
+// build's packaged configuration defines for its default environment (`en-US`,
+// region unknown), with each engine's public search URL and no partner codes
+// (the packaged variants carry partner parameters this build can never load;
+// inventing values would be worse). Google is seeded as the default once - the
+// policy language has no lock, so the user's later choice persists - and
+// `PreventInstalls: false` keeps the Add-engine UI usable (USER DECISION D2).
 export const SEARCH_ENGINE_DEFAULT = 'Google';
+export const SEARCH_ENGINE_SET = Object.freeze([
+  Object.freeze({
+    Name: 'Google',
+    Description: 'Google Search',
+    Method: 'GET',
+    URLTemplate: 'https://www.google.com/search?q={searchTerms}',
+  }),
+  Object.freeze({
+    Name: 'DuckDuckGo',
+    Description: 'DuckDuckGo Search',
+    Method: 'GET',
+    URLTemplate: 'https://duckduckgo.com/?q={searchTerms}',
+  }),
+  Object.freeze({
+    Name: 'Bing',
+    Description: 'Bing Search',
+    Method: 'GET',
+    URLTemplate: 'https://www.bing.com/search?q={searchTerms}',
+  }),
+  Object.freeze({
+    Name: 'Wikipedia (en)',
+    Description: 'Wikipedia (en)',
+    Method: 'GET',
+    URLTemplate: 'https://en.wikipedia.org/wiki/Special:Search?search={searchTerms}',
+  }),
+  Object.freeze({
+    Name: 'Perplexity',
+    Description: 'Perplexity',
+    Method: 'GET',
+    URLTemplate: 'https://www.perplexity.ai/search?q={searchTerms}',
+  }),
+]);
 export const SEARCH_ENGINES_POLICY = Object.freeze({
   Default: SEARCH_ENGINE_DEFAULT,
   PreventInstalls: false,
+  Add: SEARCH_ENGINE_SET,
 });
 // The profile files the one-time search migration touches. The backup keeps the
 // original bytes beside the profile file; nothing is ever deleted.
@@ -222,7 +264,7 @@ export function managedPolicy(buildPolicy, options = {}) {
   }
   const managed = cloneJson(buildPolicy);
   if (isPlainObject(managed.policies.SearchEngines)) {
-    managed.policies.SearchEngines = { ...SEARCH_ENGINES_POLICY };
+    managed.policies.SearchEngines = cloneJson(SEARCH_ENGINES_POLICY);
   }
   if (passwordOn) {
     managed.policies.PasswordManagerEnabled = true;
@@ -242,17 +284,17 @@ export function searchPolicyApplies(buildPolicy) {
 }
 
 // The policy language has no lock for `SearchEngines` in this build (no `Locked`
-// key, no `setAndLockPref`), so the managed block must stay exactly these two
-// keys: `Default` is a one-time seed per value change and the user's later choice
-// persists. This guard is what a test asserts; returning the reason keeps the
-// failure honest.
+// key, no `setAndLockPref`), so the managed block must stay exactly the documented
+// keys and the engine entries must stay plain: `Default` is a one-time seed per
+// value change and the user's later choice persists. This guard is what a test
+// asserts; returning the reason keeps the failure honest.
 export function searchPolicyLockFree(managed) {
   const block = isPlainObject(managed?.policies) ? managed.policies.SearchEngines : undefined;
   if (!isPlainObject(block)) {
     return { ok: false, reason: 'the managed document has no SearchEngines object' };
   }
   const keys = Object.keys(block).sort();
-  if (keys.join(',') !== 'Default,PreventInstalls') {
+  if (keys.join(',') !== 'Add,Default,PreventInstalls') {
     return { ok: false, reason: `unexpected SearchEngines keys: ${keys.join(',')}` };
   }
   if (block.Default !== SEARCH_ENGINE_DEFAULT) {
@@ -260,6 +302,17 @@ export function searchPolicyLockFree(managed) {
   }
   if (typeof block.PreventInstalls !== 'boolean') {
     return { ok: false, reason: 'PreventInstalls is not a boolean' };
+  }
+  if (!Array.isArray(block.Add) || block.Add.length !== SEARCH_ENGINE_SET.length) {
+    return { ok: false, reason: 'the Add list is not the documented engine set' };
+  }
+  for (const entry of block.Add) {
+    if (!isPlainObject(entry) || typeof entry.Name !== 'string' || typeof entry.URLTemplate !== 'string') {
+      return { ok: false, reason: 'an Add entry is missing Name or URLTemplate' };
+    }
+    if ('Locked' in entry || 'SuggestURLTemplate' in entry || 'PostData' in entry) {
+      return { ok: false, reason: `an Add entry carries unexpected keys: ${Object.keys(entry).join(',')}` };
+    }
   }
   return { ok: true, reason: null };
 }
