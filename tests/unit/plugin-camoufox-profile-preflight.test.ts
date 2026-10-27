@@ -855,6 +855,7 @@ function createLockPlugin(root: string): string {
     'profile.mjs',
     'provision.mjs',
     'surface.mjs',
+    'tool-cache.mjs',
   ]) {
     copyFileSync(path.join(pluginDir, 'lib', file), path.join(lib, file));
   }

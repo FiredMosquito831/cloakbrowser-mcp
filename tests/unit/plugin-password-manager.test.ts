@@ -941,6 +941,7 @@ function createStubPlugin(root: string): string {
     'profile.mjs',
     'provision.mjs',
     'surface.mjs',
+    'tool-cache.mjs',
   ]) {
     copyFileSync(path.join(universalDir, 'lib', file), path.join(lib, file));
   }

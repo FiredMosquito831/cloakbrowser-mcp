@@ -369,6 +369,7 @@ function createScratchPlugin(root: string): string {
     'profile.mjs',
     'provision.mjs',
     'surface.mjs',
+    'tool-cache.mjs',
   ]) {
     copyFileSync(path.join(pluginDir, 'lib', file), path.join(lib, file));
   }
@@ -587,28 +588,32 @@ describe('broker on_locked: a live profile lock', () => {
   const workspaceSource: Source = {
     name: 'workspace',
     workspaceRule: true,
-    base: (dataDir, workspace) => path.join(dataDir, 'profiles', 'cloak', profileWorkspaceName(workspace)),
-    options: (dataDir, workspace) => ({ dataDir, isolation: 'workspace', cwd: workspace }),
+    base: (dataDir, workspace) =>
+      path.join(dataDir, 'profiles', 'playwright', profileWorkspaceName(workspace)),
+    options: (dataDir, workspace) => ({ dataDir, isolation: 'workspace', cwd: workspace, engine: 'playwright' }),
   };
 
+  // The sibling mechanism belongs to the engines that may run more than one
+  // browser (playwright, camoufox). The cloak engine declares one seat and holds
+  // instead, which the hold suite covers.
   const sources: Source[] = [
     {
       name: 'default',
       base: (dataDir) => path.join(dataDir, 'profiles', 'default'),
-      options: (dataDir) => ({ dataDir }),
+      options: (dataDir) => ({ dataDir, engine: 'playwright' }),
     },
     {
       name: 'account',
-      base: (dataDir) => path.join(dataDir, 'profiles', 'cloak', 'alice'),
-      options: (dataDir) => ({ dataDir, account: 'alice' }),
+      base: (dataDir) => path.join(dataDir, 'profiles', 'playwright', 'alice'),
+      options: (dataDir) => ({ dataDir, account: 'alice', engine: 'playwright' }),
     },
     {
       name: 'pointer',
-      base: (dataDir) => path.join(dataDir, 'profiles', 'cloak', 'work'),
+      base: (dataDir) => path.join(dataDir, 'profiles', 'playwright', 'work'),
       options: (dataDir) => {
-        mkdirSync(path.join(dataDir, 'profiles', 'cloak'), { recursive: true });
-        writeFileSync(path.join(dataDir, 'profiles', 'cloak', '.default'), 'work\n');
-        return { dataDir };
+        mkdirSync(path.join(dataDir, 'profiles', 'playwright'), { recursive: true });
+        writeFileSync(path.join(dataDir, 'profiles', 'playwright', '.default'), 'work\n');
+        return { dataDir, engine: 'playwright' };
       },
     },
     workspaceSource,
@@ -758,6 +763,7 @@ describe('broker on_locked: a live profile lock', () => {
       writeLock(explicit, process.pid);
       const session = startBroker({
         dataDir,
+        engine: 'playwright',
         profileDir: explicit,
         ...(policy === '' ? {} : { onLocked: policy }),
       });
@@ -839,7 +845,7 @@ describe('broker on_locked: sibling selection and exhaustion', () => {
     const base = path.join(dataDir, 'profiles', 'default');
     writeLock(base, process.pid);
     writeLock(`${base}-2`, DEAD_PID);
-    const session = startBroker({ dataDir });
+    const session = startBroker({ dataDir, engine: 'playwright' });
     await initialize(session);
     const caps = await capabilities(session);
     expect(caps.profileFallback).toMatchObject({ from: base, to: `${base}-2` });
@@ -852,7 +858,7 @@ describe('broker on_locked: sibling selection and exhaustion', () => {
     for (const suffix of ['', '-2', '-3', '-4', '-5']) {
       writeLock(`${base}${suffix}`, process.pid);
     }
-    const session = startBroker({ dataDir });
+    const session = startBroker({ dataDir, engine: 'playwright' });
     const initialized = await initialize(session);
     const instructions = initialized.result?.instructions ?? '';
     expect(instructions).toContain('The numbered sibling profiles (suffixes 2 to 5) are also in use.');
@@ -868,7 +874,7 @@ describe('broker on_locked: sibling selection and exhaustion', () => {
     const dataDir = createRuntime(tempRoot('on-locked-unknown-'));
     const base = path.join(dataDir, 'profiles', 'default');
     writeLock(base, process.pid);
-    const session = startBroker({ dataDir, onLocked: 'per-window' });
+    const session = startBroker({ dataDir, engine: 'playwright', onLocked: 'per-window' });
     await initialize(session);
     const caps = await capabilities(session);
     expect(caps.onLocked).toBe('fallback');
@@ -962,7 +968,7 @@ describe('broker on_locked: copy and copy-keep use the sibling base', () => {
     const base = path.join(dataDir, 'profiles', 'default');
     seedBase(base);
     writeLock(base, process.pid);
-    const session = startBroker({ dataDir, isolation: 'copy' });
+    const session = startBroker({ dataDir, isolation: 'copy', engine: 'playwright' });
     const initialized = await initialize(session);
     expect(initialized.result?.instructions).toContain(`${base}-2`);
     const caps = await capabilities(session);
@@ -970,7 +976,7 @@ describe('broker on_locked: copy and copy-keep use the sibling base', () => {
     expect(caps.profileFallback).toMatchObject({ from: base, to: `${base}-2` });
     const copy = caps.profileCopy as Record<string, unknown>;
     expect(copy).toMatchObject({ baseDir: `${base}-2` });
-    expect(String(copy.sessionDir)).toContain(path.join('profiles', 'cloak', '.sessions'));
+    expect(String(copy.sessionDir)).toContain(path.join('profiles', 'playwright', '.sessions'));
     expect(String(copy.sessionDir)).toContain('default-2-');
     expect((copy.baseLock as Record<string, unknown>).heldByThisSession).toBe(true);
     // The live base keeps its bytes and its owner's lock.
@@ -980,16 +986,17 @@ describe('broker on_locked: copy and copy-keep use the sibling base', () => {
   });
 
   it('uses the sibling of the pointer-named profile as the base for copy mode', async () => {
-    // The reported real configuration: profile_isolation=copy, a .default pointer
-    // naming the profile "chrome", and that profile held by a live session.
+    // The reported real configuration, on a multi-seat engine (the cloak engine
+    // holds instead; the hold suite covers that): profile_isolation=copy, a
+    // .default pointer naming "chrome", and that profile held by a live session.
     const dataDir = createRuntime(tempRoot('on-locked-copy-pointer-'));
-    const profilesDir = path.join(dataDir, 'profiles', 'cloak');
+    const profilesDir = path.join(dataDir, 'profiles', 'playwright');
     mkdirSync(profilesDir, { recursive: true });
     writeFileSync(path.join(profilesDir, '.default'), 'chrome\n');
     const base = path.join(profilesDir, 'chrome');
     seedBase(base);
     writeLock(base, process.pid);
-    const session = startBroker({ dataDir, isolation: 'copy' });
+    const session = startBroker({ dataDir, isolation: 'copy', engine: 'playwright' });
     const initialized = await initialize(session);
     const caps = await capabilities(session);
     expect(caps.profileSource).toBe('pointer');
@@ -1009,7 +1016,7 @@ describe('broker on_locked: copy and copy-keep use the sibling base', () => {
     const base = path.join(dataDir, 'profiles', 'default');
     seedBase(base);
     writeLock(base, process.pid);
-    const session = startBroker({ dataDir, isolation: 'copy-keep' });
+    const session = startBroker({ dataDir, isolation: 'copy-keep', engine: 'playwright' });
     await initialize(session);
     const caps = await capabilities(session);
     expect(caps.profileFallback).toMatchObject({ from: base, to: `${base}-2` });
@@ -1022,7 +1029,7 @@ describe('broker on_locked: copy and copy-keep use the sibling base', () => {
     expect(readFileSync(path.join(base, 'Default', 'Cookies'), 'utf8')).toBe('cookie-bytes');
     expect(existsSync(`${base}-2`)).toBe(true);
     const record = JSON.parse(
-      readFileSync(path.join(dataDir, 'profiles', 'cloak', '.last-swap.json'), 'utf8'),
+      readFileSync(path.join(dataDir, 'profiles', 'playwright', '.last-swap.json'), 'utf8'),
     ) as { state: string; baseDir: string; previousDir: string };
     expect(record.state).toBe('swapped');
     expect(record.baseDir).toBe(`${base}-2`);
@@ -1071,10 +1078,10 @@ describe('broker on_locked: engines and isolation that cannot use it', () => {
 describe('broker on_locked: additional guards and edge paths', () => {
   it('keeps the base profile .proxy file when it moves to a sibling', async () => {
     const dataDir = createRuntime(tempRoot('on-locked-proxy-'));
-    const base = path.join(dataDir, 'profiles', 'cloak', 'alice');
+    const base = path.join(dataDir, 'profiles', 'playwright', 'alice');
     writeLock(base, process.pid);
-    writeFileSync(path.join(dataDir, 'profiles', 'cloak', 'alice.proxy'), 'http://proxy.example:8080\n');
-    const session = startBroker({ dataDir, account: 'alice' });
+    writeFileSync(path.join(dataDir, 'profiles', 'playwright', 'alice.proxy'), 'http://proxy.example:8080\n');
+    const session = startBroker({ dataDir, account: 'alice', engine: 'playwright' });
     await initialize(session);
     const caps = await capabilities(session);
     expect(caps.profileFallback).toMatchObject({ from: base, to: `${base}-2` });

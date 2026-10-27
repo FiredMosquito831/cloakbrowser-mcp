@@ -23,6 +23,7 @@ import {
   firstMissingRequiredEnv,
   loadEngineConfiguration,
   manifestProfileApplies,
+  manifestSingleSeat,
   manifestSupport,
   portableToolNames,
   profileAllows,
@@ -44,6 +45,7 @@ import {
   sha256File,
 } from './lib/password-manager.mjs';
 import { PING_TIMEOUT_ENGINE_ID, pingTimeoutProblemNote, resolvePingTimeout } from './lib/ping-timeout.mjs';
+import { readToolCache, toolCacheKey, toolCachePath, writeToolCache } from './lib/tool-cache.mjs';
 import {
   accountNameError,
   accountProxyPath,
@@ -313,6 +315,11 @@ const onLocked = onLockedResolution.mode;
 // An engine that owns its profile elsewhere, or attaches to one, declares
 // profileApplies: false; the whole profile model is inert for it.
 const profileApplies = engine !== null && manifestProfileApplies(engine);
+// An engine that declares one concurrent browser seat (the free CloakBrowser
+// licence) cannot run a second browser on a sibling profile: a busy profile is
+// held and retried instead (2.16.0). The rule is the manifest's, not an engine
+// id's, and it is inert for every other engine.
+const singleSeat = engine !== null && manifestSingleSeat(engine);
 // The mode itself, before the engine's profileApplies says whether it can act.
 const isolatedMode = profileIsolation.mode === 'isolated';
 // Both copy modes share everything except what a clean shutdown does with the
@@ -444,6 +451,63 @@ let onLockedIsolated = false;
 // is configuration, not identity) and a fresh sibling has no file of its own. The
 // workspace rule keeps reading the sibling's own file, as it always has.
 let onLockedFallbackBase = null;
+// --- single-seat hold (2.16.0) ----------------------------------------------
+// An engine that declares one concurrent browser seat cannot start a second
+// browser on a sibling profile, so a busy profile is not moved aside: the server
+// stays up, serves its cached tool list, answers tool calls with an isError that
+// names the owner, and re-runs this preflight on every call. When the profile is
+// free the backend starts, the client's handshake is replayed to it, the
+// triggering call is forwarded, and the client is told to re-list its tools.
+// Nothing is created, locked or deleted while waiting.
+const holdState = {
+  active: false,
+  // "waiting" while held, "recovered" after the backend started, "failed" when
+  // the recovery start itself could not proceed (a copy that could not be made).
+  state: null,
+  profileDir: null,
+  owner: null,
+  attempts: 0,
+  recoveredAt: null,
+  reason: null,
+  // { source: 'cache' | 'none', path, savedAt, error } once a held list is served.
+  cache: null,
+  // The client's own lines to replay into the backend on recovery. Only the
+  // handshake is kept: every other line was answered by the broker already.
+  initializeLine: null,
+  initializedLine: null,
+  // True while the handshake still has to be replayed into the backend.
+  handshakePending: false,
+};
+
+function holdOwnerText(owner) {
+  if (owner === null || typeof owner !== 'object' || typeof owner.pid !== 'number') {
+    return 'another process';
+  }
+  return `pid ${owner.pid}${typeof owner.createdAt === 'string' ? `, started ${owner.createdAt}` : ''}`;
+}
+
+function holdReasonText(profileDir, owner) {
+  return (
+    `The ${selected.id} browser profile ${profileDir} is already in use (${holdOwnerText(owner)}). ` +
+    'This session keeps its tool list and retries automatically on the next tool call, so close the ' +
+    'session or browser that owns the profile and call a tool again; no restart is needed.'
+  );
+}
+
+function beginHold(profileDir, lock, engineLock) {
+  holdState.active = true;
+  holdState.state = 'waiting';
+  holdState.profileDir = profileDir;
+  holdState.owner = lock?.owner ?? null;
+  holdState.reason = holdReasonText(profileDir, holdState.owner);
+  log(holdState.reason);
+  if (lock !== null) {
+    profileLock = { ...lock, fix: null };
+  }
+  if (engineLock !== null) {
+    engineProfileLock = { ...engineLock, fix: null };
+  }
+}
 if (engineError === null && profileApplies && profileResolution.profileSource !== 'isolated') {
   const lockDir = effectiveProfileDir(profileResolution);
   if (lockDir !== null) {
@@ -469,9 +533,23 @@ if (engineError === null && profileApplies && profileResolution.profileSource !=
       onLockedIsolated = true;
       profileFallback = { from: lockDir, to: null, reason: profileOnLockedIsolatedReason(blocking) };
       log(profileFallback.reason);
+    } else if ((bridgeBlocks || engineBlocks) && onLocked === 'fallback' && singleSeat) {
+      // One concurrent browser seat: a sibling profile would only fail at the
+      // first browser action, so this start holds the profile and retries. It
+      // applies to a plugin-managed profile and to an explicit profile_dir alike:
+      // a hold creates and moves nothing, which is exactly why the sibling rule
+      // excludes an explicit path.
+      beginHold(lockDir, bridgeBlocks ? lock : null, bridgeBlocks ? null : engineOwnerLock);
     } else if (bridgeBlocks) {
       const workspaceProfile =
-        profileIsolation.mode === 'workspace' && profileResolution.profileSource === 'workspace';
+        !singleSeat &&
+        profileIsolation.mode === 'workspace' &&
+        profileResolution.profileSource === 'workspace'
+          ? true
+          : false;
+      // (A single-seat engine never gets a sibling of any kind: a workspace
+      // sibling is a second browser it cannot run, so the workspace rule is
+      // skipped for it under every policy and `block` stops the start instead.)
       const fallbackKind = workspaceProfile ? 'workspace' : 'on-locked';
       const wantsFallback = workspaceProfile || (onLocked === 'fallback' && pluginManaged);
       // A sibling is free only when both of its locks are free. The workspace rule
@@ -522,7 +600,13 @@ if (engineError === null && profileApplies && profileResolution.profileSource !=
     // (only when no fallback has happened yet, so at most one switch per start).
     // The file is never written, moved or deleted; a stale one is reported and
     // allowed.
-    if (!onLockedIsolated && engineError === null && engine !== null && engine.profileLock !== undefined) {
+    if (
+      !onLockedIsolated &&
+      !holdState.active &&
+      engineError === null &&
+      engine !== null &&
+      engine.profileLock !== undefined
+    ) {
       let engineOwnerLockNow =
         engineLockDir === lockDir && engineOwnerLock !== null
           ? engineOwnerLock
@@ -802,8 +886,9 @@ function prepareCopySession() {
 }
 // on_locked=isolated (2.16.0) before a copy: the busy base turned this start
 // into an isolated one, so there is nothing to copy and no profile to hold. The
-// switch is reported by profileFallback and onLocked on every surface.
-if (copyMode && engineError === null && profileApplies && !onLockedIsolated) {
+// switch is reported by profileFallback and onLocked on every surface. A held
+// start (single-seat engine) makes its copy at recovery, when the base is free.
+if (copyMode && engineError === null && profileApplies && !onLockedIsolated && !holdState.active) {
   copySession = prepareCopySession();
 }
 
@@ -1496,6 +1581,9 @@ const state = {
   // Device identity (2.14.0): the resolved mode and the file this start would
   // use. The created-at value and corruption notes are read by identityReport().
   identity: identityState,
+  // A single-seat hold (2.16.0): a busy profile this server waits for instead of
+  // moving aside. Reported only while (or after) such a hold.
+  hold: holdState,
   proxy: {
     source: proxyResolution.source,
     configured: proxyResolution.configured,
@@ -1534,7 +1622,7 @@ const state = {
   systemDependencyMissing: false,
   shuttingDown: false,
   backend: {
-    state: engineError === null ? 'idle' : 'failed',
+    state: engineError === null ? (holdState.active ? 'waiting-for-profile' : 'idle') : 'failed',
     pid: null,
     exitCode: null,
     exitSignal: null,
@@ -1611,6 +1699,12 @@ function backendDescription() {
   if (state.engineError !== null) {
     return `backend unavailable: ${state.engineError}`;
   }
+  if (state.hold.active) {
+    return (
+      `backend is waiting for the browser profile (${state.hold.profileDir} is in use by ` +
+      `${holdOwnerText(state.hold.owner)}; this session retries on the next tool call)`
+    );
+  }
   if (state.backend.state === 'failed' || state.backend.state === 'exited') {
     return `backend is not running (${state.backend.state})${state.lastError === null ? '' : `: ${state.lastError}`}`;
   }
@@ -1621,6 +1715,275 @@ function backendDescription() {
     return 'backend is still starting (the MCP handshake has not completed)';
   }
   return 'backend is running';
+}
+
+// --- single-seat hold: cache, recovery and replay (2.16.0) ------------------
+// The parts that need the live state: serving the cached tool list while the
+// profile is held, re-running the preflight on a tool call, replaying the
+// client's handshake into the recovered backend, and telling the client its tool
+// list is authoritative again. Every write here is local to the plugin data
+// directory; nothing touches the busy profile.
+
+// Everything that shapes the backend's tool list, folded into the cache key: the
+// seven group switches, the MCP package pin and the broker version.
+function toolCacheCaps() {
+  const group = (name) => {
+    const value = process.env[name];
+    return typeof value === 'string' ? value.trim().toLowerCase() === 'true' : null;
+  };
+  return {
+    groups: {
+      vision: group('CLOAK_TOOL_GROUP_VISION'),
+      pdf: group('CLOAK_TOOL_GROUP_PDF'),
+      devtools: group('CLOAK_TOOL_GROUP_DEVTOOLS'),
+      storage: group('CLOAK_TOOL_GROUP_STORAGE'),
+      network: group('CLOAK_TOOL_GROUP_NETWORK'),
+      testing: group('CLOAK_TOOL_GROUP_TESTING'),
+      config: group('CLOAK_TOOL_GROUP_CONFIG'),
+    },
+    packagePin:
+      typeof process.env.CLOAK_PLAYWRIGHT_MCP_PACKAGE === 'string'
+        ? process.env.CLOAK_PLAYWRIGHT_MCP_PACKAGE
+        : null,
+    brokerVersion: BROKER_VERSION,
+  };
+}
+
+function toolCacheFile() {
+  return toolCachePath(
+    state.engineId,
+    PLUGIN_DATA_DIR,
+    toolCacheKey({ engineId: state.engineId, toolProfile: state.toolProfile, caps: toolCacheCaps() }),
+  );
+}
+
+// Write the backend's list after a successful tools/list. Only an engine that can
+// be held needs it, so every other engine writes nothing new.
+function saveToolCache() {
+  if (!singleSeat || state.native) {
+    return;
+  }
+  const result = writeToolCache(toolCacheFile(), {
+    engineId: state.engineId,
+    toolProfile: state.toolProfile,
+    caps: toolCacheCaps(),
+    tools: state.backendTools,
+  });
+  if (!result.written) {
+    log(`cannot cache the tool list: ${result.error}`);
+  }
+}
+
+// Load the cached backend list once per held start. The cache holds the
+// backend's own tool objects; the manifest → profile → disabled filter runs on
+// read, so a changed profile or disabled list is never served stale.
+function ensureHeldToolList() {
+  if (state.hold.cache !== null) {
+    return state.hold.cache;
+  }
+  const file = toolCacheFile();
+  const read = readToolCache(file);
+  if (read.tools === null) {
+    state.hold.cache = { source: 'none', path: file, savedAt: null, error: read.error };
+    log(
+      `on_locked hold: no cached tool list (${read.error}); the broker meta-tools answer until the ` +
+        'profile is free and a tool call recovers the backend',
+    );
+    return state.hold.cache;
+  }
+  state.backendTools = read.tools;
+  state.toolsListed = true;
+  state.hold.cache = { source: 'cache', path: file, savedAt: read.savedAt, error: null };
+  log(`on_locked hold: serving ${read.tools.length} cached backend tools from ${file}`);
+  return state.hold.cache;
+}
+
+// While held, the client keeps its tool list: the cached backend tools through
+// the usual filters, or the broker meta-tools when no cache exists yet.
+function sendHeldToolList(id, cursor) {
+  const cache = ensureHeldToolList();
+  if (cache.source === 'none') {
+    sendMetaOnlyList(id, cursor);
+    return;
+  }
+  const addMeta = cursor === undefined || cursor === null || cursor === '';
+  const tools = filterTools(state.backendTools, addMeta);
+  state.lastExposedCount = tools.length;
+  sendResult(id, { tools });
+}
+
+// Re-read both locks for the held profile. The bridge remains the authority; this
+// only decides whether a recovery start is worth trying.
+function holdStillBlocked() {
+  const dir = state.hold.profileDir;
+  const lock = readProfileLock(dir);
+  if (lockBlocksStart(lock)) {
+    return { blocked: true, lock, engineLock: null };
+  }
+  if (state.engine !== null && state.engine.profileLock !== undefined) {
+    const engineLock = readEngineProfileLock(dir, state.engine.profileLock);
+    if (engineLockBlocksStart(engineLock)) {
+      return { blocked: true, lock: null, engineLock };
+    }
+  }
+  return { blocked: false, lock, engineLock: null };
+}
+
+// Give the recovered backend the handshake the broker answered on its behalf.
+// The response is consumed (marked replay) and never relayed: the client already
+// has its initialize answer.
+function replayHeldHandshake() {
+  state.hold.handshakePending = false;
+  const lines = [state.hold.initializeLine, state.hold.initializedLine];
+  state.hold.initializeLine = null;
+  state.hold.initializedLine = null;
+  for (const line of lines) {
+    if (typeof line !== 'string') {
+      continue;
+    }
+    let message;
+    try {
+      message = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (message === null || typeof message !== 'object') {
+      continue;
+    }
+    if (message.method === 'initialize' && message.id !== undefined && message.id !== null) {
+      state.pendingRequests.set(message.id, {
+        method: 'initialize',
+        cursor: undefined,
+        sentAt: Date.now(),
+        replay: true,
+      });
+    }
+    forwardToBackend(line);
+  }
+}
+
+function notifyToolsListChanged() {
+  writeMessage({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' });
+}
+
+// The copy a copy-mode session owed: it was skipped while the base was busy, so
+// it is made now, before the backend starts.
+function prepareCopySessionAfterHold() {
+  if (!copyMode || !profileApplies || onLockedIsolated || copySession !== null) {
+    return;
+  }
+  const prepared = prepareCopySession();
+  if (prepared !== null) {
+    copySession = prepared;
+    state.profile.copy = prepared;
+    state.profile.dir = prepared.sessionDir;
+    return;
+  }
+  // prepareCopySession reports a refusal through the module's engineError; the
+  // live state was built before it ran, so carry the refusal into it.
+  if (engineError !== null) {
+    state.engineError = engineError;
+    state.lastError = state.lastError === null ? engineError : state.lastError;
+  }
+}
+
+// One recovery attempt per tool call. Returns true when the backend is running
+// (or the call was queued behind the artifact-directory resolution) and the call
+// must not be answered with an error.
+let holdResolutionPending = false;
+
+function attemptHoldRecovery(rawLine) {
+  state.hold.attempts += 1;
+  const check = holdStillBlocked();
+  if (check.blocked) {
+    state.hold.owner = check.lock?.owner ?? null;
+    state.hold.state = 'waiting';
+    log(`on_locked hold: still in use (attempt ${state.hold.attempts}); this session stays available`);
+    return false;
+  }
+  log('on_locked hold: the profile is free; starting the backend for this session');
+  prepareCopySessionAfterHold();
+  if (state.engineError !== null) {
+    state.hold.state = 'failed';
+    state.hold.active = false;
+    log(`on_locked hold: the recovery start was refused: ${state.engineError}`);
+    return false;
+  }
+  state.hold.active = false;
+  state.hold.state = 'recovered';
+  state.hold.recoveredAt = Date.now();
+  if (outputDirUnresolved()) {
+    // The artifact directory still needs the client's roots (bounded 2 s). The
+    // call is buffered and replayed by the deferred-start path, after the
+    // handshake has been replayed into the backend.
+    deferredStart.lines.push(rawLine);
+    state.hold.handshakePending = true;
+    if (!holdResolutionPending) {
+      holdResolutionPending = true;
+      const resume = () => {
+        holdResolutionPending = false;
+        startBackendIfNeeded();
+        notifyToolsListChanged();
+      };
+      resolveOutputDir().then(resume, resume);
+    }
+    return 'queued';
+  }
+  startBackend();
+  if (state.child === null) {
+    state.hold.state = 'failed';
+    return false;
+  }
+  replayHeldHandshake();
+  notifyToolsListChanged();
+  return true;
+}
+
+// The isError a held session returns while the profile is still busy. It never
+// claims the tool is unavailable for the session: the next call tries again.
+function holdToolError(name) {
+  if (state.engineError !== null) {
+    return `Cannot call "${String(name)}": ${state.engineError}`;
+  }
+  return `Cannot call "${String(name)}" yet. ${state.hold.reason ?? holdReasonText(state.hold.profileDir, state.hold.owner)}`;
+}
+
+// The one hold object every surface reports, or null when no hold happened.
+function holdReport() {
+  if (state.hold.profileDir === null) {
+    return null;
+  }
+  return {
+    state: state.hold.state,
+    profileDir: state.hold.profileDir,
+    owner: state.hold.owner,
+    attempts: state.hold.attempts,
+    ...(state.hold.recoveredAt === null
+      ? {}
+      : { recoveredAt: new Date(state.hold.recoveredAt).toISOString() }),
+    ...(state.hold.cache === null
+      ? {}
+      : {
+          toolList: {
+            source: state.hold.cache.source,
+            savedAt: state.hold.cache.savedAt,
+            ...(state.hold.cache.error === null ? {} : { error: state.hold.cache.error }),
+          },
+        }),
+    ...(state.engineError === null ? {} : { error: state.engineError }),
+  };
+}
+
+// The hold sentence for initialize: why there is no backend yet, that the tool
+// list is still there, and that no restart is needed. The cache is read here (once
+// per held start) so the sentence says what the client will actually get.
+function holdInstructionText() {
+  const cache = ensureHeldToolList();
+  const list =
+    cache.source === 'cache'
+      ? "The tool list you have comes from this session's cached copy and is filtered exactly like a live one."
+      : 'No cached tool list exists yet, so only the broker meta-tools answer until then.';
+  return `${state.hold.reason ?? holdReasonText(state.hold.profileDir, state.hold.owner)} ${list}`;
 }
 
 function writeMessage(message) {
@@ -1808,8 +2171,20 @@ function startBackendIfNeeded() {
   if (state.shuttingDown) {
     return;
   }
+  // The artifact-directory path reaches this function on its own; while a
+  // single-seat hold is active there is no backend to start, so the resolution
+  // finishes and the start waits for a tool call like every other held start.
+  if (state.hold.active) {
+    log('backend start held until the profile is free; this session retries on its next tool call');
+    return;
+  }
   if (state.child === null) {
     startBackend();
+  }
+  // A recovered hold owes the backend the handshake the broker answered for it,
+  // before any buffered call is replayed.
+  if (state.child !== null && state.hold.handshakePending === true) {
+    replayHeldHandshake();
   }
   replayBufferedClientLines();
 }
@@ -2170,6 +2545,7 @@ function capabilitiesPayload(clientRoots) {
   const copyNoteNow = copyReportNote();
   const sessionCopiesNow = sessionCopiesReport();
   const lastSwapNow = lastSwapReport();
+  const holdNow = holdReport();
   const pointerNow =
     state.profile.appliesToEngine && state.engine !== null
       ? readProfileDefaultPointer(state.engineId, PLUGIN_DATA_DIR)
@@ -2265,6 +2641,10 @@ function capabilitiesPayload(clientRoots) {
     // manifest declares profileApplies false keeps its exact previous payload.
     ...(state.profile.appliesToEngine ? { onLocked: state.profile.onLocked } : {}),
     profileFallback: state.profile.fallback,
+    // A single-seat hold (2.16.0), additive and only while (or after) one
+    // happened: why this session waited, the owner, how many recovery attempts
+    // its tool calls made, and where the cached tool list came from.
+    ...(holdNow === null ? {} : { hold: holdNow }),
     profileLock: state.profile.lock,
     ...(state.profile.engineLock === null ? {} : { engineProfileLock: state.profile.engineLock }),
     // Copy start (2.12.0) and copy-keep (2.13.0), additive only in those modes.
@@ -2374,6 +2754,7 @@ function statusPayload() {
     state.spawnedAt === null || state.initializeAnswered || state.backendAnswered
       ? null
       : Math.max(0, now - state.spawnedAt);
+  const holdNow = holdReport();
   return {
     engine: state.engineId,
     label: state.engine?.label ?? null,
@@ -2416,6 +2797,10 @@ function statusPayload() {
     // on_locked (2.16.0), additive and only where it can act.
     ...(state.profile.appliesToEngine ? { onLocked: state.profile.onLocked } : {}),
     profileFallback: state.profile.fallback,
+    // A single-seat hold (2.16.0), additive and only while (or after) one
+    // happened: why this session waited, the owner, how many recovery attempts
+    // its tool calls made, and where the cached tool list came from.
+    ...(holdNow === null ? {} : { hold: holdNow }),
     profileLock: state.profile.lock,
     ...(state.profile.engineLock === null ? {} : { engineProfileLock: state.profile.engineLock }),
     // Copy start (2.12.0) and copy-keep (2.13.0), additive only in those modes,
@@ -2562,6 +2947,8 @@ function profileStatePayload() {
     // on_locked (2.16.0), additive and only where it can act: the policy that
     // decided what this start did when the profile was in use.
     ...(state.profile.appliesToEngine ? { onLocked: state.profile.onLocked } : {}),
+    // A single-seat hold (2.16.0), reported with the profile this session uses.
+    ...(holdReport() === null ? {} : { hold: holdReport() }),
     profileLock: lock === null ? null : { ...lock, fix: lockBlocksStart(lock) ? profileLockFix(lock) : null },
     // Copy start (2.12.0) and copy-keep (2.13.0), additive only in those modes:
     // the base, the session copy this server runs on, the base lock this session
@@ -2768,6 +3155,9 @@ function recordBackendTools(tools, hasCursor) {
     state.backendTools = named;
   }
   state.toolsListed = true;
+  // A single-seat engine can be held on a later start; keep the list it just
+  // served so that session still has its tools while it waits.
+  saveToolCache();
 }
 
 function sendMetaOnlyList(id, cursor) {
@@ -2780,15 +3170,18 @@ function synthesizeInitialize(id, reason) {
   state.initializeAnswered = true;
   state.initializeAnsweredAt = state.initializeAnsweredAt ?? Date.now();
   const dependencyHint = systemDependencyHint();
-  const instructions =
-    `The ${state.engineId} backend is unavailable: ${reason} ` +
-    'Call browser_engine_status for details. Only broker meta-tools are exposed until Claude Code restarts the MCP server.' +
-    (state.profile.fallback === null ? '' : ` ${state.profile.fallback.reason}`) +
-    (dependencyHint === null ? '' : ` ${dependencyHint}`) +
-    (state.profile.isolated && state.profile.appliesToEngine && !state.profile.onLockedIsolated
-      ? ` ${PROFILE_ISOLATED_NOTE}`
-      : '') +
-    ` ${artifactDirectorySentence()}`;
+  // A single-seat hold is not a failure: the session is usable and recovers by
+  // itself, so it gets its own honest sentence instead of "restart Claude Code".
+  const instructions = state.hold.active
+    ? `${holdInstructionText()} ${artifactDirectorySentence()}`
+    : `The ${state.engineId} backend is unavailable: ${reason} ` +
+      'Call browser_engine_status for details. Only broker meta-tools are exposed until Claude Code restarts the MCP server.' +
+      (state.profile.fallback === null ? '' : ` ${state.profile.fallback.reason}`) +
+      (dependencyHint === null ? '' : ` ${dependencyHint}`) +
+      (state.profile.isolated && state.profile.appliesToEngine && !state.profile.onLockedIsolated
+        ? ` ${PROFILE_ISOLATED_NOTE}`
+        : '') +
+      ` ${artifactDirectorySentence()}`;
   sendResult(id, {
     protocolVersion: state.requestedProtocolVersion ?? '2025-06-18',
     capabilities: { tools: {} },
@@ -3162,6 +3555,22 @@ function handleClientRequest(message, rawLine) {
       );
       return;
     }
+    if (!backendAlive() && state.hold.active) {
+      // The single-seat hold: this call is the retry. When the profile is free
+      // the backend starts, the handshake is replayed and the call is forwarded
+      // below; while it is busy the call gets an honest isError and the session
+      // stays usable for the next one.
+      const recovery = attemptHoldRecovery(rawLine);
+      if (recovery === 'queued') {
+        // Buffered behind the artifact-directory resolution; the deferred start
+        // replays it, so nothing is answered here.
+        return;
+      }
+      if (recovery !== true) {
+        sendToolError(id, holdToolError(name));
+        return;
+      }
+    }
     if (!backendAlive()) {
       sendToolError(id, `Cannot call "${String(name)}": ${backendDescription()}.`);
       return;
@@ -3170,15 +3579,34 @@ function handleClientRequest(message, rawLine) {
 
   if (!backendAlive()) {
     if (!isRequest) {
+      // The client's handshake notification is kept for the replay; every other
+      // notification is dropped while there is no backend, as before.
+      if (method === 'notifications/initialized' && state.hold.active) {
+        state.hold.initializedLine = rawLine;
+        return;
+      }
       log(`dropping client notification "${String(method)}": ${backendDescription()}`);
       return;
     }
     if (method === 'initialize') {
       noteInitializeRequest(message);
+      if (state.hold.active) {
+        // The broker answers the handshake now and replays it to the backend on
+        // recovery, so the client is never left waiting on a busy profile. The
+        // artifact directory is resolved in the background meanwhile, so a
+        // recovery start already knows where artifacts go.
+        state.hold.initializeLine = rawLine;
+        const settle = () => {};
+        resolveOutputDir().then(settle, settle);
+      }
       synthesizeInitialize(id, backendDescription());
       return;
     }
     if (method === 'tools/list') {
+      if (state.hold.active) {
+        sendHeldToolList(id, message.params?.cursor);
+        return;
+      }
       sendMetaOnlyList(id, message.params?.cursor);
       return;
     }
@@ -3258,6 +3686,30 @@ function handleBackendMessage(message, rawLine) {
   const id = message.id;
   const isResponse = message.method === undefined && id !== undefined && id !== null;
   const pending = isResponse ? state.pendingRequests.get(id) : undefined;
+  if (isResponse && pending?.replay === true) {
+    // The answer to a replayed handshake: the client was already answered by the
+    // broker, so this response is consumed, never relayed. The facts it carries
+    // (server info, capabilities, a rejection) are still recorded.
+    state.pendingRequests.delete(id);
+    state.backendAnswered = true;
+    if (pending.method === 'initialize') {
+      if (message.error === undefined) {
+        state.initializeAnswered = true;
+        state.initializeAnsweredAt = state.initializeAnsweredAt ?? Date.now();
+        state.serverInfo = message.result?.serverInfo ?? null;
+        state.backendCapabilities = message.result?.capabilities ?? null;
+        if (state.backend.state === 'starting' || state.backend.state === 'idle') {
+          state.backend.state = 'running';
+        }
+      } else {
+        const reason = message.error?.message ?? 'unknown error';
+        state.initializeRejected = true;
+        state.lastError = `Backend rejected initialize: ${String(reason)}${protocolEraHint(reason)}`;
+        state.backend.state = 'failed';
+      }
+    }
+    return;
+  }
   if (isResponse) {
     noteBackendAnswered(pending);
     state.pendingRequests.delete(id);
@@ -3538,7 +3990,11 @@ readline
     // yet: buffer every line in arrival order and resolve the directory on the
     // initialize request, which is where the client states whether it supports
     // roots at all. The buffer is replayed by beginDeferredStart().
-    if (outputDirUnresolved()) {
+    // A held start (single-seat engine, busy profile) answers the client itself:
+    // the handshake is synthesized and kept for the replay, the tool list comes
+    // from the cache and every call retries. Buffering here would leave the
+    // client waiting for an initialize that cannot come.
+    if (outputDirUnresolved() && state.hold.active === false) {
       deferredStart.lines.push(line);
       if (message.method === 'initialize') {
         noteInitializeRequest(message);
@@ -3572,7 +4028,11 @@ if (state.engineError !== null) {
 // environment at start; all client lines are buffered until then. With an
 // explicit output_dir, an engine that ignores it, or a failed engine, the start
 // is exactly the previous path.
-if (outputDirUnresolved() && state.engineError === null) {
+// A single-seat hold never starts a backend while the profile is busy: the
+// session waits, serves its cached list and retries on the next tool call.
+if (state.hold.active) {
+  log('backend start held until the profile is free; this session retries on its next tool call');
+} else if (outputDirUnresolved() && state.engineError === null) {
   log('backend start deferred until initialize: the artifact directory depends on the client roots');
 } else {
   startBackend();

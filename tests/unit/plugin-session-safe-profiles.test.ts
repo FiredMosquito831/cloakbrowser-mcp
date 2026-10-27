@@ -468,6 +468,7 @@ function createScratchPlugin(root: string): string {
     'profile.mjs',
     'provision.mjs',
     'surface.mjs',
+    'tool-cache.mjs',
   ]) {
     copyFileSync(path.join(pluginDir, 'lib', file), path.join(lib, file));
   }
@@ -933,16 +934,19 @@ describe('broker profile preflight', () => {
   });
 
   it('falls back to the first free numbered sibling and reports it', async () => {
+    // The sibling rule is the multi-seat engines' rule: the cloak engine declares
+    // one concurrent browser seat and holds instead (2.16.0), so the workspace
+    // fallback is exercised on playwright.
     const dataDir = createRuntime(tempRoot('pr10-broker-fallback-'));
     const workspace = path.join(tempRoot('pr10-workspace-fallback-'), 'project');
     mkdirSync(workspace, { recursive: true });
-    const base = path.join(dataDir, 'profiles', 'cloak', profile.workspaceProfileName(workspace));
+    const base = path.join(dataDir, 'profiles', 'playwright', profile.workspaceProfileName(workspace));
     writeLock(base, process.pid, '2026-10-25T01:20:00.000Z');
     // -2 is also owned by a live process, so it is skipped. -3 holds a stale
     // lock only, which does not block the start; the bridge reclaims it.
     writeLock(`${base}-2`, process.pid);
     writeLock(`${base}-3`, deadPid(tempRoot('pr10-fallback-dead-')));
-    const session = startBroker({ dataDir, isolation: 'workspace', cwd: workspace });
+    const session = startBroker({ dataDir, isolation: 'workspace', cwd: workspace, engine: 'playwright' });
     const initialized = await initialize(session);
     const instructions = initialized.result?.instructions ?? '';
     expect(instructions).toContain(base);
@@ -967,11 +971,11 @@ describe('broker profile preflight', () => {
     const dataDir = createRuntime(tempRoot('pr10-broker-exhausted-'));
     const workspace = path.join(tempRoot('pr10-workspace-exhausted-'), 'project');
     mkdirSync(workspace, { recursive: true });
-    const base = path.join(dataDir, 'profiles', 'cloak', profile.workspaceProfileName(workspace));
+    const base = path.join(dataDir, 'profiles', 'playwright', profile.workspaceProfileName(workspace));
     for (const suffix of ['', '-2', '-3', '-4', '-5']) {
       writeLock(`${base}${suffix}`, process.pid);
     }
-    const session = startBroker({ dataDir, isolation: 'workspace', cwd: workspace });
+    const session = startBroker({ dataDir, isolation: 'workspace', cwd: workspace, engine: 'playwright' });
     const initialized = await initialize(session);
     expect(initialized.result?.instructions).toContain('numbered workspace fallbacks');
     expect(await toolNames(session)).toEqual([
@@ -1020,12 +1024,15 @@ describe('broker profile preflight', () => {
     mkdirSync(workspace, { recursive: true });
     const explicit = path.join(tempRoot('pr10-explicit-profile-'), 'profile');
     writeLock(explicit, process.pid);
+    // on_locked=block: the cloak engine would otherwise hold an explicit path and
+    // retry (2.16.0), which is a different test; this one is about precedence.
     const session = startBroker({
       dataDir,
       isolation: 'workspace',
       cwd: workspace,
       account: 'alice',
       profileDir: explicit,
+      onLocked: 'block',
     });
     const initialized = await initialize(session);
     expect(initialized.result?.instructions).toContain(explicit);
@@ -1043,13 +1050,14 @@ describe('broker profile preflight', () => {
     const dataDir = createRuntime(tempRoot('pr10-broker-secret-'));
     const workspace = path.join(tempRoot('pr10-workspace-secret-'), 'project');
     mkdirSync(workspace, { recursive: true });
-    const base = path.join(dataDir, 'profiles', 'cloak', profile.workspaceProfileName(workspace));
+    const base = path.join(dataDir, 'profiles', 'playwright', profile.workspaceProfileName(workspace));
     writeLock(base, process.pid);
     const session = startBroker({
       dataDir,
       isolation: 'workspace',
       cwd: workspace,
       proxyServer: PROXY_URL,
+      engine: 'playwright',
     });
     await initialize(session);
     const caps = await capabilities(session);
