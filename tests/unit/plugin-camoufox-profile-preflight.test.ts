@@ -164,6 +164,9 @@ const CAPABILITIES_KEYS_293 = [
   'profileIsolation',
   'profileIsolationSource',
   'profileApplies',
+  // 2.16.0 adds the resolved on_locked policy right after profileApplies on every
+  // engine that uses the broker's profile model.
+  'onLocked',
   'profileFallback',
   'profileLock',
 ];
@@ -236,6 +239,8 @@ const STATUS_KEYS_293 = [
   'profileDir',
   'profileIsolation',
   'profileApplies',
+  // 2.16.0 adds the resolved on_locked policy right after profileApplies.
+  'onLocked',
   'profileFallback',
   'profileLock',
   ...IDENTITY_KEYS_2140,
@@ -850,6 +855,7 @@ function createLockPlugin(root: string): string {
     'profile.mjs',
     'provision.mjs',
     'surface.mjs',
+    'tool-cache.mjs',
   ]) {
     copyFileSync(path.join(pluginDir, 'lib', file), path.join(lib, file));
   }
@@ -922,7 +928,12 @@ interface BrokerSession {
   close: () => Promise<void>;
 }
 
-function startBroker(options: { dataDir: string; engine: string; pluginDir: string }): BrokerSession {
+function startBroker(options: {
+  dataDir: string;
+  engine: string;
+  pluginDir: string;
+  onLocked?: string;
+}): BrokerSession {
   const env: Record<string, string | undefined> = {
     ...process.env,
     CLAUDE_PLUGIN_DATA: options.dataDir,
@@ -933,12 +944,14 @@ function startBroker(options: { dataDir: string; engine: string; pluginDir: stri
   for (const name of [
     'STEALTH_ACCOUNT',
     'STEALTH_PROFILE_ISOLATION',
+    'STEALTH_ON_LOCKED',
     'PLAYWRIGHT_MCP_USER_DATA_DIR',
     'PLAYWRIGHT_MCP_PROXY_SERVER',
     'CLOAK_DISABLED_TOOLS',
   ]) {
     delete env[name];
   }
+  if (options.onLocked !== undefined) env.STEALTH_ON_LOCKED = options.onLocked;
   const child = spawn(process.execPath, [path.join(options.pluginDir, 'broker.mjs')], {
     stdio: ['pipe', 'pipe', 'pipe'],
     env,
@@ -1022,6 +1035,7 @@ describe('broker engine-lock preflight', () => {
   function setupSynthetic(
     engine: string,
     prepare?: (profileDir: string) => void,
+    onLocked?: string,
   ): { dataDir: string; profileDir: string; session: BrokerSession } {
     const root = tempRoot('pr-camoufox-preflight-broker-');
     const plugin = createLockPlugin(root);
@@ -1031,14 +1045,20 @@ describe('broker engine-lock preflight', () => {
     if (prepare !== undefined) {
       prepare(profileDir);
     }
-    const session = startBroker({ dataDir, engine, pluginDir: plugin });
+    const session = startBroker({ dataDir, engine, pluginDir: plugin, onLocked });
     return { dataDir, profileDir, session };
   }
 
   it('refuses to spawn when the engine lock names a live pid and reports it', async () => {
-    const { profileDir, session } = setupSynthetic('lock-engine', (dir) => {
-      writeFileSync(path.join(dir, 'owner.lock'), `${process.pid}\n`);
-    });
+    // on_locked=block is the 2.15 behaviour; the 2.16.0 default would start on a
+    // numbered sibling, which the on_locked suite asserts.
+    const { profileDir, session } = setupSynthetic(
+      'lock-engine',
+      (dir) => {
+        writeFileSync(path.join(dir, 'owner.lock'), `${process.pid}\n`);
+      },
+      'block',
+    );
     const instructions = await initialize(session);
     expect(instructions).toContain(profileDir);
     expect(instructions).toContain(path.join(profileDir, 'owner.lock'));
@@ -1180,7 +1200,7 @@ describe('broker engine-lock preflight', () => {
       const holder = await holdExclusiveForRead(lockPath);
       holders.push(holder);
 
-      const session = startBroker({ dataDir, engine: 'cloak', pluginDir });
+      const session = startBroker({ dataDir, engine: 'cloak', pluginDir, onLocked: 'block' });
       const instructions = await initialize(session);
       expect(instructions).toContain(profileDir);
       expect(instructions).toContain(lockPath);

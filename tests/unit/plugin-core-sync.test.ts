@@ -90,6 +90,7 @@ describe('shared plugin core', () => {
       'lib/profile.mjs',
       'lib/provision.mjs',
       'lib/surface.mjs',
+      'lib/tool-cache.mjs',
       'launch-camoufox-native.mjs',
       'launch-camoufox.mjs',
       'launch-kameleo.mjs',

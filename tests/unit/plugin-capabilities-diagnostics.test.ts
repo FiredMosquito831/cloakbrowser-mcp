@@ -525,6 +525,9 @@ describe('browser_capabilities artifact diagnostics', () => {
     ];
     const expectedKeys = [...Object.keys(fixture)];
     expectedKeys.splice(expectedKeys.indexOf('profileLock') + 1, 0, 'engineProfileLock');
+    // 2.16.0 adds the resolved on_locked policy inside the profile block, right
+    // after profileApplies.
+    expectedKeys.splice(expectedKeys.indexOf('profileApplies') + 1, 0, 'onLocked');
     expect(Object.keys(actual)).toEqual([...expectedKeys, ...newKeys]);
     const payload = comparable(actual) as Record<string, unknown>;
     const baseline = comparable(fixture) as Record<string, unknown>;
@@ -534,8 +537,9 @@ describe('browser_capabilities artifact diagnostics', () => {
     // 2.10.0 adds one broker meta-tool. The three baseline values that count the
     // surface change with it, so they are asserted exactly against the 2.9.4
     // values instead of compared blindly. outputDir changed value in 2.10.1 for
-    // the empty setting, and is asserted exactly under the new policy.
-    const metaCountKeys = ['metaToolCount', 'metaTools', 'exposedToolCount', 'outputDir'];
+    // the empty setting, and is asserted exactly under the new policy. onLocked is
+    // additive (2.16.0) and has no baseline value.
+    const metaCountKeys = ['metaToolCount', 'metaTools', 'exposedToolCount', 'outputDir', 'onLocked'];
     for (const [key, value] of Object.entries(baseline)) {
       if (metaCountKeys.includes(key)) {
         continue;

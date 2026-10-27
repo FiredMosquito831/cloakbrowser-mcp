@@ -274,7 +274,7 @@ describe('kameleo manifest', () => {
         references.add(match[1]);
       }
     }
-    expect(keys).toHaveLength(31);
+    expect(keys).toHaveLength(32);
     expect([...references].sort()).toEqual(keys);
   });
 });

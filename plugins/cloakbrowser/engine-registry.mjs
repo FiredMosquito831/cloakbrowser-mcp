@@ -534,6 +534,28 @@ export function manifestProfileApplies(manifest) {
   return manifest?.profileApplies !== false;
 }
 
+// Optional boolean: whether the engine may run only one browser at a time on
+// this machine regardless of the profile. The cloak engine sets it: the free
+// CloakBrowser licence allows one concurrent browser, so a second profile would
+// still fail at the first browser action with the licence message. On such an
+// engine a busy profile is held and retried instead of being moved to a numbered
+// sibling (2.16.0). Omitted means false, so every other engine keeps the sibling
+// fallback, and no engine id is named in the broker.
+function validateSingleSeat(manifest) {
+  if (manifest.singleSeat === undefined) {
+    return null;
+  }
+  if (typeof manifest.singleSeat !== 'boolean') {
+    return 'singleSeat must be a boolean';
+  }
+  return null;
+}
+
+// True only for an engine that declares a single concurrent browser seat.
+export function manifestSingleSeat(manifest) {
+  return manifest?.singleSeat === true;
+}
+
 // Optional capability facts. Only the names the broker understands are allowed,
 // so a typo cannot silently disappear from browser_capabilities.
 function validateCapabilities(manifest) {
@@ -752,6 +774,7 @@ export function validateManifest(manifest, expectedId, profileNames, launcherDir
     validateRuntime,
     validateCapabilities,
     validateProfileApplies,
+    validateSingleSeat,
     validateProfileLock,
     validateSystemDependencies,
   ]) {

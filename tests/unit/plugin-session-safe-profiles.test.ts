@@ -98,6 +98,7 @@ interface BrokerOptions {
   dataDir: string;
   cwd?: string;
   isolation?: string;
+  onLocked?: string;
   account?: string;
   profileDir?: string;
   proxyServer?: string;
@@ -339,6 +340,7 @@ function startBroker(options: BrokerOptions): BrokerSession {
   for (const name of [
     'STEALTH_ACCOUNT',
     'STEALTH_PROFILE_ISOLATION',
+    'STEALTH_ON_LOCKED',
     'PLAYWRIGHT_MCP_USER_DATA_DIR',
     'PLAYWRIGHT_MCP_PROXY_SERVER',
     'STUB_FAIL',
@@ -347,6 +349,7 @@ function startBroker(options: BrokerOptions): BrokerSession {
   }
   if (options.account !== undefined) childEnv.STEALTH_ACCOUNT = options.account;
   if (options.isolation !== undefined) childEnv.STEALTH_PROFILE_ISOLATION = options.isolation;
+  if (options.onLocked !== undefined) childEnv.STEALTH_ON_LOCKED = options.onLocked;
   if (options.profileDir !== undefined) childEnv.PLAYWRIGHT_MCP_USER_DATA_DIR = options.profileDir;
   if (options.proxyServer !== undefined) childEnv.PLAYWRIGHT_MCP_PROXY_SERVER = options.proxyServer;
   if (options.failBackend === true) childEnv.STUB_FAIL = '1';
@@ -465,6 +468,7 @@ function createScratchPlugin(root: string): string {
     'profile.mjs',
     'provision.mjs',
     'surface.mjs',
+    'tool-cache.mjs',
   ]) {
     copyFileSync(path.join(pluginDir, 'lib', file), path.join(lib, file));
   }
@@ -856,7 +860,9 @@ describe('broker profile preflight', () => {
     const dataDir = createRuntime(tempRoot('pr10-broker-locked-'));
     const lockDir = path.join(dataDir, 'profiles', 'default');
     writeLock(lockDir, process.pid, '2026-10-25T01:09:50.197Z');
-    const session = startBroker({ dataDir });
+    // on_locked=block is the 2.15 behaviour; the default since 2.16.0 is
+    // "fallback", which is asserted separately below.
+    const session = startBroker({ dataDir, onLocked: 'block' });
     const initialized = await initialize(session);
     const instructions = initialized.result?.instructions ?? '';
     expect(instructions).toContain(lockDir);
@@ -928,16 +934,19 @@ describe('broker profile preflight', () => {
   });
 
   it('falls back to the first free numbered sibling and reports it', async () => {
+    // The sibling rule is the multi-seat engines' rule: the cloak engine declares
+    // one concurrent browser seat and holds instead (2.16.0), so the workspace
+    // fallback is exercised on playwright.
     const dataDir = createRuntime(tempRoot('pr10-broker-fallback-'));
     const workspace = path.join(tempRoot('pr10-workspace-fallback-'), 'project');
     mkdirSync(workspace, { recursive: true });
-    const base = path.join(dataDir, 'profiles', 'cloak', profile.workspaceProfileName(workspace));
+    const base = path.join(dataDir, 'profiles', 'playwright', profile.workspaceProfileName(workspace));
     writeLock(base, process.pid, '2026-10-25T01:20:00.000Z');
     // -2 is also owned by a live process, so it is skipped. -3 holds a stale
     // lock only, which does not block the start; the bridge reclaims it.
     writeLock(`${base}-2`, process.pid);
     writeLock(`${base}-3`, deadPid(tempRoot('pr10-fallback-dead-')));
-    const session = startBroker({ dataDir, isolation: 'workspace', cwd: workspace });
+    const session = startBroker({ dataDir, isolation: 'workspace', cwd: workspace, engine: 'playwright' });
     const initialized = await initialize(session);
     const instructions = initialized.result?.instructions ?? '';
     expect(instructions).toContain(base);
@@ -962,11 +971,11 @@ describe('broker profile preflight', () => {
     const dataDir = createRuntime(tempRoot('pr10-broker-exhausted-'));
     const workspace = path.join(tempRoot('pr10-workspace-exhausted-'), 'project');
     mkdirSync(workspace, { recursive: true });
-    const base = path.join(dataDir, 'profiles', 'cloak', profile.workspaceProfileName(workspace));
+    const base = path.join(dataDir, 'profiles', 'playwright', profile.workspaceProfileName(workspace));
     for (const suffix of ['', '-2', '-3', '-4', '-5']) {
       writeLock(`${base}${suffix}`, process.pid);
     }
-    const session = startBroker({ dataDir, isolation: 'workspace', cwd: workspace });
+    const session = startBroker({ dataDir, isolation: 'workspace', cwd: workspace, engine: 'playwright' });
     const initialized = await initialize(session);
     expect(initialized.result?.instructions).toContain('numbered workspace fallbacks');
     expect(await toolNames(session)).toEqual([
@@ -980,13 +989,19 @@ describe('broker profile preflight', () => {
     expect(String(caps.engineError)).toContain('numbered workspace fallbacks');
   });
 
-  it('keeps an account above the workspace derivation and does not fall it back', async () => {
+  it('keeps an account above the workspace derivation and does not fall it back under block', async () => {
     const dataDir = createRuntime(tempRoot('pr10-broker-account-'));
     const workspace = path.join(tempRoot('pr10-workspace-account-'), 'project');
     mkdirSync(workspace, { recursive: true });
     const accountDir = path.join(dataDir, 'profiles', 'cloak', 'alice');
     writeLock(accountDir, process.pid);
-    const session = startBroker({ dataDir, isolation: 'workspace', cwd: workspace, account: 'alice' });
+    const session = startBroker({
+      dataDir,
+      isolation: 'workspace',
+      cwd: workspace,
+      account: 'alice',
+      onLocked: 'block',
+    });
     const initialized = await initialize(session);
     expect(initialized.result?.instructions).toContain(accountDir);
     expect(await toolNames(session)).toEqual([
@@ -1009,12 +1024,15 @@ describe('broker profile preflight', () => {
     mkdirSync(workspace, { recursive: true });
     const explicit = path.join(tempRoot('pr10-explicit-profile-'), 'profile');
     writeLock(explicit, process.pid);
+    // on_locked=block: the cloak engine would otherwise hold an explicit path and
+    // retry (2.16.0), which is a different test; this one is about precedence.
     const session = startBroker({
       dataDir,
       isolation: 'workspace',
       cwd: workspace,
       account: 'alice',
       profileDir: explicit,
+      onLocked: 'block',
     });
     const initialized = await initialize(session);
     expect(initialized.result?.instructions).toContain(explicit);
@@ -1032,13 +1050,14 @@ describe('broker profile preflight', () => {
     const dataDir = createRuntime(tempRoot('pr10-broker-secret-'));
     const workspace = path.join(tempRoot('pr10-workspace-secret-'), 'project');
     mkdirSync(workspace, { recursive: true });
-    const base = path.join(dataDir, 'profiles', 'cloak', profile.workspaceProfileName(workspace));
+    const base = path.join(dataDir, 'profiles', 'playwright', profile.workspaceProfileName(workspace));
     writeLock(base, process.pid);
     const session = startBroker({
       dataDir,
       isolation: 'workspace',
       cwd: workspace,
       proxyServer: PROXY_URL,
+      engine: 'playwright',
     });
     await initialize(session);
     const caps = await capabilities(session);

@@ -104,6 +104,7 @@ interface BrokerOptions {
   dataDir: string;
   cwd?: string;
   isolation?: string;
+  onLocked?: string;
   account?: string;
   profileDir?: string;
   engine?: string;
@@ -209,6 +210,7 @@ function startBroker(options: BrokerOptions): BrokerSession {
   for (const name of [
     'STEALTH_ACCOUNT',
     'STEALTH_PROFILE_ISOLATION',
+    'STEALTH_ON_LOCKED',
     'PLAYWRIGHT_MCP_USER_DATA_DIR',
     'PLAYWRIGHT_MCP_ISOLATED',
     'PLAYWRIGHT_MCP_PROXY_SERVER',
@@ -217,6 +219,7 @@ function startBroker(options: BrokerOptions): BrokerSession {
   }
   if (options.account !== undefined) childEnv.STEALTH_ACCOUNT = options.account;
   if (options.isolation !== undefined) childEnv.STEALTH_PROFILE_ISOLATION = options.isolation;
+  if (options.onLocked !== undefined) childEnv.STEALTH_ON_LOCKED = options.onLocked;
   if (options.profileDir !== undefined) childEnv.PLAYWRIGHT_MCP_USER_DATA_DIR = options.profileDir;
   const broker = options.pluginDir === undefined ? brokerPath : path.join(options.pluginDir, 'broker.mjs');
   const child = spawn(process.execPath, [broker], {
@@ -678,8 +681,10 @@ describe('broker reporting for an isolated start', () => {
     });
     expect(await effectiveEnvironment(isolated)).toMatchObject({ profileDir: null, isolated: 'true' });
 
-    // The same lock does stop a shared start, so the mode is what changed.
-    const shared = startBroker({ dataDir });
+    // The same lock does stop a shared start, so the mode is what changed. The
+    // shared control pins on_locked=block, its 2.15 shape: the 2.16.0 default is
+    // "fallback", which would start on a numbered sibling instead.
+    const shared = startBroker({ dataDir, onLocked: 'block' });
     await initialize(shared);
     const sharedCapabilities = await capabilities(shared);
     expect(String(sharedCapabilities.engineError)).toContain('already in use');

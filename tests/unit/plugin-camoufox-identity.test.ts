@@ -140,6 +140,7 @@ function createStubPlugin(root: string): string {
     'profile.mjs',
     'provision.mjs',
     'surface.mjs',
+    'tool-cache.mjs',
   ]) {
     copyFileSync(path.join(universalDir, 'lib', file), path.join(lib, file));
   }
@@ -316,7 +317,7 @@ describe('identity_mode in the shipped manifests', () => {
       expect(setting.description).toContain('.camoufox-identity.json');
       expect(setting.description).toContain('random');
       expect(setting.description).toContain('isolated');
-      expect(plugin.version).toBe('2.15.1');
+      expect(plugin.version).toBe('2.16.0');
     }
     const universal = JSON.parse(
       readFileSync(path.join(universalDir, '.claude-plugin', 'plugin.json'), 'utf8'),

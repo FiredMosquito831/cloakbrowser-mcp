@@ -19,6 +19,9 @@
 // helpers read (and, for the copy modes only, write)
 // the bridge's own lock file so the broker can refuse a start that would fail. A one-line default-profile pointer (profiles/<engine>/.default)
 // names the profile a start uses when neither profile_dir nor account is set.
+// on_locked (2.16.0) decides what happens when the resolved profile is already
+// held: block (the 2.15 behaviour), fallback to the first free numbered sibling
+// (-2 ... -5) of a plugin-managed profile, or an isolated start with no profile.
 // The functions here are explicitly parameterised (no path is read from a global
 // setting) and read only the files named by their arguments, so the unit suite
 // can exercise every rule without a backend.
@@ -89,6 +92,19 @@ export const PROFILE_ISOLATION_COPY_VALUES = Object.freeze([
 export function isCopyIsolation(value) {
   return PROFILE_ISOLATION_COPY_VALUES.includes(value);
 }
+// on_locked (2.16.0): what a start does when the profile it resolved is already
+// held by another process. "block" is the behaviour before this setting existed:
+// no backend is spawned and the meta-tools name the owner and the fix.
+// "fallback" starts on the first free numbered sibling of the same profile
+// (-2 ... -5), so the session works but with separate cookies, logins and
+// fingerprint seed. "isolated" starts with no profile at all: nothing is created,
+// locked or saved. Only profiles the plugin manages get siblings; an explicit
+// profile_dir always keeps the "block" behaviour.
+export const ON_LOCKED_VALUES = Object.freeze(['block', 'fallback', 'isolated']);
+export const ON_LOCKED_BLOCK = 'block';
+export const ON_LOCKED_FALLBACK = 'fallback';
+export const ON_LOCKED_ISOLATED = 'isolated';
+export const DEFAULT_ON_LOCKED = ON_LOCKED_FALLBACK;
 // The profile settings that an isolated start reports as ignored. The names are
 // the settings a user can see and change; `value` carries what was supplied so
 // the report never claims a setting was ignored when it was empty.
@@ -359,6 +375,25 @@ export function resolveProfileIsolation(value) {
   return { mode: DEFAULT_PROFILE_ISOLATION, source: 'default', ignored: raw, placeholder: null };
 }
 
+// Resolve the on_locked setting (2.16.0). Unset, empty, an unsubstituted
+// ${user_config.*} placeholder and an unknown value all mean "fallback"; the
+// extra fields let the broker log a value it ignored once at startup. The
+// placeholder is reported separately because it is a missing substitution, not a
+// setting the user typed.
+export function resolveOnLocked(value) {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (raw === '') {
+    return { mode: DEFAULT_ON_LOCKED, source: 'default', ignored: null, placeholder: null };
+  }
+  if (isPlaceholder(raw)) {
+    return { mode: DEFAULT_ON_LOCKED, source: 'default', ignored: null, placeholder: raw };
+  }
+  if (ON_LOCKED_VALUES.includes(raw)) {
+    return { mode: raw, source: 'setting', ignored: null, placeholder: null };
+  }
+  return { mode: DEFAULT_ON_LOCKED, source: 'default', ignored: raw, placeholder: null };
+}
+
 // --- isolated starts ---------------------------------------------------------
 // profile_isolation=isolated uses no profile at all. These strings are the one
 // honest wording every surface shares, so the mode never claims "in memory" and
@@ -374,6 +409,12 @@ export const PROFILE_ISOLATED_POINTER_NOTE =
 export const PROFILE_ISOLATED_NATIVE_NOTE =
   'This engine manages its own browser profile, so the "Profile isolation" setting (including "isolated") has no ' +
   'effect on it.';
+// on_locked=isolated switched an ordinary start to an isolated one (2.16.0). The
+// configured profile_isolation is unchanged, so this note never claims the
+// setting is "isolated"; it says why this start has no profile.
+export const PROFILE_ON_LOCKED_ISOLATED_NOTE =
+  'This session started with no profile because on_locked is "isolated" and the resolved profile was in use: ' +
+  'the default-profile pointer and set-default do not affect it, and nothing is saved when it closes.';
 
 // --- copy starts -------------------------------------------------------------
 // profile_isolation=copy runs the session on a temporary whole-tree copy of the
@@ -1534,7 +1575,10 @@ export function profileLockFix(lock) {
 // The start-up sentence for a blocking lock. The broker does not spawn a
 // backend in this state; this text is what initialize.instructions,
 // browser_capabilities.engineError and browser_engine_status.lastError carry.
-export function profileLockMessage(lock, { fallbackExhausted = false } = {}) {
+// `fallbackKind` names which rule ran out of siblings: the workspace rule keeps
+// its original sentence byte for byte, and the on_locked policy says "sibling
+// profiles" because the base need not be a workspace profile.
+export function profileLockMessage(lock, { fallbackExhausted = false, fallbackKind = 'workspace' } = {}) {
   if (lock === null || typeof lock !== 'object') {
     return 'The browser profile is locked by another process.';
   }
@@ -1551,24 +1595,51 @@ export function profileLockMessage(lock, { fallbackExhausted = false } = {}) {
   }
   const fix = profileLockFix(lock);
   const exhausted = fallbackExhausted
-    ? ` The numbered workspace fallbacks (suffixes ${PROFILE_FALLBACK_FIRST_SUFFIX} to ${PROFILE_FALLBACK_LAST_SUFFIX}) are also in use.`
+    ? fallbackKind === 'workspace'
+      ? ` The numbered workspace fallbacks (suffixes ${PROFILE_FALLBACK_FIRST_SUFFIX} to ${PROFILE_FALLBACK_LAST_SUFFIX}) are also in use.`
+      : ` The numbered sibling profiles (suffixes ${PROFILE_FALLBACK_FIRST_SUFFIX} to ${PROFILE_FALLBACK_LAST_SUFFIX}) are also in use.`
     : '';
   return `${head}${fix === null ? '' : ` ${fix}`}${exhausted} The backend was not started.`;
 }
 
-// The sentence reported when a workspace profile was busy and a numbered sibling
+// The sentence reported when the resolved profile was busy and a numbered sibling
 // was chosen instead. The fallback has a different cookie jar, login state and
-// fingerprint seed, so it is always named, never silent.
-export function profileFallbackReason(lock, toDir) {
+// fingerprint seed, so it is always named, never silent. `kind` is "workspace"
+// for the profile_isolation=workspace rule (its original sentence, byte for
+// byte) and "on-locked" for the on_locked policy applied to any plugin-managed
+// profile.
+export function profileFallbackReason(lock, toDir, kind = 'workspace') {
   const from = lock !== null && typeof lock === 'object' ? lock.profileDir : 'the workspace profile';
   const owner = lock?.owner ?? {};
   const who =
     owner.pid === undefined || owner.pid === null
       ? 'another process'
       : `pid ${owner.pid}${typeof owner.createdAt === 'string' ? `, started ${owner.createdAt}` : ''}`;
+  if (kind === 'workspace') {
+    return (
+      `The workspace profile ${from} was already in use (${who}), so this session uses ${toDir} instead. ` +
+      'It has separate cookies, logins and fingerprint seed.'
+    );
+  }
   return (
-    `The workspace profile ${from} was already in use (${who}), so this session uses ${toDir} instead. ` +
+    `The profile ${from} was already in use (${who}), so this session uses ${toDir} instead. ` +
     'It has separate cookies, logins and fingerprint seed.'
+  );
+}
+
+// The sentence reported when on_locked is "isolated" and the resolved profile was
+// busy: this start has no profile at all, so nothing is saved and nothing
+// persists. Same shape as profileFallbackReason, with no destination directory.
+export function profileOnLockedIsolatedReason(lock) {
+  const from = lock !== null && typeof lock === 'object' ? lock.profileDir : 'the resolved profile';
+  const owner = lock?.owner ?? {};
+  const who =
+    owner.pid === undefined || owner.pid === null
+      ? 'another process'
+      : `pid ${owner.pid}${typeof owner.createdAt === 'string' ? `, started ${owner.createdAt}` : ''}`;
+  return (
+    `The profile ${from} was already in use (${who}), and on_locked is "isolated", so this session started ` +
+    'with no profile at all: its cookies, logins and fingerprint are not saved and nothing persists after it closes.'
   );
 }
 

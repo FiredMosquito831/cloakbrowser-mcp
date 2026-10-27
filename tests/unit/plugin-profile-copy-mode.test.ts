@@ -147,6 +147,7 @@ interface BrokerOptions {
   dataDir: string;
   cwd?: string;
   isolation?: string;
+  onLocked?: string;
   account?: string;
   profileDir?: string;
   engine?: string;
@@ -254,6 +255,7 @@ function startBroker(options: BrokerOptions): BrokerSession {
   for (const name of [
     'STEALTH_ACCOUNT',
     'STEALTH_PROFILE_ISOLATION',
+    'STEALTH_ON_LOCKED',
     'PLAYWRIGHT_MCP_USER_DATA_DIR',
     'PLAYWRIGHT_MCP_ISOLATED',
     'PLAYWRIGHT_MCP_PROXY_SERVER',
@@ -262,6 +264,7 @@ function startBroker(options: BrokerOptions): BrokerSession {
   }
   if (options.account !== undefined) childEnv.STEALTH_ACCOUNT = options.account;
   if (options.isolation !== undefined) childEnv.STEALTH_PROFILE_ISOLATION = options.isolation;
+  if (options.onLocked !== undefined) childEnv.STEALTH_ON_LOCKED = options.onLocked;
   if (options.profileDir !== undefined) childEnv.PLAYWRIGHT_MCP_USER_DATA_DIR = options.profileDir;
   const broker = options.pluginDir === undefined ? brokerPath : path.join(options.pluginDir, 'broker.mjs');
   const child = spawn(process.execPath, [broker], {
@@ -947,7 +950,7 @@ describe('broker copy mode', () => {
 
     // A second, shared window on the same data dir is refused by the base lock
     // this session holds; it names the copy broker and copies nothing.
-    const shared = startBroker({ dataDir, isolation: 'shared' });
+    const shared = startBroker({ dataDir, isolation: 'shared', onLocked: 'block' });
     await initialize(shared);
     const sharedCaps = await capabilities(shared);
     const error = engineErrorText(sharedCaps);
@@ -1047,7 +1050,10 @@ describe('broker copy mode', () => {
       userDataDir: base,
     });
     const baseHashBefore = hashTree(base);
-    const session = startBroker({ dataDir, isolation: 'copy' });
+    // on_locked=block: a copy-keep base is either safe to copy or refused; the
+    // 2.16.0 default ("fallback") copies the sibling base, asserted in the
+    // on_locked suite.
+    const session = startBroker({ dataDir, isolation: 'copy', onLocked: 'block' });
     const initialized = await initialize(session);
     const caps = await capabilities(session);
     const error = engineErrorText(caps);
@@ -1074,7 +1080,7 @@ describe('broker copy mode', () => {
       const base = seedBaseProfile(dataDir);
       const holder = await holdExclusiveForRead(path.join(base, 'lockfile'), 'Read');
       try {
-        const session = startBroker({ dataDir, isolation: 'copy' });
+        const session = startBroker({ dataDir, isolation: 'copy', onLocked: 'block' });
         await initialize(session);
         const caps = await capabilities(session);
         const error = engineErrorText(caps);
@@ -1097,7 +1103,7 @@ describe('broker copy mode', () => {
       writeFile(path.join(base, 'parent.lock'), '');
       const holder = await holdExclusiveForRead(path.join(base, 'parent.lock'), 'None');
       try {
-        const session = startBroker({ dataDir, isolation: 'copy', engine: 'camoufox' });
+        const session = startBroker({ dataDir, isolation: 'copy', engine: 'camoufox', onLocked: 'block' });
         await initialize(session);
         const caps = await capabilities(session);
         const error = engineErrorText(caps);
