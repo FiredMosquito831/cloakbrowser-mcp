@@ -1,4 +1,5 @@
-// Saved logins and autofill for the Camoufox engine (2.15.0).
+// Saved logins and autofill for the Camoufox engine (2.15.0; the Windows route
+// was withdrawn in 2.15.1).
 //
 // Firefox's login manager is gated by `signon.rememberSignons` (the save offer
 // and every fetch/autofill path) and `signon.autofillForms` (the fill itself).
@@ -6,10 +7,23 @@
 // locks `signon.rememberSignons` false through its own
 // `distribution/policies.json` (`PasswordManagerEnabled: false`,
 // `OfferToSaveLogins: false`). Launch prefs alone lose to that lock (verified by
-// the 2026-10-26 investigation, run C), so the only surgical route is Firefox's
-// per-user policy file: a copy of the build's own policies with only the two
-// password keys true, written where Firefox reads it when
-// `toolkit.policies.perUserDir=true`.
+// the 2026-10-26 investigation, run C), so 2.15.0 tried Firefox's per-user policy
+// file: a copy of the build's own policies with only the two password keys true,
+// written where Firefox reads it when `toolkit.policies.perUserDir=true`.
+//
+// 2.15.1 withdraws that route on Windows. The 2026-10-26 follow-up proved this
+// build has no readable per-user policy directory there: `XREUserRunTimeDir`
+// returns NS_ERROR_FAILURE in the compiled platform branch, so the pref simply
+// applies no policies at all. The route was therefore dead on the only platform
+// it ran on: it wrote a machine-wide file outside the plugin data directory that
+// nothing ever reads, and its one-time verification could hold the MCP handshake
+// for up to ~80 s against a 30 s client connect timeout. `applyPasswordManager`
+// now records and reports the block without resolving a path, writing a file,
+// starting a browser or merging a pref. The route itself is retained below,
+// unchanged and covered by tests, for a future build or platform that
+// implements a readable per-user directory; the plugin-owned overlay build (the
+// build's own tree with only `distribution/policies.json` changed) is the
+// intended route and is not shipped yet.
 //
 // The per-user directory is derived from the Windows KnownFolder LocalAppData
 // (never from a possibly redirected environment variable) and is accepted only
@@ -69,6 +83,13 @@ export const PASSWORD_MANAGER_NOT_APPLICABLE_NOTE =
 export const PASSWORD_MANAGER_PENDING_NOTE =
   'Saved logins: the per-user policy file is prepared and verified when the Camoufox backend starts; this ' +
   'report was taken before that step finished.';
+
+// 2.15.1: the per-user route is dead on Windows (see the file header), so a
+// Windows start with the setting on records this note instead of trying it.
+export const PASSWORD_MANAGER_WINDOWS_DEAD_PATH_NOTE =
+  'Saved logins: this Camoufox build has no readable per-user Firefox policy directory on Windows, so no policy ' +
+  'file is written, no verification browser runs and the setting stays off. The plugin-owned overlay build (not ' +
+  'yet shipped) is the future route.';
 
 const ON_VALUES = new Set(['true', '1', 'yes', 'on']);
 const OFF_VALUES = new Set(['false', '0', 'no', 'off']);
@@ -533,10 +554,12 @@ function disablePasswordManager({ env, pluginDataDir, log }) {
   return { status: 'off', note: null, policyFile: removed ? file : null };
 }
 
-// The whole step, called by launch-camoufox.mjs before the wrapper starts.
-// Returns { status, note, policyFile } for the launcher's log; it never throws on
-// a normal failure path and never stops the server from starting.
-export async function applyPasswordManager(options) {
+// The retained per-user policy-file route (2.15.0), unchanged. 2.15.1 does not
+// call it: no shipped Windows build has a readable per-user policy directory
+// (`XREUserRunTimeDir` returns NS_ERROR_FAILURE) and the POSIX branch refuses
+// before it. It stays exported and covered by tests so a future build or platform
+// that implements the directory can use it without a rewrite.
+export async function applyPerUserPolicyFile(options) {
   const {
     env,
     pluginDataDir,
@@ -545,39 +568,9 @@ export async function applyPasswordManager(options) {
     python,
     bootstrap,
     log = () => {},
-    platform = process.platform,
     resolvePath = resolvePasswordPolicyPath,
     probe = runPasswordProbe,
   } = options;
-  const resolution = resolvePasswordManager(env);
-  const problem = passwordManagerProblemNote(resolution);
-  if (problem !== null) {
-    log(problem);
-  }
-  if (!resolution.enabled) {
-    return disablePasswordManager({ env, pluginDataDir, log });
-  }
-
-  const configProblem = passwordUserConfigProblem(env);
-  if (configProblem !== null) {
-    delete env[PASSWORD_MANAGER_STATE_VAR];
-    log(configProblem);
-    return { status: 'blocked-config', note: configProblem, policyFile: null };
-  }
-
-  if (platform !== 'win32') {
-    return blockedResult({
-      env,
-      pluginDataDir,
-      build,
-      status: 'blocked-by-build-policy',
-      note:
-        'Saved logins: the per-user Firefox policy path could not be resolved on this platform, so the setting is ' +
-        'not applied. It was verified on Windows only.',
-      policyFile: null,
-      log,
-    });
-  }
 
   let localAppData = null;
   try {
@@ -778,6 +771,60 @@ export async function applyPasswordManager(options) {
     log(note);
     return { status: 'blocked-by-build-policy', note, policyFile: null };
   }
+}
+
+// The whole step, called by launch-camoufox.mjs before the wrapper starts.
+// Returns { status, note, policyFile } for the launcher's log; it never throws on
+// a normal failure path and never stops the server from starting.
+//
+// 2.15.1: with the setting on, a Windows start resolves no path, writes no file,
+// starts no browser and merges no prefs. The per-user route is dead there (this
+// build has no readable per-user policy directory), so the block is recorded and
+// reported straight away: the handshake no longer carries the 20 s path lookup
+// and the 60 s verification start of 2.15.0, and no machine-wide file can be
+// orphaned outside the plugin data directory. Other platforms keep their 2.15.0
+// answer. Off is unchanged and still removes only a file this plugin wrote.
+export async function applyPasswordManager(options) {
+  const { env, pluginDataDir, build, log = () => {}, platform = process.platform } = options;
+  const resolution = resolvePasswordManager(env);
+  const problem = passwordManagerProblemNote(resolution);
+  if (problem !== null) {
+    log(problem);
+  }
+  if (!resolution.enabled) {
+    return disablePasswordManager({ env, pluginDataDir, log });
+  }
+
+  const configProblem = passwordUserConfigProblem(env);
+  if (configProblem !== null) {
+    delete env[PASSWORD_MANAGER_STATE_VAR];
+    log(configProblem);
+    return { status: 'blocked-config', note: configProblem, policyFile: null };
+  }
+
+  if (platform !== 'win32') {
+    return blockedResult({
+      env,
+      pluginDataDir,
+      build,
+      status: 'blocked-by-build-policy',
+      note:
+        'Saved logins: the per-user Firefox policy path could not be resolved on this platform, so the setting is ' +
+        'not applied. It was verified on Windows only.',
+      policyFile: null,
+      log,
+    });
+  }
+
+  return blockedResult({
+    env,
+    pluginDataDir,
+    build,
+    status: 'blocked-by-build-policy',
+    note: PASSWORD_MANAGER_WINDOWS_DEAD_PATH_NOTE,
+    policyFile: null,
+    log,
+  });
 }
 
 // File existence only. The broker never opens logins.db or key4.db.

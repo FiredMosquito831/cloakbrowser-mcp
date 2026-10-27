@@ -119,8 +119,8 @@ The same repository is a Claude Code plugin marketplace named `cloakbrowser-mcp`
 
 | Plugin | Engine | What it adds |
 |---|---|---|
-| `cloakbrowser` | selectable: `cloak` (default), `playwright`, `camoufox`, `camoufox-native`, `kameleo` | the 76-tool CloakBrowser surface, a manifest-driven broker, and every engine setting |
-| `camoufox` | fixed `camoufox` (stealth Firefox) | only the settings that engine honours; 26 tools at the portable profile, 69 at full; provisions its own Python runtime |
+| `cloakbrowser` | selectable: `cloak` (default), `playwright`, `camoufox`, `camoufox-native`, `kameleo` | the 77-tool CloakBrowser surface, a manifest-driven broker, and every engine setting |
+| `camoufox` | fixed `camoufox` (stealth Firefox) | only the settings that engine honours; 27 tools at the portable profile, 70 at full; provisions its own Python runtime |
 
 Install one path per engine. Plugin settings are per plugin and are not carried across; a Kameleo per-engine plugin is not shipped. See `plugins/cloakbrowser/README.md` and `plugins/camoufox/README.md`.
 

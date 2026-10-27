@@ -17,11 +17,14 @@ import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 
-// Camoufox saved logins and autofill (2.15.0). The pinned build locks Firefox's
-// login manager off through its own enterprise policy, so the setting works only
-// through a managed per-user policy file plus the four prefs that use it. This
-// suite pins:
+// Camoufox saved logins and autofill (2.15.0; the Windows per-user route was
+// withdrawn in 2.15.1). The pinned build locks Firefox's login manager off
+// through its own enterprise policy, and it has no readable per-user policy
+// directory on Windows, so the setting reports blocked-by-build-policy there
+// without writing, probing or merging anything. This suite pins:
 //   - both plugin manifests, the environment mapping and the settings counts;
+//   - the Windows dead path: no path lookup, no file, no probe, no pref;
+//   - the retained per-user policy-file route (2.15.0), unchanged and covered;
 //   - the shared helper: boolean resolution, the path decision, the policy
 //     documents, the ownership record and every apply branch;
 //   - the entry point's merge of the four prefs (tests/python);
@@ -64,6 +67,7 @@ interface PasswordModule {
   PASSWORD_MANAGER_SETTING_VAR: string;
   PASSWORD_MANAGER_STATE_VAR: string;
   PASSWORD_MANAGER_STATE_APPLIED: string;
+  PASSWORD_MANAGER_WINDOWS_DEAD_PATH_NOTE: string;
   PASSWORD_MANAGER_PREFS: Record<string, boolean>;
   resolvePasswordManager(env?: Record<string, string | undefined>): Resolution;
   passwordManagerProblemNote(resolution: Resolution): string | null;
@@ -81,6 +85,7 @@ interface PasswordModule {
   passwordUserConfigProblem(env: Record<string, string | undefined>): string | null;
   hasFirefoxLoginStore(profileDir: string): boolean;
   applyPasswordManager(options: Record<string, unknown>): Promise<ApplyResult>;
+  applyPerUserPolicyFile(options: Record<string, unknown>): Promise<ApplyResult>;
 }
 
 interface ChildEnvLauncher {
@@ -205,17 +210,34 @@ interface RunResult {
   logs: string[];
 }
 
-async function runApply(
+interface RunOptions {
+  env?: Record<string, string | undefined>;
+  platform?: string;
+  resolvePath?: () => Record<string, unknown> | null;
+  probe?: () => Promise<Record<string, unknown>>;
+  pluginDataDir?: string;
+  binary?: string;
+  build?: string;
+}
+
+// The retained per-user policy-file route (2.15.0), called directly. 2.15.1
+// reaches it through no platform (the Windows block below records the dead path
+// instead), and every branch stays covered here for a future build that
+// implements a readable per-user policy directory.
+async function runApply(fixture: Fixture, options: RunOptions = {}): Promise<RunResult> {
+  return runStep(fixture, options, (stepOptions) => library.applyPerUserPolicyFile(stepOptions));
+}
+
+// The setting-level entry point the launcher calls. `resolvePath` and `probe` are
+// injected so a test can prove they are never reached.
+async function runApplySetting(fixture: Fixture, options: RunOptions = {}): Promise<RunResult> {
+  return runStep(fixture, options, (stepOptions) => library.applyPasswordManager(stepOptions));
+}
+
+async function runStep(
   fixture: Fixture,
-  options: {
-    env?: Record<string, string | undefined>;
-    platform?: string;
-    resolvePath?: () => Record<string, unknown> | null;
-    probe?: () => Promise<Record<string, unknown>>;
-    pluginDataDir?: string;
-    binary?: string;
-    build?: string;
-  } = {},
+  options: RunOptions,
+  step: (options: Record<string, unknown>) => Promise<ApplyResult>,
 ): Promise<RunResult> {
   const env: Record<string, string | undefined> = {
     STEALTH_PASSWORD_MANAGER: 'true',
@@ -224,7 +246,7 @@ async function runApply(
   let probeCalls = 0;
   let pathCalls = 0;
   const logs: string[] = [];
-  const result = await library.applyPasswordManager({
+  const result = await step({
     env,
     pluginDataDir: options.pluginDataDir ?? fixture.pluginData,
     binary: options.binary ?? fixture.binary,
@@ -279,9 +301,10 @@ describe('password_manager in the shipped manifests', () => {
       'profile-copy.mjs',
       'PasswordManagerEnabled',
       'OfferToSaveLogins',
-      'reports its path',
+      'XREUserRunTimeDir',
       'blocked-by-build-policy',
-      'never touched',
+      'overlay build',
+      'not read, written or removed',
       'never reads, logs or transmits',
       '2FA',
     ]) {
@@ -514,11 +537,11 @@ describe('the shared password-manager helper', () => {
 });
 
 // --- the apply step --------------------------------------------------------
-describe('applyPasswordManager', () => {
+describe('applyPasswordManager (2.15.1: the Windows per-user route is dead)', () => {
   it('is byte-identical when off: no files, no record, no path resolution', async () => {
     for (const value of [undefined, '', 'false', '0', 'no', 'off']) {
       const fixture = layoutFixture();
-      const run = await runApply(fixture, { env: { STEALTH_PASSWORD_MANAGER: value } });
+      const run = await runApplySetting(fixture, { env: { STEALTH_PASSWORD_MANAGER: value } });
       expect(run.result.status, `${String(value)}`).toBe('off');
       expect(run.probeCalls).toBe(0);
       expect(run.pathCalls).toBe(0);
@@ -528,6 +551,65 @@ describe('applyPasswordManager', () => {
     }
   });
 
+  // 2.15.1 removed the Windows attempt: this build has no readable per-user
+  // policy directory there, so a Windows start with the setting on must not
+  // resolve a path (20 s), write a machine-wide file, start a verification
+  // browser (60 s) or merge a pref. Every guard below is mutation-checked.
+  it('on Windows blocks with the dead-path note and starts nothing', async () => {
+    const fixture = layoutFixture();
+    const run = await runApplySetting(fixture);
+    expect(run.result.status).toBe('blocked-by-build-policy');
+    expect(run.result.note).toBe(library.PASSWORD_MANAGER_WINDOWS_DEAD_PATH_NOTE);
+    expect(run.result.note).toContain('no readable per-user Firefox policy directory on Windows');
+    expect(run.result.note).toContain('overlay build (not yet shipped) is the future route');
+    expect(run.result.policyFile).toBeNull();
+    // No path resolution (up to 20 s) and no verification browser start (up to 60 s).
+    expect(run.pathCalls).toBe(0);
+    expect(run.probeCalls).toBe(0);
+    // No policy file and no pref: the entry point merges nothing without the state var.
+    expect(existsSync(fixture.target)).toBe(false);
+    expect(run.env.STEALTH_PASSWORD_MANAGER_STATE).toBeUndefined();
+    // One honest log line, and the blocked record the broker reads.
+    expect(run.logs).toEqual([library.PASSWORD_MANAGER_WINDOWS_DEAD_PATH_NOTE]);
+    expect(record(fixture)).toMatchObject({
+      version: 1,
+      engine: 'camoufox',
+      status: 'blocked-by-build-policy',
+      build: fixture.build,
+      policyFile: null,
+      note: library.PASSWORD_MANAGER_WINDOWS_DEAD_PATH_NOTE,
+    });
+  });
+
+  it('never reads or removes a file at the old per-user path on Windows', async () => {
+    const fixture = layoutFixture();
+    const previous = '{"policies":{"PasswordManagerEnabled":true}}\n';
+    mkdirSync(path.dirname(fixture.target), { recursive: true });
+    writeFileSync(fixture.target, previous);
+    const run = await runApplySetting(fixture);
+    expect(run.result.status).toBe('blocked-by-build-policy');
+    expect(run.result.note).toBe(library.PASSWORD_MANAGER_WINDOWS_DEAD_PATH_NOTE);
+    expect(run.pathCalls).toBe(0);
+    expect(run.probeCalls).toBe(0);
+    // A file left by an earlier 2.15.0 start is not this release's data to touch.
+    expect(readFileSync(fixture.target, 'utf8')).toBe(previous);
+  });
+
+  it('takes no measurable step on Windows (the handshake carries no 20/60 s wait)', async () => {
+    const fixture = layoutFixture();
+    const started = process.hrtime.bigint();
+    await runApplySetting(fixture);
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    // The 2.15.0 step could take 20 s (path) + 60 s (probe); the dead path is a
+    // record write. 1000 ms is far above any filesystem jitter and far below the
+    // smallest step this guard removes.
+    expect(elapsedMs).toBeLessThan(1000);
+  });
+
+  // The tests below exercise the retained per-user policy-file route (2.15.0)
+  // through `runApply`, which calls `applyPerUserPolicyFile` directly. No
+  // shipped platform reaches that function any more; the route stays covered so a
+  // future build that implements the directory keeps its contract.
   it('writes our managed file on the first enable and records ownership', async () => {
     const fixture = layoutFixture();
     const run = await runApply(fixture);
@@ -593,7 +675,7 @@ describe('applyPasswordManager', () => {
     expect(second.probeCalls).toBe(0);
     expect(existsSync(fixture.target)).toBe(false);
     expect(record(fixture)).toMatchObject({ status: 'blocked-by-build-policy', verified: false });
-    const off = await runApply(fixture, { env: { STEALTH_PASSWORD_MANAGER: 'false' } });
+    const off = await runApplySetting(fixture, { env: { STEALTH_PASSWORD_MANAGER: 'false' } });
     expect(off.result.status).toBe('off');
     expect(record(fixture)).toBeNull();
     const third = await runApply(fixture);
@@ -631,7 +713,7 @@ describe('applyPasswordManager', () => {
       probeHash: 'feedface',
       verified: true,
     });
-    const run = await runApply(fixture, { env: { STEALTH_PASSWORD_MANAGER: 'false' } });
+    const run = await runApplySetting(fixture, { env: { STEALTH_PASSWORD_MANAGER: 'false' } });
     expect(run.result.status).toBe('off');
     expect(readFileSync(fixture.target, 'utf8')).toBe(foreign);
     expect(record(fixture)).toBeNull();
@@ -642,7 +724,7 @@ describe('applyPasswordManager', () => {
     const first = await runApply(fixture);
     expect(first.result.status).toBe('applied');
     expect(existsSync(fixture.target)).toBe(true);
-    const second = await runApply(fixture, { env: { STEALTH_PASSWORD_MANAGER: 'false' } });
+    const second = await runApplySetting(fixture, { env: { STEALTH_PASSWORD_MANAGER: 'false' } });
     expect(second.result.status).toBe('off');
     expect(existsSync(fixture.target)).toBe(false);
     expect(record(fixture)).toBeNull();
@@ -680,19 +762,25 @@ describe('applyPasswordManager', () => {
     expect(existsSync(invalid.target)).toBe(false);
   });
 
-  it('refuses on a non-Windows platform', async () => {
+  it('refuses on a non-Windows platform with the 2.15.0 answer', async () => {
     const fixture = layoutFixture();
-    const run = await runApply(fixture, { platform: 'linux' });
+    const run = await runApplySetting(fixture, { platform: 'linux' });
     expect(run.result.status).toBe('blocked-by-build-policy');
+    expect(run.result.note).toBe(
+      'Saved logins: the per-user Firefox policy path could not be resolved on this platform, so the setting is ' +
+        'not applied. It was verified on Windows only.',
+    );
     expect(run.pathCalls).toBe(0);
+    expect(run.probeCalls).toBe(0);
     expect(existsSync(fixture.target)).toBe(false);
+    expect(existsSync(fixture.pluginData)).toBe(true);
   });
 
   it('does not write any policy file when the user config cannot carry prefs', async () => {
     const fixture = layoutFixture();
     const ini = path.join(fixture.root, 'user.ini');
     writeFileSync(ini, 'browser = camoufox\n');
-    const run = await runApply(fixture, { env: { CAMOUFOX_MCP_CONFIG: ini } });
+    const run = await runApplySetting(fixture, { env: { CAMOUFOX_MCP_CONFIG: ini } });
     expect(run.result.status).toBe('blocked-config');
     expect(run.pathCalls).toBe(0);
     expect(run.probeCalls).toBe(0);
@@ -765,7 +853,7 @@ describe('applyPasswordManager', () => {
 
   it('logs one honest line for an unusable setting value', async () => {
     const fixture = layoutFixture();
-    const run = await runApply(fixture, { env: { STEALTH_PASSWORD_MANAGER: 'maybe' } });
+    const run = await runApplySetting(fixture, { env: { STEALTH_PASSWORD_MANAGER: 'maybe' } });
     expect(run.result.status).toBe('off');
     expect(run.logs.join('\n')).toContain('not a boolean');
     expect(existsSync(fixture.target)).toBe(false);
@@ -1159,6 +1247,38 @@ describe('the broker report', () => {
       expect(capabilities.passwordManagerEnabled).toBe(false);
       expect(report(await payload(session, 'browser_engine_status'))).toEqual(report(capabilities));
     }
+  });
+
+  it('reports the 2.15.1 Windows dead path from the record the launcher writes', async () => {
+    const root = tempRoot('password-dead-path-');
+    const plugin = createStubPlugin(root);
+    const dataDir = path.join(root, 'data');
+    // Exactly the step the camoufox launcher runs when the setting is on.
+    const applied = await runApplySetting(layoutFixture(), { pluginDataDir: dataDir });
+    expect(applied.result.status).toBe('blocked-by-build-policy');
+    expect(applied.pathCalls).toBe(0);
+    expect(applied.probeCalls).toBe(0);
+    const session = startBroker({
+      pluginDir: plugin,
+      dataDir,
+      engine: 'camoufox',
+      env: { STEALTH_PASSWORD_MANAGER: 'true' },
+    });
+    const initialized = await initialize(session);
+    const capabilities = await payload(session, 'browser_capabilities');
+    expect(report(capabilities)).toEqual({
+      passwordManagerEnabled: false,
+      passwordManagerApplies: true,
+      passwordManagerSource: 'blocked-by-build-policy',
+      passwordManagerPolicyFile: null,
+      passwordManagerStore: 'missing',
+    });
+    expect(String(capabilities.passwordManagerNote)).toBe(library.PASSWORD_MANAGER_WINDOWS_DEAD_PATH_NOTE);
+    expect(report(await payload(session, 'browser_engine_status'))).toEqual(report(capabilities));
+    expect(initialized.result?.instructions ?? '').toContain(
+      'no readable per-user Firefox policy directory on Windows',
+    );
+    expect(initialized.result?.instructions ?? '').not.toContain('Saved logins are enabled');
   });
 
   it('reports an INI wrapper config as inert without touching it', async () => {

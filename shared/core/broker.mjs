@@ -985,15 +985,15 @@ function pingTimeoutReport() {
   };
 }
 
-// --- saved logins and autofill (2.15.0) --------------------------------------
+// --- saved logins and autofill (2.15.0; Windows route withdrawn in 2.15.1) ---
 // The `password_manager` setting. The pinned Camoufox build locks Firefox's
-// login manager off through its own enterprise policy, so enabling it needs a
-// managed per-user policy file written by the camoufox launcher (the only
-// surgical route; see lib/password-manager.mjs). The broker never writes it: it
-// reports the launcher's ownership record and the store's *file existence* only.
-// Off (the default) adds no key to any payload, so every engine stays
-// byte-identical; on, the applying engine reports what happened and the engines
-// that cannot apply it say so.
+// login manager off through its own enterprise policy; 2.15.1 no longer tries the
+// per-user policy file on Windows because this build has no readable per-user
+// policy directory there, so the launcher records a blocked state and the broker
+// reports it. The broker never writes anything: it reports the launcher's
+// ownership record and the store's *file existence* only. Off (the default) adds
+// no key to any payload, so every engine stays byte-identical; on, the applying
+// engine reports what happened and the engines that cannot apply it say so.
 const passwordManagerResolution = resolvePasswordManager(process.env);
 
 // The profile's Firefox login store: file existence only, never opened. A copy

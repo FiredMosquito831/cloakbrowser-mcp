@@ -25,7 +25,9 @@ merges the four Firefox prefs that use that file into the same per-profile
 `CAMOUFOX_MCP_CONFIG` the identity uses (one file, never two writers racing).
 Nothing here formats, reads or logs a credential: the plugin never opens the
 profile's login store. With the setting off or blocked the environment is left
-exactly as before.
+exactly as before. (2.15.1: this build has no readable per-user policy directory
+on Windows, so the launcher never writes that file and never sets the state
+variable; it reports `blocked-by-build-policy` instead and this step is inert.)
 """
 
 from __future__ import annotations
