@@ -71,16 +71,14 @@ const COMPARISON_MATCHERS = new Set([
 // The clock reads a duration is measured from.
 const CLOCK_CALLS = new Set(['Date.now', 'performance.now', 'process.hrtime', 'hrtime.bigint']);
 
-// A capital `Ms` suffix is the suite's convention for a millisecond value; the
-// words cover the same values before they were given a unit suffix. Case matters
-// for the suffix on purpose, so a plural like `items` is not a duration.
-const DURATION_WORDS = /^(?:elapsed|waited|duration|took)$/iu;
-
-// A capital `Ms` suffix is the suite's convention for a millisecond value; the
-// case matters so a plural like `items` is not a duration.
+// A capital `Ms` suffix is the suite's convention for a millisecond value; the case
+// matters on purpose, so a plural like `items` is not a duration.
 function isMillisecondName(name: string): boolean {
   return name.endsWith('Ms');
 }
+
+// The words cover the same values before they were given a unit suffix.
+const DURATION_WORDS = /^(?:elapsed|waited|duration|took)$/iu;
 
 const BUDGET_COMMENT = /\/\/\s*budget:\s*\S/u;
 
