@@ -52,6 +52,7 @@ interface ProfileModule {
   ON_LOCKED_BLOCK: string;
   ON_LOCKED_FALLBACK: string;
   ON_LOCKED_ISOLATED: string;
+  ON_LOCKED_COPY: string;
   PROFILE_FALLBACK_FIRST_SUFFIX: number;
   PROFILE_FALLBACK_LAST_SUFFIX: number;
   PROFILE_LOCK_FILENAME: string;
@@ -491,15 +492,16 @@ describe('on_locked setting values', () => {
     expect(unknown).toMatchObject({ mode: 'fallback', source: 'default', ignored: 'per-window' });
   });
 
-  it('accepts the three documented values', () => {
-    for (const value of ['block', 'fallback', 'isolated']) {
+  it('accepts the four documented values', () => {
+    for (const value of ['block', 'fallback', 'isolated', 'copy']) {
       expect(profile.resolveOnLocked(value)).toMatchObject({ mode: value, source: 'setting' });
     }
-    expect(profile.ON_LOCKED_VALUES).toEqual(['block', 'fallback', 'isolated']);
+    expect(profile.ON_LOCKED_VALUES).toEqual(['block', 'fallback', 'isolated', 'copy']);
     expect(profile.DEFAULT_ON_LOCKED).toBe('fallback');
     expect(profile.ON_LOCKED_BLOCK).toBe('block');
     expect(profile.ON_LOCKED_FALLBACK).toBe('fallback');
     expect(profile.ON_LOCKED_ISOLATED).toBe('isolated');
+    expect(profile.ON_LOCKED_COPY).toBe('copy');
   });
 
   it('is offered by both plugin manifests, wired to one environment variable', () => {
@@ -511,11 +513,12 @@ describe('on_locked setting values', () => {
       };
       const setting = manifest.userConfig.on_locked;
       expect(setting.type).toBe('string');
-      expect(setting.options).toEqual(['block', 'fallback', 'isolated']);
+      expect(setting.options).toEqual(['block', 'fallback', 'isolated', 'copy']);
       expect(setting.default).toBe('fallback');
       expect(setting.description).toContain('separate cookies, logins and fingerprint seed');
-      expect(setting.description).toContain('an explicit Profile directory is never duplicated');
+      expect(setting.description).toContain('an explicit Profile directory keeps the block behaviour');
       expect(setting.description).toContain('nothing is saved and nothing persists');
+      expect(setting.description).toContain('a copy is never taken of a copy');
       const mcp = JSON.parse(
         readFileSync(path.join(repoRoot, 'plugins', name, '.mcp.json'), 'utf8'),
       ) as Record<string, { env: Record<string, string> }>;
@@ -968,79 +971,81 @@ describe('broker on_locked: the engine profile lock', () => {
   });
 });
 
-describe('broker on_locked: copy and copy-keep use the sibling base', () => {
-  it('copies the sibling base, never the live one (copy)', async () => {
-    const dataDir = createRuntime(tempRoot('on-locked-copy-'));
+describe('broker on_locked: the copy modes never fall back to a sibling (2.20.0)', () => {
+  it('refuses a busy copy-mode base loudly instead of creating a sibling', async () => {
+    // The 2.16.0 regression: copy mode plus on_locked=fallback (the default) moved
+    // to a numbered sibling and copied that empty profile. 2.20.0 restores the
+    // 2.12-2.15 rule and says so.
+    const dataDir = createRuntime(tempRoot('on-locked-copy-busy-'));
     const base = path.join(dataDir, 'profiles', 'default');
     seedBase(base);
     writeLock(base, process.pid);
     const session = startBroker({ dataDir, isolation: 'copy', engine: 'playwright' });
     const initialized = await initialize(session);
-    expect(initialized.result?.instructions).toContain(`${base}-2`);
     const caps = await capabilities(session);
     expect(caps.onLocked).toBe('fallback');
-    expect(caps.profileFallback).toMatchObject({ from: base, to: `${base}-2` });
-    const copy = caps.profileCopy as Record<string, unknown>;
-    expect(copy).toMatchObject({ baseDir: `${base}-2` });
-    expect(String(copy.sessionDir)).toContain(path.join('profiles', 'playwright', '.sessions'));
-    expect(String(copy.sessionDir)).toContain('default-2-');
-    expect((copy.baseLock as Record<string, unknown>).heldByThisSession).toBe(true);
-    // The live base keeps its bytes and its owner's lock.
+    expect(caps.profileFallback).toBeNull();
+    expect(caps.profileCopy).toBeNull();
+    expect(String(initialized.result?.instructions)).toContain('so the base profile was not copied');
+    expect(existsSync(`${base}-2`)).toBe(false);
     expect(readFileSync(path.join(base, 'Default', 'Cookies'), 'utf8')).toBe('cookie-bytes');
     expect(profile.readProfileLock(base)).toMatchObject({ state: 'live', owner: { pid: process.pid } });
-    expect(session.stderr()).toContain('so this session uses');
+    expect(await toolNames(session)).toEqual([...META_TOOLS]);
   });
 
-  it('uses the sibling of the pointer-named profile as the base for copy mode', async () => {
-    // The reported real configuration, on a multi-seat engine (the cloak engine
-    // holds instead; the hold suite covers that): profile_isolation=copy, a
-    // .default pointer naming "chrome", and that profile held by a live session.
-    const dataDir = createRuntime(tempRoot('on-locked-copy-pointer-'));
-    const profilesDir = path.join(dataDir, 'profiles', 'playwright');
-    mkdirSync(profilesDir, { recursive: true });
-    writeFileSync(path.join(profilesDir, '.default'), 'chrome\n');
-    const base = path.join(profilesDir, 'chrome');
+  it('waits for the base under on_locked=copy, then copies the base (copy)', async () => {
+    const dataDir = createRuntime(tempRoot('on-locked-copy-hold-'));
+    const base = path.join(dataDir, 'profiles', 'default');
     seedBase(base);
-    writeLock(base, process.pid);
-    const session = startBroker({ dataDir, isolation: 'copy', engine: 'playwright' });
+    const lockFile = writeLock(base, process.pid);
+    const session = startBroker({ dataDir, isolation: 'copy', engine: 'playwright', onLocked: 'copy' });
     const initialized = await initialize(session);
+    expect(String(initialized.result?.instructions)).toContain('keeps its tool list and retries');
     const caps = await capabilities(session);
-    expect(caps.profileSource).toBe('pointer');
-    expect(caps.profileFallback).toMatchObject({ from: base, to: `${base}-2` });
-    const copy = caps.profileCopy as Record<string, unknown>;
-    expect(copy.baseDir).toBe(`${base}-2`);
-    expect(String(copy.sessionDir)).toContain('chrome-2-');
+    expect(caps.profileCopy).toBeNull();
+    expect(caps.hold).toMatchObject({ state: 'waiting' });
+    expect(existsSync(`${base}-2`)).toBe(false);
+
+    // The owner frees the profile; the next tool call takes the copy of the base.
+    rmSync(lockFile, { force: true });
+    const environment = await effectiveEnvironment(session);
+    expect(environment.profileDir).toContain(path.join('profiles', 'playwright', '.sessions'));
+    expect(environment.profileDir).toContain('default-');
+    const recovered = await capabilities(session);
+    const copy = recovered.profileCopy as Record<string, unknown>;
+    expect(copy.baseDir).toBe(base);
+    expect(String(copy.sessionDir)).toContain(path.join('profiles', 'playwright', '.sessions'));
     expect((copy.baseLock as Record<string, unknown>).heldByThisSession).toBe(true);
-    expect(String(initialized.result?.instructions)).toContain(`${base}-2`);
-    // The pointer-named profile keeps its bytes and its live owner's lock.
     expect(readFileSync(path.join(base, 'Default', 'Cookies'), 'utf8')).toBe('cookie-bytes');
-    expect(profile.readProfileLock(base)).toMatchObject({ state: 'live', owner: { pid: process.pid } });
   });
 
-  it('swaps the session copy into the sibling base on a clean close (copy-keep)', async () => {
+  it('swaps a copy-keep session into the base it copied, never a sibling', async () => {
     const dataDir = createRuntime(tempRoot('on-locked-copy-keep-'));
     const base = path.join(dataDir, 'profiles', 'default');
     seedBase(base);
-    writeLock(base, process.pid);
-    const session = startBroker({ dataDir, isolation: 'copy-keep', engine: 'playwright' });
+    const lockFile = writeLock(base, process.pid);
+    const session = startBroker({
+      dataDir,
+      isolation: 'copy-keep',
+      engine: 'playwright',
+      onLocked: 'copy',
+    });
     await initialize(session);
+    rmSync(lockFile, { force: true });
+    await effectiveEnvironment(session);
     const caps = await capabilities(session);
-    expect(caps.profileFallback).toMatchObject({ from: base, to: `${base}-2` });
     const copy = caps.profileCopy as Record<string, unknown>;
-    expect(copy.baseDir).toBe(`${base}-2`);
+    expect(copy.baseDir).toBe(base);
     expect((copy.swap as Record<string, unknown>).state).toBe('pending');
     await session.close();
-    // The swap targets the sibling: the old base lives beside it and the live
-    // base the other session owns is untouched.
-    expect(readFileSync(path.join(base, 'Default', 'Cookies'), 'utf8')).toBe('cookie-bytes');
-    expect(existsSync(`${base}-2`)).toBe(true);
     const record = JSON.parse(
       readFileSync(path.join(dataDir, 'profiles', 'playwright', '.last-swap.json'), 'utf8'),
     ) as { state: string; baseDir: string; previousDir: string };
     expect(record.state).toBe('swapped');
-    expect(record.baseDir).toBe(`${base}-2`);
-    expect(record.previousDir.startsWith(`${base}-2.previous-`)).toBe(true);
+    expect(record.baseDir).toBe(base);
+    expect(record.previousDir.startsWith(`${base}.previous-`)).toBe(true);
     expect(existsSync(record.previousDir)).toBe(true);
+    expect(existsSync(`${base}-2`)).toBe(false);
   });
 });
 

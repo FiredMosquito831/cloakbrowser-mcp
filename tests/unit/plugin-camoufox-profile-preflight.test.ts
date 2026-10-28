@@ -167,6 +167,15 @@ const CAPABILITIES_KEYS_293 = [
   // 2.16.0 adds the resolved on_locked policy right after profileApplies on every
   // engine that uses the broker's profile model.
   'onLocked',
+  // 2.20.0 adds the effective profile lifetime, the engine-lock latch and the copy
+  // contents right after onLocked. The seat keys are added only for an engine
+  // with a seat concept (see withSeat), so they are absent here.
+  'profileLifetime',
+  'profileLifetimeSource',
+  'browserOpen',
+  'browserOpenSource',
+  'copyContents',
+  'copyContentsSource',
   'profileFallback',
   'profileLock',
 ];
@@ -241,6 +250,15 @@ const STATUS_KEYS_293 = [
   'profileApplies',
   // 2.16.0 adds the resolved on_locked policy right after profileApplies.
   'onLocked',
+  // 2.20.0: the profile lifetime and the copy contents (the same six keys the
+  // capabilities array carries). identityCopy and the seat keys are engine facts
+  // and are added by withIdentityCopy / withSeat.
+  'profileLifetime',
+  'profileLifetimeSource',
+  'browserOpen',
+  'browserOpenSource',
+  'copyContents',
+  'copyContentsSource',
   'profileFallback',
   'profileLock',
   ...IDENTITY_KEYS_2140,
@@ -257,8 +275,32 @@ function withEngineLock(keys: string[]): string[] {
   return copy;
 }
 
-const CLOAK_CAPABILITIES_KEYS = withEngineLock(CAPABILITIES_KEYS_295);
-const CLOAK_STATUS_KEYS = withEngineLock(STATUS_KEYS_293);
+// 2.20.0 adds four seat keys for an engine whose manifest declares singleSeat
+// (cloak only): the effective limit and its source, the live count and whether a
+// seat is free.
+function withSeat(keys: string[]): string[] {
+  const copy = [...keys];
+  copy.splice(
+    copy.indexOf('browserOpenSource') + 1,
+    0,
+    'seatLimit',
+    'seatLimitSource',
+    'seatsInUse',
+    'seatFree',
+  );
+  return copy;
+}
+
+// The cloak manifest also declares an identityCopy list, so those payloads carry
+// the additive `identityCopy` key after copyContentsSource.
+function withIdentityCopy(keys: string[]): string[] {
+  const copy = [...keys];
+  copy.splice(copy.indexOf('copyContentsSource') + 1, 0, 'identityCopy');
+  return copy;
+}
+
+const CLOAK_CAPABILITIES_KEYS = withEngineLock(withIdentityCopy(withSeat(CAPABILITIES_KEYS_295)));
+const CLOAK_STATUS_KEYS = withEngineLock(withIdentityCopy(withSeat(STATUS_KEYS_293)));
 
 const tempRoots: string[] = [];
 const sessions: BrokerSession[] = [];

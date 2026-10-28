@@ -253,7 +253,9 @@ function createCloakFixture(dataDir: string, lockPid: number = DEAD_PID): number
   write(profile, 'Local State', '{"profile":{"info_cache":{}}}');
   write(profile, 'Preferences', '{"account_id":"fixture"}');
   write(profile, '.cloakbrowser-seed', SECRET_SEED);
-  // Kept: the WAL and SHM are part of the database and must travel with it.
+  // Kept: the WAL is part of the database and travels with it. Excluded since
+  // 2.20.0: the -shm index, which refuses a read while a writer holds it and is
+  // rebuilt by SQLite.
   write(profile, 'Default/Network/Cookies.sqlite-wal', 'wal-part-of-db');
   write(profile, 'Default/Network/Cookies.sqlite-shm', 'shm-part-of-db');
   // Excluded: caches at the root and below Default, including Chromium 146's
@@ -290,7 +292,6 @@ function createCloakFixture(dataDir: string, lockPid: number = DEAD_PID): number
     '{"account_id":"fixture"}',
     SECRET_SEED,
     'wal-part-of-db',
-    'shm-part-of-db',
   ].reduce((total, content) => total + Buffer.byteLength(content), 0);
 }
 
@@ -455,19 +456,38 @@ describe('exclusion rules', () => {
     expect(profileCopy.exclusionRule('parent.lock', false, 'lockfile')).toBeNull();
   });
 
-  it('never excludes a database WAL or SHM file', () => {
+  it('keeps every database WAL and excludes only its SHM index', () => {
+    // 2.20.0: the -wal carries the newest committed rows and is always kept; the
+    // -shm is an index SQLite rebuilds, and on Windows it refuses a read while
+    // the writer holds it, so a live copy could never be taken with it.
     for (const name of [
       'cookies.sqlite-wal',
-      'cookies.sqlite-shm',
       'webappsstore.sqlite-wal',
       'Cookies.sqlite-wal',
-      'Cookies.sqlite-shm',
       'Local Storage.sqlite-wal',
     ]) {
       for (const descriptor of [null, 'lockfile', 'parent.lock']) {
         expect(profileCopy.exclusionRule(name, false, descriptor)).toBeNull();
       }
     }
+    for (const name of ['cookies.sqlite-shm', 'Cookies.sqlite-shm', 'Local Storage.sqlite-shm']) {
+      for (const descriptor of [null, 'lockfile', 'parent.lock']) {
+        expect(profileCopy.exclusionRule(name, false, descriptor)).toBe('shm');
+      }
+    }
+    // A directory whose name ends in -shm is not a SQLite index.
+    expect(profileCopy.exclusionRule('odd-shm', true, null)).toBeNull();
+  });
+
+  it('excludes a LevelDB LOCK file and the two name gaps of 2.12-2.19', () => {
+    for (const descriptor of [null, 'lockfile', 'parent.lock']) {
+      expect(profileCopy.exclusionRule('LOCK', false, descriptor)).toBe('lock');
+      expect(profileCopy.exclusionRule('lock', false, descriptor)).toBe('lock');
+      expect(profileCopy.exclusionRule('shader-cache', true, descriptor)).toBe('cache');
+      expect(profileCopy.exclusionRule('BrowserMetrics-spare.pma', false, descriptor)).toBe('metrics');
+    }
+    // A directory named LOCK is not a LevelDB lock file.
+    expect(profileCopy.exclusionRule('LOCK', true, null)).toBeNull();
   });
 });
 
@@ -565,9 +585,11 @@ describe('profile-copy behaviour', () => {
       engineSource: 'setting',
       from: 'default',
       to: 'alice',
-      copied: { files: 9, directories: 2, bytes: expectedBytes },
+      // 2.20.0: the fixture's database -shm is no longer copied (the WAL still is),
+      // so one planned file moves from "copied" to "excluded".
+      copied: { files: 8, directories: 2, bytes: expectedBytes },
       excluded: {
-        entries: 20,
+        entries: 21,
         byRule: {
           profileLock: 1,
           engineLock: 1,
@@ -577,6 +599,8 @@ describe('profile-copy behaviour', () => {
           thumbnails: 0,
           temporary: 1,
           logs: 1,
+          lock: 0,
+          shm: 1,
         },
       },
       skipped: { symlinks: 0, other: 0 },
@@ -595,7 +619,6 @@ describe('profile-copy behaviour', () => {
       'Cookies',
       path.join('Default', 'Network', 'Cookies'),
       path.join('Default', 'Network', 'Cookies.sqlite-wal'),
-      path.join('Default', 'Network', 'Cookies.sqlite-shm'),
       path.join('Default', 'Login Data'),
       path.join('Default', 'Preferences'),
       'Local State',
@@ -632,6 +655,7 @@ describe('profile-copy behaviour', () => {
       path.join('Default', 'DawnCache'),
       path.join('Default', 'DawnGraphiteCache'),
       path.join('Default', 'DawnWebGPUCache'),
+      path.join('Default', 'Network', 'Cookies.sqlite-shm'),
     ]) {
       expect(existsSync(path.join(targetDir, relative))).toBe(false);
     }
@@ -828,7 +852,7 @@ describe('engine identification', () => {
 });
 
 describe('camoufox exclusions', () => {
-  it('excludes Firefox caches, thumbnails and parent.lock and keeps the WAL and SHM', () => {
+  it('excludes Firefox caches, thumbnails and parent.lock, keeps the WAL and drops the SHM', () => {
     const dataDir = tempRoot();
     createCamoufoxFixture(dataDir);
     const result = run({ engine: 'camoufox', from: 'default', to: 'alice', dataDir });
@@ -837,10 +861,11 @@ describe('camoufox exclusions', () => {
     expect(summary).toMatchObject({
       engine: 'camoufox',
       engineSource: 'path',
-      copied: { files: 5, directories: 0 },
+      // 2.20.0: cookies.sqlite-shm is excluded (the -wal beside it is kept).
+      copied: { files: 4, directories: 0 },
       excluded: {
-        entries: 4,
-        byRule: { engineLock: 1, cache: 2, thumbnails: 1 },
+        entries: 5,
+        byRule: { engineLock: 1, cache: 2, thumbnails: 1, lock: 0, shm: 1 },
       },
       sourceEngineLock: {
         state: 'stale',
@@ -856,16 +881,10 @@ describe('camoufox exclusions', () => {
       { name: 'thumbnails', rule: 'thumbnails', count: 1 },
     ]);
     const targetDir = summary.targetDir;
-    for (const kept of [
-      'cookies.sqlite',
-      'cookies.sqlite-wal',
-      'cookies.sqlite-shm',
-      'prefs.js',
-      '.cloakbrowser-seed',
-    ]) {
+    for (const kept of ['cookies.sqlite', 'cookies.sqlite-wal', 'prefs.js', '.cloakbrowser-seed']) {
       expect(existsSync(path.join(targetDir, kept))).toBe(true);
     }
-    for (const gone of ['parent.lock', 'cache2', 'startupCache', 'thumbnails']) {
+    for (const gone of ['parent.lock', 'cache2', 'startupCache', 'thumbnails', 'cookies.sqlite-shm']) {
       expect(existsSync(path.join(targetDir, gone))).toBe(false);
     }
     const human = profileCopy.formatHumanSummary(summary);
@@ -989,6 +1008,8 @@ describe('behaviour-preserving equality', () => {
         thumbnails: 0,
         temporary: 0,
         logs: 0,
+        lock: 0,
+        shm: 0,
       },
       names: [],
     });
@@ -1048,10 +1069,12 @@ describe('profile-copy output', () => {
     expect(cli.stderr).toBe('');
     const parsed = JSON.parse(cli.stdout) as CopySummary;
     expect(parsed).toMatchObject({ ok: true, dryRun: false, engine: 'cloak', from: 'default' });
-    expect(parsed.copied.files).toBe(9);
+    // 2.20.0: the database -shm is excluded, so one planned file fewer is copied.
+    expect(parsed.copied.files).toBe(8);
     expect(parsed.excluded.byRule.cache).toBe(12);
     expect(parsed.excluded.byRule.engineLock).toBe(1);
     expect(parsed.excluded.byRule.metrics).toBe(1);
+    expect(parsed.excluded.byRule.shm).toBe(1);
   });
 
   it('prints a JSON error object with a non-zero exit code', () => {
@@ -1076,7 +1099,7 @@ describe('profile-copy output', () => {
       expect(text).not.toContain(SECRET_SEED);
     }
     expect(human).toContain('Copied profile "default" to "alice" (engine cloak).');
-    expect(human).toContain(`files: 9 (${summary.copied.bytes} bytes`);
+    expect(human).toContain(`files: 8 (${summary.copied.bytes} bytes`);
     expect(human).toContain(
       'engine-specific exclusions: lockfile 1, Cache 2, Code Cache 1, Crashpad 1, DawnCache 1',
     );

@@ -318,7 +318,7 @@ describe('identity_mode in the shipped manifests', () => {
       expect(setting.description).toContain('.camoufox-identity.json');
       expect(setting.description).toContain('random');
       expect(setting.description).toContain('isolated');
-      expect(plugin.version).toBe('2.19.0');
+      expect(plugin.version).toBe('2.20.0');
     }
     const universal = JSON.parse(
       readFileSync(path.join(universalDir, '.claude-plugin', 'plugin.json'), 'utf8'),
@@ -620,7 +620,15 @@ describe('broker reporting and instructions', () => {
     const plugin = createStubPlugin(root);
     const dataDir = path.join(root, 'data');
     const baseFile = writeIdentity(dataDir, storedIdentity());
-    const session = startBroker({ pluginDir: plugin, dataDir, engine: 'camoufox', isolation: 'copy' });
+    // profile_lifetime "server" keeps the 2.19 timing for this test: the copy is
+    // taken at start, so it already exists when the meta-tool answers.
+    const session = startBroker({
+      pluginDir: plugin,
+      dataDir,
+      engine: 'camoufox',
+      isolation: 'copy',
+      env: { STEALTH_PROFILE_LIFETIME: 'server' },
+    });
     await initialize(session);
     const payload = await capabilities(session);
     const copy = payload.profileCopy as { sessionDir: string } | undefined;

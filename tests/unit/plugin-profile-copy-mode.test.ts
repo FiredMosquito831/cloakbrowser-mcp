@@ -251,6 +251,11 @@ function startBroker(options: BrokerOptions): BrokerSession {
     CLOAK_PLAYWRIGHT_MCP_PACKAGE: 'cloakbrowser-mcp@1.15.1',
     STEALTH_ENGINE: options.engine ?? 'cloak',
     STEALTH_TOOL_PROFILE: 'full',
+    // 2.20.0: profile_lifetime defaults to "browser", which takes the copy at the
+    // first browser action. This suite tests the copy mechanics themselves, so it
+    // pins the 2.19 timing (copy at start); plugin-copy-on-lock.test.ts covers the
+    // browser default.
+    STEALTH_PROFILE_LIFETIME: 'server',
   };
   for (const name of [
     'STEALTH_ACCOUNT',
@@ -870,7 +875,8 @@ describe('broker copy mode', () => {
     expect(heldLock.state).toBe('live');
     expect(heldLock.owner?.pid).toBe(session.pid);
 
-    // The copy carries identity files, keeps WAL/SHM and excludes every class.
+    // The copy carries identity files, keeps the WAL and excludes every class,
+    // including the SQLite -shm index since 2.20.0.
     const copied = listFiles(sessionDir);
     for (const kept of [
       '.cloakbrowser-seed',
@@ -878,13 +884,13 @@ describe('broker copy mode', () => {
       'Default/Network/Cookies',
       'Default/Network/Cookies-journal',
       'Default/Network/Cookies-wal',
-      'Default/Network/Cookies-shm',
       'Default/Local Storage/leveldb/000003.log',
       'Default/Preferences',
       'Default/History',
     ]) {
       expect(copied).toContain(kept);
     }
+    expect(copied).not.toContain('Default/Network/Cookies-shm');
     for (const name of copied) {
       const lower = path.basename(name).toLowerCase();
       expect(lower).not.toBe('.cloakbrowser-mcp-profile.lock');

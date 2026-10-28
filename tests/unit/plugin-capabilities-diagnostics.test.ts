@@ -534,6 +534,24 @@ describe('browser_capabilities artifact diagnostics', () => {
     // 2.16.0 adds the resolved on_locked policy inside the profile block, right
     // after profileApplies.
     expectedKeys.splice(expectedKeys.indexOf('profileApplies') + 1, 0, 'onLocked');
+    // 2.20.0 adds eleven keys right after onLocked, in this order.
+    expectedKeys.splice(
+      expectedKeys.indexOf('onLocked') + 1,
+      0,
+      ...[
+        'profileLifetime',
+        'profileLifetimeSource',
+        'browserOpen',
+        'browserOpenSource',
+        'seatLimit',
+        'seatLimitSource',
+        'seatsInUse',
+        'seatFree',
+        'copyContents',
+        'copyContentsSource',
+        'identityCopy',
+      ],
+    );
     expect(Object.keys(actual)).toEqual([...expectedKeys, ...newKeys]);
     const payload = comparable(actual) as Record<string, unknown>;
     const baseline = comparable(fixture) as Record<string, unknown>;

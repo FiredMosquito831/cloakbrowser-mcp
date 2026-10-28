@@ -242,6 +242,11 @@ function startBroker(options: BrokerOptions): BrokerSession {
     CLOAK_PLAYWRIGHT_MCP_PACKAGE: 'cloakbrowser-mcp@1.15.1',
     STEALTH_ENGINE: options.engine ?? 'cloak',
     STEALTH_TOOL_PROFILE: 'full',
+    // 2.20.0: profile_lifetime defaults to "browser", which takes the copy at the
+    // first browser action. This suite tests the copy mechanics themselves, so it
+    // pins the 2.19 timing (copy at start); plugin-copy-on-lock.test.ts covers the
+    // browser default.
+    STEALTH_PROFILE_LIFETIME: 'server',
   };
   for (const name of [
     'STEALTH_ACCOUNT',
@@ -463,7 +468,7 @@ describe('copy-keep as a profile_isolation value', () => {
       expect(setting.description).toContain('previous-');
       expect(setting.description).toContain('never deleted automatically');
       expect(setting.description).not.toContain('in memory');
-      expect(manifest.version).toBe('2.19.0');
+      expect(manifest.version).toBe('2.20.0');
     }
     expect(profile.PROFILE_ISOLATION_VALUES).toEqual([
       'shared',
