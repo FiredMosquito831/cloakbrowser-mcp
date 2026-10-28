@@ -1,10 +1,8 @@
 import {
-  closeSync,
   copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
-  openSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -17,6 +15,7 @@ import { spawn } from 'node:child_process';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { holdEngineLock, manifestProfileLock } from '@tests/helpers/engine-lock-holder.js';
 
 // The multi-session on_locked policy (2.16.0). One setting, three values:
 //   block     the 2.15 behaviour: a busy profile stops the spawn, meta-only.
@@ -427,58 +426,6 @@ function seedBase(baseDir: string): void {
   writeFileSync(path.join(baseDir, 'Local State'), '{}');
   writeFileSync(path.join(baseDir, '.cloakbrowser-seed'), '12345\n');
   writeFileSync(path.join(baseDir, 'Default', 'Cookies'), 'cookie-bytes');
-}
-
-// Hold a file open exclusively, the way Firefox holds its parent.lock: the OS
-// then refuses every other open, which is what `exclusive-open` reads. Windows
-// only; the caller skips elsewhere.
-async function holdExclusiveFile(file: string): Promise<{ stop: () => Promise<void> }> {
-  const script =
-    `$f=[System.IO.File]::Open('${file.replaceAll("'", "''")}','Open','ReadWrite','None');` +
-    'Write-Output held; Start-Sleep -Seconds 120';
-  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: true,
-  });
-  const pid = child.pid;
-  if (pid === undefined) {
-    throw new Error('could not start the file holder');
-  }
-  const deadline = Date.now() + 15000;
-  while (Date.now() < deadline) {
-    try {
-      const handle = openSync(file, 'r+');
-      closeSync(handle);
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EBUSY') {
-        return {
-          stop: async () => {
-            try {
-              process.kill(pid);
-            } catch {
-              // Already gone.
-            }
-            await new Promise<void>((resolve) => {
-              if (child.exitCode !== null || child.signalCode !== null) {
-                resolve();
-                return;
-              }
-              child.once('exit', () => resolve());
-              setTimeout(() => resolve(), 3000);
-            });
-          },
-        };
-      }
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-  }
-  try {
-    process.kill(pid);
-  } catch {
-    // Already gone.
-  }
-  throw new Error('the file holder never took the lock');
 }
 
 describe('on_locked setting values', () => {
@@ -948,33 +895,40 @@ describe('broker on_locked: the engine profile lock', () => {
     expect(caps.engineProfileLock).toMatchObject({ state: 'live' });
   });
 
-  it.skipIf(process.platform !== 'win32')('applies the policy to the Camoufox parent.lock rule', async () => {
-    const root = tempRoot('on-locked-parent-lock-');
-    const plugin = createScratchPlugin(root);
-    const dataDir = createRuntime(path.join(root, 'data'), 'firefox-lock');
-    const base = path.join(dataDir, 'profiles', 'firefox-lock', 'default');
-    mkdirSync(base, { recursive: true });
-    writeFileSync(path.join(base, 'parent.lock'), '');
-    // A live browser holds its Firefox lock exclusively: the file cannot be
-    // opened, which is exactly what the manifest's `exclusive-open` rule reads.
-    const holder = await holdExclusiveFile(path.join(base, 'parent.lock'));
-    try {
-      const session = startBroker({
-        dataDir,
-        engine: 'firefox-lock',
-        pluginDir: plugin,
-        onLocked: 'fallback',
+  it.skipIf(process.platform !== 'win32')(
+    'applies the policy to the Camoufox parent.lock rule',
+    async (t) => {
+      const root = tempRoot('on-locked-parent-lock-');
+      const plugin = createScratchPlugin(root);
+      const dataDir = createRuntime(path.join(root, 'data'), 'firefox-lock');
+      const base = path.join(dataDir, 'profiles', 'firefox-lock', 'default');
+      mkdirSync(base, { recursive: true });
+      writeFileSync(path.join(base, 'parent.lock'), '');
+      // A live browser holds its Firefox lock exclusively: the file cannot be
+      // opened, which is exactly what the manifest's `exclusive-open` rule reads.
+      const holder = await holdEngineLock(t, {
+        file: path.join(base, 'parent.lock'),
+        profileDir: base,
+        descriptor: manifestProfileLock('firefox-lock', plugin),
       });
-      await initialize(session);
-      const caps = await capabilities(session);
-      expect(caps.profileFallback).toMatchObject({ from: base, to: `${base}-2` });
-      expect(caps.engineProfileLock).toMatchObject({ state: 'free', profileDir: `${base}-2` });
-      expect(await toolNames(session)).toEqual([...STUB_TOOLS, ...META_TOOLS]);
-      expect(session.stderr()).toContain('so this session uses');
-    } finally {
-      await holder.stop();
-    }
-  });
+      try {
+        const session = startBroker({
+          dataDir,
+          engine: 'firefox-lock',
+          pluginDir: plugin,
+          onLocked: 'fallback',
+        });
+        await initialize(session);
+        const caps = await capabilities(session);
+        expect(caps.profileFallback).toMatchObject({ from: base, to: `${base}-2` });
+        expect(caps.engineProfileLock).toMatchObject({ state: 'free', profileDir: `${base}-2` });
+        expect(await toolNames(session)).toEqual([...STUB_TOOLS, ...META_TOOLS]);
+        expect(session.stderr()).toContain('so this session uses');
+      } finally {
+        await holder.stop();
+      }
+    },
+  );
 });
 
 describe('broker on_locked: the copy modes never fall back to a sibling (2.20.0)', () => {

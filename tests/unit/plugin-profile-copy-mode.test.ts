@@ -1,11 +1,9 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
-  closeSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
-  openSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -18,6 +16,7 @@ import process from 'node:process';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { holdEngineLock, manifestProfileLock } from '@tests/helpers/engine-lock-holder.js';
 
 // profile_isolation=copy (2.12.0). A copy session runs the browser on a
 // temporary whole-tree copy of the base profile, holds the base profile's
@@ -193,12 +192,8 @@ rl.on('close', () => process.exit(0));
 
 const tempRoots: string[] = [];
 const sessions: BrokerSession[] = [];
-const holders: { pid: number; stop: () => Promise<void> }[] = [];
 
 afterEach(async () => {
-  for (const holder of holders.splice(0)) {
-    await holder.stop();
-  }
   for (const session of sessions.splice(0)) {
     await session.close();
   }
@@ -468,64 +463,6 @@ function deadPid(): number {
   return 2_147_483_647;
 }
 
-// Hold a file like the browser holds its lock. Chromium's lockfile is shared for
-// readers and exclusive for writers (share "Read"); Firefox's parent.lock refuses
-// readers too (share "None"). A real process with one Windows handle, started and
-// stopped by exact pid.
-async function holdExclusiveForRead(
-  file: string,
-  share: 'Read' | 'None' = 'Read',
-): Promise<{ pid: number; stop: () => Promise<void> }> {
-  const script =
-    `$f=[System.IO.File]::Open('${file.replaceAll("'", "''")}','Open','ReadWrite','${share}');` +
-    'Write-Output held; Start-Sleep -Seconds 120';
-  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: true,
-  });
-  const pid = child.pid;
-  if (pid === undefined) {
-    throw new Error('could not start the file holder');
-  }
-  const deadline = Date.now() + 15000;
-  while (Date.now() < deadline) {
-    try {
-      const handle = openSync(file, 'r+');
-      closeSync(handle);
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EBUSY') {
-        let stopped = false;
-        const stop = async () => {
-          if (stopped) {
-            return;
-          }
-          stopped = true;
-          try {
-            process.kill(pid);
-          } catch {
-            // Already gone.
-          }
-          await new Promise<void>((resolve) => {
-            if (child.exitCode !== null || child.signalCode !== null) {
-              resolve();
-              return;
-            }
-            child.once('exit', () => resolve());
-            setTimeout(() => resolve(), 3000);
-          });
-        };
-        const holder = { pid, stop };
-        holders.push(holder);
-        return holder;
-      }
-      throw error;
-    }
-  }
-  child.kill();
-  throw new Error('the file holder never took the lock');
-}
-
 function runPrune(
   dataDir: string,
   args: string[] = [],
@@ -741,13 +678,17 @@ describe('session copy names and listing', () => {
     expect(existsSync(dead)).toBe(false);
   });
 
-  it.skipIf(process.platform !== 'win32')('keeps a copy whose engine lock is held live', async () => {
+  it.skipIf(process.platform !== 'win32')('keeps a copy whose engine lock is held live', async (t) => {
     const root = tempRoot('copy-active-engine-');
     const sessionsRoot = path.join(root, 'profiles', 'cloak', '.sessions');
     const active = path.join(sessionsRoot, 'default-20260101-010101-200');
     writeFile(path.join(active, 'Default', 'Network', 'Cookies'), 'c');
     writeFile(path.join(active, 'lockfile'), '');
-    const holder = await holdExclusiveForRead(path.join(active, 'lockfile'), 'Read');
+    const holder = await holdEngineLock(t, {
+      file: path.join(active, 'lockfile'),
+      profileDir: active,
+      descriptor: manifestProfileLock('cloak'),
+    });
     try {
       const listed = profile.listSessionCopies('cloak', root, {
         engineLockDescriptor: { file: 'lockfile', owner: 'exclusive-open-write' },
@@ -1080,11 +1021,15 @@ describe('broker copy mode', () => {
 
   it.skipIf(process.platform !== 'win32')(
     'refuses a live Chromium engine lock loudly and copies nothing',
-    async () => {
+    async (t) => {
       const dataDir = tempRoot('copy-broker-lived-engine-');
       createRuntime(dataDir);
       const base = seedBaseProfile(dataDir);
-      const holder = await holdExclusiveForRead(path.join(base, 'lockfile'), 'Read');
+      const holder = await holdEngineLock(t, {
+        file: path.join(base, 'lockfile'),
+        profileDir: base,
+        descriptor: manifestProfileLock('cloak'),
+      });
       try {
         const session = startBroker({ dataDir, isolation: 'copy', onLocked: 'block' });
         await initialize(session);
@@ -1102,12 +1047,16 @@ describe('broker copy mode', () => {
 
   it.skipIf(process.platform !== 'win32')(
     'refuses a live Camoufox parent.lock loudly and copies nothing',
-    async () => {
+    async (t) => {
       const dataDir = tempRoot('copy-broker-lived-camoufox-');
       const base = baseProfileDir(dataDir, 'camoufox');
       writeFile(path.join(base, '.cloakbrowser-seed'), '99999\n');
       writeFile(path.join(base, 'parent.lock'), '');
-      const holder = await holdExclusiveForRead(path.join(base, 'parent.lock'), 'None');
+      const holder = await holdEngineLock(t, {
+        file: path.join(base, 'parent.lock'),
+        profileDir: base,
+        descriptor: manifestProfileLock('camoufox'),
+      });
       try {
         const session = startBroker({ dataDir, isolation: 'copy', engine: 'camoufox', onLocked: 'block' });
         await initialize(session);
