@@ -18,6 +18,8 @@
       "STEALTH_ACCOUNT": "${user_config.account}",
       "STEALTH_PROFILE_ISOLATION": "${user_config.profile_isolation}",
       "STEALTH_ON_LOCKED": "${user_config.on_locked}",
+      "STEALTH_COPY_CONTENTS": "${user_config.copy_contents}",
+      "STEALTH_PROFILE_LIFETIME": "${user_config.profile_lifetime}",
       "STEALTH_IDENTITY_MODE": "${user_config.identity_mode}",
       "STEALTH_PING_TIMEOUT_MS": "${user_config.ping_timeout_ms}",
       "STEALTH_PASSWORD_MANAGER": "${user_config.password_manager}",

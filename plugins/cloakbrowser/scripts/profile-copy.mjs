@@ -35,11 +35,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   DEFAULT_ENGINE,
   loadEngineConfiguration,
+  manifestIdentityCopy,
   manifestProfileApplies,
   resolveLauncherName,
 } from '../engine-registry.mjs';
 import {
   accountNameError,
+  COPY_CONTENTS_IDENTITY,
   copyPlanToTarget,
   engineLockBlocksStart,
   engineProfileLockMessage,
@@ -52,7 +54,9 @@ import {
   readEngineProfileLock,
   readProfileLock,
   redactSecrets,
+  resolveCopyContents,
   resolveProfile,
+  restrictPlanToIdentity,
   validateAccountName,
 } from '../lib/profile.mjs';
 
@@ -115,6 +119,16 @@ Options:
   --from <name>      Source profile: an account name or "default".
   --to <new-name>    New profile name. It must not exist; nothing is overwritten
                      and nothing is merged.
+  --contents <tier>  What the copy holds: "full" (default) copies the whole plan;
+                     "identity" keeps only the engine's identity core - cookies,
+                     saved logins and the key that decrypts them, the fingerprint
+                     seed, permissions and installed add-ons - and drops history
+                     bulk, IndexedDB and caches, so sites whose login lives in
+                     IndexedDB (WhatsApp Web, Google Drive, OneDrive, Notion) may
+                     ask you to sign in again. The engine's manifest decides the
+                     exact list; an engine without one copies the full tree.
+                     STEALTH_COPY_CONTENTS (the copy_contents setting) is used when
+                     this option is absent.
   --prune            List and remove leftover session copies; takes no --from or
                      --to.
   --data-dir <path>  Plugin data root (default: CLAUDE_PLUGIN_DATA, otherwise
@@ -233,12 +247,13 @@ export function runProfileCopy({
   to,
   dataDir = null,
   dryRun = false,
+  contents = null,
   env = process.env,
   home = homedir(),
   pluginRoot = PLUGIN_ROOT,
 } = {}) {
   try {
-    const summary = copyProfile({ engine, from, to, dataDir, dryRun, env, home, pluginRoot });
+    const summary = copyProfile({ engine, from, to, dataDir, dryRun, contents, env, home, pluginRoot });
     return { ok: true, summary };
   } catch (error) {
     if (error instanceof ProfileCopyError) {
@@ -254,7 +269,7 @@ export function runProfileCopy({
   }
 }
 
-function copyProfile({ engine, from, to, dataDir, dryRun, env, home, pluginRoot }) {
+function copyProfile({ engine, from, to, dataDir, dryRun, contents = null, env, home, pluginRoot }) {
   const engineId = nonEmptyString(engine) ? engine.trim() : DEFAULT_COPY_ENGINE;
   const configuration = loadEngineConfiguration({
     enginesDir: path.join(pluginRoot, 'engines'),
@@ -409,7 +424,24 @@ function copyProfile({ engine, from, to, dataDir, dryRun, env, home, pluginRoot 
     engineLockDescriptor !== null && typeof engineLockDescriptor.file === 'string'
       ? engineLockDescriptor.file
       : null;
-  const plan = planCopy(sourceDir, { engineLockFile });
+  // copy_contents (2.20.0) governs this tool exactly as it governs the broker, so
+  // the CLI and a session copy can never disagree about what a copy holds. The
+  // --contents option wins; otherwise STEALTH_COPY_CONTENTS (the setting's own
+  // environment variable) applies; unset means "full", byte-identical to 2.19.
+  const contentsResolution = resolveCopyContents(contents ?? env?.STEALTH_COPY_CONTENTS ?? '');
+  // Where the tier came from: the option, the setting's environment variable, or
+  // the default. `resolveCopyContents` cannot tell the first two apart.
+  const contentsSource =
+    typeof contents === 'string' && contents.trim() !== '' ? 'option' : contentsResolution.source;
+  const descriptor = manifestIdentityCopy(configuration.engine);
+  const requestedContents = contentsResolution.mode;
+  const effectiveContents =
+    requestedContents === COPY_CONTENTS_IDENTITY && descriptor === null ? 'full' : requestedContents;
+  const fullPlan = planCopy(sourceDir, { engineLockFile });
+  const plan =
+    effectiveContents === COPY_CONTENTS_IDENTITY
+      ? restrictPlanToIdentity(fullPlan, descriptor.keep)
+      : fullPlan;
   const summary = {
     ok: true,
     dryRun,
@@ -419,6 +451,17 @@ function copyProfile({ engine, from, to, dataDir, dryRun, env, home, pluginRoot 
     to: targetName,
     sourceDir: redactSecrets(sourceDir),
     targetDir: redactSecrets(targetDir),
+    // What this copy holds ("full" or "identity"), where that came from, and why
+    // an identity request could not be honoured. Additive in 2.20.0.
+    contents: effectiveContents,
+    contentsSource,
+    ...(requestedContents === effectiveContents
+      ? {}
+      : {
+          contentsNote:
+            `copy_contents is "${COPY_CONTENTS_IDENTITY}", but the "${engineId}" engine declares no ` +
+            'identityCopy descriptor, so the copy keeps the full tree.',
+        }),
     copied: {
       files: plan.files.length,
       directories: plan.directories.length,
@@ -462,17 +505,35 @@ function copyProfile({ engine, from, to, dataDir, dryRun, env, home, pluginRoot 
   return summary;
 }
 
+// The label for one exclusion rule, including the pseudo-rule the identity tier
+// reports for a top-level entry it kept nothing from.
+function exclusionLabel(rule) {
+  return rule === 'identity' ? 'not in the identity tier' : (EXCLUSION_LABELS[rule] ?? rule);
+}
+
 export function formatHumanSummary(summary) {
   const lines = [];
   const verb = summary.dryRun ? 'Dry run: would copy' : 'Copied';
   lines.push(`${verb} profile "${summary.from}" to "${summary.to}" (engine ${summary.engine}).`);
   lines.push(`from: ${summary.sourceDir}`);
   lines.push(`to: ${summary.targetDir}`);
+  if (typeof summary.contents === 'string') {
+    const source =
+      summary.contentsSource === 'option'
+        ? 'from --contents'
+        : summary.contentsSource === 'setting'
+          ? 'from STEALTH_COPY_CONTENTS'
+          : 'default';
+    lines.push(`contents: ${summary.contents} (${source})`);
+  }
+  if (typeof summary.contentsNote === 'string') {
+    lines.push(summary.contentsNote);
+  }
   if (summary.dryRun) {
     lines.push('Top-level entries:');
     for (const entry of summary.topLevel) {
       if (entry.excluded !== null) {
-        lines.push(`  ${entry.path} (excluded: ${EXCLUSION_LABELS[entry.excluded]})`);
+        lines.push(`  ${entry.path} (excluded: ${exclusionLabel(entry.excluded)})`);
       } else if (entry.type === 'directory') {
         lines.push(`  ${entry.path}/ (directory, ${entry.files} file(s), ${entry.bytes} bytes)`);
       } else if (entry.type === 'file') {
@@ -484,7 +545,7 @@ export function formatHumanSummary(summary) {
   } else {
     for (const entry of summary.topLevel) {
       if (entry.excluded !== null) {
-        lines.push(`  ${entry.path} (excluded: ${EXCLUSION_LABELS[entry.excluded]})`);
+        lines.push(`  ${entry.path} (excluded: ${exclusionLabel(entry.excluded)})`);
       }
     }
   }
@@ -671,13 +732,20 @@ export function parseArguments(argv) {
     to: null,
     dataDir: null,
     dryRun: false,
+    contents: null,
     json: false,
     prune: false,
     help: false,
   };
   const errors = [];
   const seen = new Set();
-  const valueOptions = { '--engine': 'engine', '--from': 'from', '--to': 'to', '--data-dir': 'dataDir' };
+  const valueOptions = {
+    '--engine': 'engine',
+    '--from': 'from',
+    '--to': 'to',
+    '--data-dir': 'dataDir',
+    '--contents': 'contents',
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     const equals = argument.indexOf('=');
@@ -720,12 +788,16 @@ export function parseArguments(argv) {
     for (const [option, value] of [
       ['--from', options.from],
       ['--to', options.to],
+      ['--contents', options.contents],
     ]) {
       if (value !== null) {
         errors.push(`--prune cannot be combined with ${option}.`);
       }
     }
     return { options, errors };
+  }
+  if (options.contents !== null && !['full', 'identity'].includes(options.contents.trim().toLowerCase())) {
+    errors.push(`--contents must be "full" or "identity", not "${options.contents}".`);
   }
   if (options.from === null && !seen.has('from')) {
     errors.push('--from is required.');
@@ -779,6 +851,7 @@ function main(argv) {
     to: options.to,
     dataDir: options.dataDir,
     dryRun: options.dryRun,
+    contents: options.contents,
     env: process.env,
   });
   if (options.json) {

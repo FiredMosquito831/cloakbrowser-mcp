@@ -101,10 +101,16 @@ export function isCopyIsolation(value) {
 // fingerprint seed. "isolated" starts with no profile at all: nothing is created,
 // locked or saved. Only profiles the plugin manages get siblings; an explicit
 // profile_dir always keeps the "block" behaviour.
-export const ON_LOCKED_VALUES = Object.freeze(['block', 'fallback', 'isolated']);
+// "copy" (2.20.0) runs the session on a temporary copy of the busy profile: the
+// base's owner keeps it, the copy takes no lock of its own, and the copy is
+// discarded when the browser closes (profile_lifetime "browser") or when the
+// session ends. A copy is never taken of a copy: under profile_isolation
+// "copy"/"copy-keep" the value means "wait for the base, then take the copy".
+export const ON_LOCKED_VALUES = Object.freeze(['block', 'fallback', 'isolated', 'copy']);
 export const ON_LOCKED_BLOCK = 'block';
 export const ON_LOCKED_FALLBACK = 'fallback';
 export const ON_LOCKED_ISOLATED = 'isolated';
+export const ON_LOCKED_COPY = 'copy';
 export const DEFAULT_ON_LOCKED = ON_LOCKED_FALLBACK;
 // The profile settings that an isolated start reports as ignored. The names are
 // the settings a user can see and change; `value` carries what was supplied so
@@ -395,6 +401,84 @@ export function resolveOnLocked(value) {
   return { mode: DEFAULT_ON_LOCKED, source: 'default', ignored: raw, placeholder: null };
 }
 
+// copy_contents (2.20.0): what a session copy contains. "full" is the whole
+// tree the copy plan keeps, exactly as 2.12.0-2.19.0 copied it. "identity" keeps
+// only the identity core the engine's manifest lists under identityCopy.keep
+// (cookies, saved logins, the key that decrypts them, the fingerprint seed and,
+// per the user's decision, installed add-ons) and drops history, IndexedDB blobs
+// and the rest of the bulk. Only an explicit value selects the tier, so an unset,
+// empty or placeholder value copies exactly what it copied before.
+export const COPY_CONTENTS_VALUES = Object.freeze(['full', 'identity']);
+export const COPY_CONTENTS_FULL = 'full';
+export const COPY_CONTENTS_IDENTITY = 'identity';
+export const DEFAULT_COPY_CONTENTS = COPY_CONTENTS_FULL;
+export function resolveCopyContents(value) {
+  const raw = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (raw === '') {
+    return { mode: DEFAULT_COPY_CONTENTS, source: 'default', ignored: null, placeholder: null };
+  }
+  if (isPlaceholder(raw)) {
+    return { mode: DEFAULT_COPY_CONTENTS, source: 'default', ignored: null, placeholder: raw };
+  }
+  if (COPY_CONTENTS_VALUES.includes(raw)) {
+    return { mode: raw, source: 'setting', ignored: null, placeholder: null };
+  }
+  return { mode: DEFAULT_COPY_CONTENTS, source: 'default', ignored: raw, placeholder: null };
+}
+
+// profile_lifetime (2.20.0): how long this session holds the profile facts it
+// owns. "browser" takes the broker's own base lock (the copy modes) at the first
+// browser action, releases it and discards the session copy when the browser
+// closes, and takes both again on the next browser action (the copy always lands
+// on the same session directory, because the backend was started with it).
+// "server" is the 2.12-2.19 behaviour: lock at start, release and discard at a
+// clean shutdown. It never changes the engine's own lock (lockfile/parent.lock,
+// always browser-scoped) or the bridge's lock (server-scoped until M2); every
+// payload reports each lock's real lifetime and why.
+export const PROFILE_LIFETIME_VALUES = Object.freeze(['browser', 'server']);
+export const PROFILE_LIFETIME_BROWSER = 'browser';
+export const PROFILE_LIFETIME_SERVER = 'server';
+export const DEFAULT_PROFILE_LIFETIME = PROFILE_LIFETIME_BROWSER;
+export function resolveProfileLifetime(value) {
+  const raw = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (raw === '') {
+    return { mode: DEFAULT_PROFILE_LIFETIME, source: 'default', ignored: null, placeholder: null };
+  }
+  if (isPlaceholder(raw)) {
+    return { mode: DEFAULT_PROFILE_LIFETIME, source: 'default', ignored: null, placeholder: raw };
+  }
+  if (PROFILE_LIFETIME_VALUES.includes(raw)) {
+    return { mode: raw, source: 'setting', ignored: null, placeholder: null };
+  }
+  return { mode: DEFAULT_PROFILE_LIFETIME, source: 'default', ignored: raw, placeholder: null };
+}
+
+// seat_limit (2.20.0): the concurrent-browser capacity of an engine that has a
+// seat concept (the manifest's singleSeat). "engine-default" is the manifest's
+// own rule and therefore byte-identical to 2.16-2.19: one browser on the free
+// CloakBrowser, no limit anywhere else. "unlimited" is the user asserting their
+// licence has no practical cap; "vendor-license" asks the vendor's licence API
+// (a live network call, only when a licence key is configured) and falls back to
+// the engine default, reporting why. Unknown values are the default.
+export const SEAT_LIMIT_VALUES = Object.freeze(['engine-default', 'vendor-license', 'unlimited']);
+export const SEAT_LIMIT_ENGINE_DEFAULT = 'engine-default';
+export const SEAT_LIMIT_VENDOR = 'vendor-license';
+export const SEAT_LIMIT_UNLIMITED = 'unlimited';
+export const DEFAULT_SEAT_LIMIT = SEAT_LIMIT_ENGINE_DEFAULT;
+export function resolveSeatLimit(value) {
+  const raw = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (raw === '') {
+    return { mode: DEFAULT_SEAT_LIMIT, source: 'default', ignored: null, placeholder: null };
+  }
+  if (isPlaceholder(raw)) {
+    return { mode: DEFAULT_SEAT_LIMIT, source: 'default', ignored: null, placeholder: raw };
+  }
+  if (SEAT_LIMIT_VALUES.includes(raw)) {
+    return { mode: raw, source: 'setting', ignored: null, placeholder: null };
+  }
+  return { mode: DEFAULT_SEAT_LIMIT, source: 'default', ignored: raw, placeholder: null };
+}
+
 // --- isolated starts ---------------------------------------------------------
 // profile_isolation=isolated uses no profile at all. These strings are the one
 // honest wording every surface shares, so the mode never claims "in memory" and
@@ -453,6 +537,39 @@ export function profileCopyNotApplicableNote(mode) {
     `"${nonEmptyString(mode) ? mode : PROFILE_ISOLATION_COPY}" does not apply to it.`
   );
 }
+
+// on_locked=copy (2.20.0): the busy base keeps its owner; this session runs on a
+// temporary copy of it. One sentence shared by initialize.instructions and every
+// meta-tool, naming the base, the owner, the copy, the snapshot age and what the
+// session loses when it closes. `contents` names the tier so an identity copy
+// says exactly which classes of site may ask for a login again.
+export function profileCopyOnLockReason({ baseDir, sessionDir, owner, at, contents }) {
+  const base = nonEmptyString(baseDir) ? baseDir : 'the selected profile';
+  const session = nonEmptyString(sessionDir) ? sessionDir : 'a temporary copy';
+  const when =
+    typeof owner?.pid === 'number'
+      ? `pid ${owner.pid}${typeof owner.createdAt === 'string' ? `, started ${owner.createdAt}` : ''}`
+      : 'another process';
+  const takenAt = nonEmptyString(at) ? at : new Date().toISOString();
+  const identity =
+    contents === COPY_CONTENTS_IDENTITY
+      ? " It has that profile's cookies, saved logins and installed add-ons as of that moment; sites whose " +
+        'login lives in IndexedDB (WhatsApp Web, Google Drive, OneDrive, Notion and many PWAs) may ask you to ' +
+        'sign in again.'
+      : " It has that profile's cookies and saved logins as of that moment.";
+  return (
+    `The profile ${base} is in use (${when}), so this session runs on a temporary copy taken at ${takenAt} ` +
+    `(${session}).${identity} Anything this session changes is discarded when the copy is discarded, and the ` +
+    'base profile is never written.'
+  );
+}
+
+// The clause an on_locked=fallback / workspace sentence gains when the profile it
+// moved to did not exist and was created empty: the incident's silent case, said
+// out loud.
+export const PROFILE_FALLBACK_EMPTY_CLAUSE =
+  "That profile did not exist and was created empty, so none of the base profile's cookies, logins or " +
+  'history are in this session.';
 
 // Session copies of one engine live beside its account profiles, in a
 // dot-directory the profile inventory deliberately skips: a session copy is a
@@ -1607,24 +1724,28 @@ export function profileLockMessage(lock, { fallbackExhausted = false, fallbackKi
 // was chosen instead. The fallback has a different cookie jar, login state and
 // fingerprint seed, so it is always named, never silent. `kind` is "workspace"
 // for the profile_isolation=workspace rule (its original sentence, byte for
-// byte) and "on-locked" for the on_locked policy applied to any plugin-managed
-// profile.
-export function profileFallbackReason(lock, toDir, kind = 'workspace') {
+// byte) and "sibling" for the on_locked=fallback policy applied to any
+// plugin-managed profile ("on-locked" is the 2.16-2.19 name and stays accepted so
+// every stored text and fixture reads the same). With `createdEmpty` the sentence
+// gains the one clause the 2026-10-28 incident was missing: the sibling did not
+// exist, so it holds none of the base profile's data.
+export function profileFallbackReason(lock, toDir, kind = 'workspace', { createdEmpty = false } = {}) {
   const from = lock !== null && typeof lock === 'object' ? lock.profileDir : 'the workspace profile';
   const owner = lock?.owner ?? {};
   const who =
     owner.pid === undefined || owner.pid === null
       ? 'another process'
       : `pid ${owner.pid}${typeof owner.createdAt === 'string' ? `, started ${owner.createdAt}` : ''}`;
+  const empty = createdEmpty === true ? ` ${PROFILE_FALLBACK_EMPTY_CLAUSE}` : '';
   if (kind === 'workspace') {
     return (
       `The workspace profile ${from} was already in use (${who}), so this session uses ${toDir} instead. ` +
-      'It has separate cookies, logins and fingerprint seed.'
+      `It has separate cookies, logins and fingerprint seed.${empty}`
     );
   }
   return (
     `The profile ${from} was already in use (${who}), so this session uses ${toDir} instead. ` +
-    'It has separate cookies, logins and fingerprint seed.'
+    `It has separate cookies, logins and fingerprint seed.${empty}`
   );
 }
 
@@ -2278,12 +2399,15 @@ const CACHE_NAMES = new Set([
   'dawnwebgpucache',
   'dawncache',
   'shadercache',
+  // Chromium 146 spells the Dawn shader cache directory with a hyphen; the
+  // 2.12 list spelled it without one, so 0.74 MB of pure cache was copied.
+  'shader-cache',
   'startupcache',
   'crashpad',
 ]);
 // Crash and usage dumps Chromium rewrites. They carry no identity and can be
 // several megabytes.
-const METRICS_NAMES = new Set(['browsermetrics']);
+const METRICS_NAMES = new Set(['browsermetrics', 'browsermetrics-spare.pma']);
 // Firefox's page thumbnails. Regenerated on demand, not identity.
 const THUMBNAIL_NAMES = new Set(['thumbnails']);
 // Log directories, excluded by name at any depth. Logs are not identity and may
@@ -2298,6 +2422,14 @@ export const EXCLUSION_RULES = Object.freeze([
   'thumbnails',
   'temporary',
   'logs',
+  // 2.20.0. A live LevelDB store holds its LOCK file with a byte-range lock and
+  // refuses the read, so without this rule the first open Chromium store aborts a
+  // live copy. LevelDB recreates the file.
+  'lock',
+  // 2.20.0. SQLite's WAL index (*-shm) is mapped by the writer and refuses a read
+  // on Windows (EBUSY 29/30). It carries no committed row — every row is in the
+  // database or its -wal — and SQLite rebuilds it, so a copy never needs it.
+  'shm',
 ]);
 export const EXCLUSION_LABELS = Object.freeze({
   profileLock: 'profile lock',
@@ -2308,15 +2440,19 @@ export const EXCLUSION_LABELS = Object.freeze({
   thumbnails: 'thumbnail cache',
   temporary: 'temporary file',
   logs: 'log directory',
+  lock: 'LevelDB lock file',
+  shm: 'SQLite WAL index',
 });
 // The rules whose excluded entries are named one by one in the report. Their
 // names differ by profile format (Chromium's lockfile/Dawn caches/BrowserMetrics,
 // Firefox's parent.lock/cache2/startupCache/thumbnails), so counts alone would
 // hide which engine's artifacts a copy left behind.
 const ENGINE_SPECIFIC_RULES = Object.freeze(['engineLock', 'cache', 'metrics', 'thumbnails']);
-// Every *.sqlite-wal and *.sqlite-shm file is deliberately NOT matched by any
-// rule: those files are part of the database, and a copy without them can lose
-// the newest committed rows. No rule ends in these suffixes.
+// Every *.sqlite-wal file is deliberately NOT matched by any rule: it is part of
+// the database, and a copy without it can lose the newest committed rows. Since
+// 2.20.0 its *-shm companion IS excluded (see above): the WAL index is
+// uncopyable while the writer holds it and SQLite rebuilds it from the database
+// and its -wal, so a copy keeps the pair and drops only the index.
 
 function sortEntries(entries) {
   return [...entries].sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
@@ -2353,6 +2489,13 @@ export function exclusionRule(name, isDirectory, engineLockFile = null) {
   }
   if (isDirectory && LOG_DIRECTORY_NAMES.has(lower)) {
     return 'logs';
+  }
+  // 2.20.0 copy safety. Both names are files, never directories.
+  if (!isDirectory && lower === 'lock') {
+    return 'lock';
+  }
+  if (!isDirectory && lower.endsWith('-shm')) {
+    return 'shm';
   }
   return null;
 }
@@ -2508,6 +2651,39 @@ function isWithin(parent, child) {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
+// --- transient read refusals (2.20.0) ----------------------------------------
+// A live profile is being written while it is copied: SQLite refuses a read for
+// the moment it commits, LevelDB rotates a file, a dying browser still holds a
+// handle. The investigation measured each of these as a short window, so a
+// refused file is retried before the whole copy is declared failed. Six attempts
+// with a 100 -> 800 ms backoff (about 2 s per file) turn a guaranteed live-copy
+// failure into a success; a file that is still refused after the bound fails the
+// copy loudly, and the destination this run created is removed as before.
+const COPY_RETRY_CODES = new Set(['EBUSY', 'EACCES', 'EPERM', 'ENOENT', 'EMFILE']);
+export const COPY_RETRY_ATTEMPTS = 6;
+export const COPY_RETRY_BACKOFF_MS = Object.freeze([100, 200, 400, 600, 800]);
+
+function sleepMs(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+export function copyFileWithRetry(source, target) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= COPY_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      copyFileSync(source, target);
+      return { attempts: attempt, error: null };
+    } catch (error) {
+      lastError = error;
+      if (!COPY_RETRY_CODES.has(error?.code) || attempt === COPY_RETRY_ATTEMPTS) {
+        throw error;
+      }
+      sleepMs(COPY_RETRY_BACKOFF_MS[attempt - 1]);
+    }
+  }
+  throw lastError;
+}
+
 // Remove only what this run created: the destination directory, then any parent
 // directory it created that is still empty. rmdirSync refuses a non-empty
 // directory, so a concurrent writer's files are never deleted.
@@ -2574,7 +2750,7 @@ export function copyPlanToTarget(plan, targetDir, { targetName = path.basename(t
       mkdirSync(path.join(targetDir, relative), { recursive: true });
     }
     for (const file of plan.files) {
-      copyFileSync(file.source, path.join(targetDir, file.relative));
+      copyFileWithRetry(file.source, path.join(targetDir, file.relative));
     }
   } catch (error) {
     const cleanupFailures = cleanupCreated(targetDir, targetCreated, createdParentRoot);
@@ -2594,4 +2770,242 @@ export function copyPlanToTarget(plan, targetDir, { targetName = path.basename(t
       `Copying the profile failed: ${redactSecrets(error?.message ?? String(error))}.${cleanupNote}`,
     );
   }
+}
+
+// --- identity-tier copies (2.20.0) -------------------------------------------
+// copy_contents=identity keeps only the identity core an engine's manifest lists
+// under identityCopy.keep. The list is a per-engine fact (Chromium and Firefox
+// keep cookies, logins and the fingerprint seed in different files), so it lives
+// in the manifest beside profileLock and is consumed here generically.
+//
+// A pattern matches the plan's relative path: "/"-separated segments, "*" is
+// exactly one segment, "**" is zero or more segments, and comparison is
+// case-insensitive (the exclusion engine matches names case-insensitively too).
+// The filter runs over the plan planCopy already produced, so exclusion rules,
+// the byte accounting and the failure path stay untouched.
+const IDENTITY_GLOB_CACHE = new Map();
+
+function normalizeRelativePath(relative) {
+  return String(relative)
+    .split(/[\\/]+/u)
+    .filter((segment) => segment !== '' && segment !== '.')
+    .join('/');
+}
+
+function compileIdentityPattern(pattern) {
+  const cached = IDENTITY_GLOB_CACHE.get(pattern);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const segments = normalizeRelativePath(pattern).split('/');
+  const compiled = { segments, source: pattern };
+  IDENTITY_GLOB_CACHE.set(pattern, compiled);
+  return compiled;
+}
+
+function matchSegments(pattern, pathSegments, patternIndex, pathIndex) {
+  if (patternIndex === pattern.length) {
+    return pathIndex === pathSegments.length;
+  }
+  const segment = pattern[patternIndex];
+  if (segment === '**') {
+    for (let next = pathIndex; next <= pathSegments.length; next += 1) {
+      if (matchSegments(pattern, pathSegments, patternIndex + 1, next)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  if (pathIndex >= pathSegments.length) {
+    return false;
+  }
+  if (segment !== '*' && segment.toLowerCase() !== pathSegments[pathIndex].toLowerCase()) {
+    return false;
+  }
+  return matchSegments(pattern, pathSegments, patternIndex + 1, pathIndex + 1);
+}
+
+// The index of the first pattern that matches a "/"-separated relative path, or
+// -1. The index is the copy order: the manifest lists the small identity files
+// first (a decrypting key before the database it opens), so an identity copy
+// writes in that order.
+export function identityKeepIndex(relative, patterns) {
+  if (!Array.isArray(patterns) || patterns.length === 0) {
+    return -1;
+  }
+  const segments = normalizeRelativePath(relative).split('/');
+  for (const [index, pattern] of patterns.entries()) {
+    if (!nonEmptyString(pattern)) {
+      continue;
+    }
+    if (matchSegments(compileIdentityPattern(pattern.trim()).segments, segments, 0, 0)) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+// The companion of a database file in the SQLite pair rule: a kept database
+// implies its -wal (the newest committed rows), and a kept -wal implies its
+// database. The -shm index is never a companion; the exclusion engine dropped it
+// before the plan existed.
+function sqliteCompanion(relative) {
+  const normalized = normalizeRelativePath(relative);
+  if (/-wal$/iu.test(normalized)) {
+    return normalized.slice(0, -4);
+  }
+  return `${normalized}-wal`;
+}
+
+// Filter a plan down to the identity tier. Returns a new plan of the same shape;
+// `sourceDir` and the excluded accounting are carried over, `topLevel` counts are
+// recomputed for the kept subset, and `identity` names what the filter did so the
+// caller can report it. The input plan is never mutated, so the full-copy path is
+// byte-identical when copy_contents is unset.
+export function restrictPlanToIdentity(plan, patterns) {
+  const order = new Map();
+  const kept = [];
+  for (const file of plan.files) {
+    const index = identityKeepIndex(file.relative, patterns);
+    if (index < 0) {
+      continue;
+    }
+    order.set(file.relative, index);
+    kept.push(file);
+  }
+  const byRelative = new Map();
+  for (const file of plan.files) {
+    byRelative.set(normalizeRelativePath(file.relative).toLowerCase(), file);
+  }
+  const keptSet = new Set(kept.map((file) => file.relative));
+  for (const file of [...kept]) {
+    const companion = byRelative.get(sqliteCompanion(file.relative).toLowerCase());
+    if (companion !== undefined && !keptSet.has(companion.relative)) {
+      keptSet.add(companion.relative);
+      order.set(companion.relative, order.get(file.relative) ?? 0);
+      kept.push(companion);
+    }
+  }
+  // Stable order: by the manifest's own pattern index, then the walk order.
+  const ordered = kept
+    .map((file, position) => ({ file, position }))
+    .sort((left, right) => {
+      const byPattern = (order.get(left.file.relative) ?? 0) - (order.get(right.file.relative) ?? 0);
+      return byPattern === 0 ? left.position - right.position : byPattern;
+    })
+    .map((entry) => entry.file);
+  const directories = new Set();
+  for (const file of ordered) {
+    const segments = normalizeRelativePath(file.relative).split('/');
+    for (let depth = 1; depth < segments.length; depth += 1) {
+      directories.add(segments.slice(0, depth).join('/'));
+    }
+  }
+  const keptDirectories = plan.directories.filter((relative) =>
+    directories.has(normalizeRelativePath(relative)),
+  );
+  const topLevel = plan.topLevel.map((entry) => {
+    const prefix = normalizeRelativePath(entry.path).toLowerCase();
+    const files = ordered.filter((file) => {
+      const normalized = normalizeRelativePath(file.relative).toLowerCase();
+      return normalized === prefix || normalized.startsWith(`${prefix}/`);
+    });
+    return {
+      ...entry,
+      files: files.length,
+      bytes: files.reduce((total, file) => total + file.bytes, 0),
+      // A top-level entry that kept nothing is reported as dropped by the tier,
+      // not as an empty directory the copy created.
+      excluded: entry.excluded === null && files.length === 0 ? 'identity' : entry.excluded,
+    };
+  });
+  return {
+    ...plan,
+    directories: keptDirectories,
+    files: ordered,
+    topLevel,
+    bytes: ordered.reduce((total, file) => total + file.bytes, 0),
+    identity: {
+      keep: [...patterns],
+      keptFiles: ordered.length,
+      droppedFiles: plan.files.length - ordered.length,
+    },
+  };
+}
+
+// --- seat scan (2.20.0) ------------------------------------------------------
+// Layer 1 of the seat gate: the broker's own, offline count of live engine locks
+// in the profiles it manages. It is exact for browsers this plugin started and
+// blind to anything started elsewhere (another plugin data directory, a script,
+// an explicit profile_dir) — layer 3 (exit codes 76-79) is the backstop. An
+// engine without a profileLock descriptor has no lock to scan, so the scan
+// reports zero and the capacity rule decides.
+export const SEAT_SCAN_MAX_DIRECTORIES = 60;
+
+function listChildDirectories(dir) {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const result = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    result.push(path.join(dir, entry.name));
+  }
+  return result.sort();
+}
+
+export function scanLiveEngineLocks(engineId, dataDir, descriptor) {
+  if (
+    !nonEmptyString(engineId) ||
+    !nonEmptyString(dataDir) ||
+    descriptor === undefined ||
+    descriptor === null
+  ) {
+    return { count: 0, live: [], truncated: false };
+  }
+  const profilesRoot = path.join(dataDir, 'profiles');
+  // The Chromium engines keep their default profile at profiles/default, the
+  // others at profiles/<engine>/default, and session copies under
+  // profiles/<engine>/.sessions — so both roots are scanned and de-duplicated.
+  const candidates = [
+    ...listChildDirectories(profilesRoot),
+    ...listChildDirectories(path.join(profilesRoot, engineId)),
+    ...listChildDirectories(path.join(profilesRoot, engineId, SESSION_ROOT_DIRNAME)),
+    ...listChildDirectories(path.join(profilesRoot, 'default', SESSION_ROOT_DIRNAME)),
+  ];
+  const seen = new Set();
+  const live = [];
+  let truncated = false;
+  for (const candidate of candidates) {
+    let resolved;
+    try {
+      resolved = realpathSync(candidate);
+    } catch {
+      resolved = candidate;
+    }
+    const key = resolved.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    if (seen.size > SEAT_SCAN_MAX_DIRECTORIES) {
+      truncated = true;
+      break;
+    }
+    let lock = null;
+    try {
+      lock = readEngineProfileLock(candidate, descriptor);
+    } catch {
+      lock = null;
+    }
+    if (lock !== null && engineLockBlocksStart(lock)) {
+      live.push({ dir: candidate, owner: lock.owner, path: lock.path });
+    }
+  }
+  return { count: live.length, live, truncated };
 }

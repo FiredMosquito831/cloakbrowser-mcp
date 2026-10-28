@@ -11,6 +11,36 @@
     "file": "lockfile",
     "owner": "exclusive-open-write"
   },
+  "identityCopy": {
+    "keep": [
+      ".cloakbrowser-seed",
+      "Local State",
+      "Default/Preferences",
+      "Default/Secure Preferences",
+      "Default/Login Data",
+      "Default/Login Data-journal",
+      "Default/Login Data For Account",
+      "Default/Login Data For Account-journal",
+      "Default/Network/Cookies",
+      "Default/Network/Cookies-journal",
+      "Default/Cookies",
+      "Default/Cookies-journal",
+      "Default/Web Data",
+      "Default/Web Data-journal",
+      "Default/History",
+      "Default/History-journal",
+      "Default/Favicons",
+      "Default/Favicons-journal",
+      "Default/Extensions/**",
+      "Default/Extension State/**",
+      "Default/Local Extension Settings/**",
+      "Default/Local Storage/**",
+      "Default/Session Storage/**",
+      "Default/Service Worker/**",
+      "Default/Storage/**"
+    ],
+    "notes": "Identity tier for Chromium: the fingerprint seed, Local State (it holds the key that decrypts every cookie and password below, so it is copied first), Preferences, saved logins, cookies, autofill, history, localStorage and session-storage tokens, extension state and the installed extensions themselves. Left out: IndexedDB and the OPFS file system (388 MB and 131 MB in the measured profile), caches, metrics dumps and history-free bulk, which is why sites whose login lives in IndexedDB (WhatsApp Web, Google Drive, OneDrive, Notion) may ask you to sign in again. Measured on this machine: ~28 MB without installed extensions, ~9 MB more of extension state. A copy on a busy base can be seconds stale."
+  },
   "toolSupport": {
     "*": "full"
   },

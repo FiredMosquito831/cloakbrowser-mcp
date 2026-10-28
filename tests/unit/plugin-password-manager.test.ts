@@ -449,7 +449,7 @@ describe('password_manager in the shipped manifests', () => {
       version: string;
       userConfig: Record<string, { type?: string; default?: unknown; description?: string }>;
     };
-    expect(plugin.version).toBe('2.19.0');
+    expect(plugin.version).toBe('2.20.0');
     const setting = plugin.userConfig.password_manager;
     expect(setting, `${name} declares password_manager`).toBeDefined();
     expect(setting.type).toBe('boolean');
@@ -493,10 +493,10 @@ describe('password_manager in the shipped manifests', () => {
     expect(Object.values(env).filter((value) => value === '${user_config.password_manager}')).toHaveLength(1);
   });
 
-  it('keeps the settings counts at 33 and 21', () => {
+  it('keeps the settings counts at 36 and 23', () => {
     for (const [name, count] of [
-      ['cloakbrowser', 33],
-      ['camoufox', 21],
+      ['cloakbrowser', 36],
+      ['camoufox', 23],
     ] as const) {
       const plugin = JSON.parse(
         readFileSync(path.join(repoRoot, 'plugins', name, '.claude-plugin', 'plugin.json'), 'utf8'),
@@ -521,7 +521,7 @@ describe('password_manager in the shipped manifests', () => {
       expect(readme).toContain('search.json.mozlz4');
     }
     expect(readFileSync(path.join(universalDir, 'README.md'), 'utf8')).toContain('native-unavailable');
-    expect(readFileSync(path.join(camoufoxDir, 'README.md'), 'utf8')).toContain('**2.19.0**');
+    expect(readFileSync(path.join(camoufoxDir, 'README.md'), 'utf8')).toContain('**2.20.0**');
   });
 });
 

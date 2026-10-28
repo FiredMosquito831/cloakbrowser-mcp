@@ -9,6 +9,35 @@
     "file": "lockfile",
     "owner": "exclusive-open-write"
   },
+  "identityCopy": {
+    "keep": [
+      "Local State",
+      "Default/Preferences",
+      "Default/Secure Preferences",
+      "Default/Login Data",
+      "Default/Login Data-journal",
+      "Default/Login Data For Account",
+      "Default/Login Data For Account-journal",
+      "Default/Network/Cookies",
+      "Default/Network/Cookies-journal",
+      "Default/Cookies",
+      "Default/Cookies-journal",
+      "Default/Web Data",
+      "Default/Web Data-journal",
+      "Default/History",
+      "Default/History-journal",
+      "Default/Favicons",
+      "Default/Favicons-journal",
+      "Default/Extensions/**",
+      "Default/Extension State/**",
+      "Default/Local Extension Settings/**",
+      "Default/Local Storage/**",
+      "Default/Session Storage/**",
+      "Default/Service Worker/**",
+      "Default/Storage/**"
+    ],
+    "notes": "Identity tier for the stock Playwright Chromium profile: Local State (it holds the key that decrypts every cookie and password below, so it is copied first), Preferences, saved logins, cookies, autofill, history, localStorage and session-storage tokens, extension state and the installed extensions themselves. No fingerprint seed exists in this engine. Left out: IndexedDB, the OPFS file system, caches and metrics dumps, which is why sites whose login lives in IndexedDB may ask you to sign in again. A copy on a busy base can be seconds stale."
+  },
   "toolSupport": {
     "*": "full"
   },

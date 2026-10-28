@@ -109,6 +109,9 @@ const CLOAKBROWSER_SETTINGS = [
   'output_dir',
   'allow_unrestricted_file_access',
   'extension_paths',
+  'copy_contents',
+  'profile_lifetime',
+  'seat_limit',
 ].sort();
 
 const CAMOUFOX_SETTINGS = [
@@ -133,6 +136,8 @@ const CAMOUFOX_SETTINGS = [
   'proxy_bypass',
   'output_dir',
   'allow_unrestricted_file_access',
+  'copy_contents',
+  'profile_lifetime',
 ].sort();
 
 describe('marketplace integrity', () => {
