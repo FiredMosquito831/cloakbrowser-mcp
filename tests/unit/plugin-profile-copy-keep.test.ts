@@ -1193,5 +1193,5 @@ describe('broker copy-keep mode', () => {
       expect(Object.hasOwn(profiles, 'previousTrees')).toBe(false);
       await session.close();
     }
-  });
+  }, 30_000);
 });

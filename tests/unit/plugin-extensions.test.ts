@@ -248,7 +248,7 @@ function startBroker(options: BrokerOptions): BrokerSession {
     }
   });
   let nextId = 1;
-  const request = (method: string, params?: Record<string, unknown>, timeoutMs = 15000) => {
+  const request = (method: string, params?: Record<string, unknown>, timeoutMs = 10000) => {
     const id = nextId++;
     child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, ...(params ? { params } : {}) })}\n`);
     return new Promise<JsonRpcResponse>((resolve, reject) => {

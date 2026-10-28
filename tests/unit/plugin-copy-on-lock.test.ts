@@ -14,7 +14,7 @@ import process from 'node:process';
 import { spawn } from 'node:child_process';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { holdEngineLock, manifestProfileLock } from '@tests/helpers/engine-lock-holder.js';
 
 // Copy on lock, the identity tier and browser-scoped lifetime (2.20.0).
@@ -715,14 +715,16 @@ describe('broker on_locked=copy', () => {
       rmSync(path.join(sessionDir, 'lockfile'), { force: true });
     }
     // The browser is gone: the poll notices within a second and the copy is
-    // deleted while the broker keeps running.
-    await new Promise((resolve) => setTimeout(resolve, 1800));
+    // deleted while the broker keeps running. Wait on that condition instead of
+    // sleeping once: the broker's poll is 1 s and its six bounded removal
+    // attempts can block for ~3.8 s, so the ceiling must exceed both.
+    await vi.waitFor(() => expect(existsSync(sessionDir)).toBe(false), { timeout: 10_000, interval: 100 });
     const closed = await profilesCurrent(session);
     expect(closed.browserOpen).toBe(false);
     expect(closed.browserOpenSource).toBe('engine-lock');
     expect(existsSync(sessionDir)).toBe(false);
     expect(profile.readProfileLock(base)).toMatchObject({ state: 'free' });
-  });
+  }, 30_000);
 });
 
 describe('broker seat gate and the copy modes', () => {

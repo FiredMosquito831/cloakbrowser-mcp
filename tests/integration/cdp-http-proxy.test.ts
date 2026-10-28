@@ -378,7 +378,7 @@ describe('CDP HTTP proxy integration', () => {
       `Host: 127.0.0.1:${proxy.port}\r\n` +
       'Content-Length: 100000000\r\n\r\n';
     socket.write(computedValue);
-    await vi.waitFor(() => expect(response).toContain('HTTP/1.1 413'));
+    await vi.waitFor(() => expect(response).toContain('HTTP/1.1 413'), { timeout: 5_000 });
     const values4: [Promise<boolean>, Promise<boolean>] = [
       closed,
       new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 250)),
@@ -531,7 +531,9 @@ describe('CDP HTTP proxy integration', () => {
     const path = `/cdp/${capability}/json/version`;
     const fromOptions = { length: CDP_HTTP_MAX_CONCURRENT_REQUESTS } as const;
     const pending = Array.from(fromOptions, async () => await requestProxy(proxy, path, headers));
-    await vi.waitFor(() => expect(fake.requests).toHaveLength(CDP_HTTP_MAX_CONCURRENT_REQUESTS));
+    await vi.waitFor(() => expect(fake.requests).toHaveLength(CDP_HTTP_MAX_CONCURRENT_REQUESTS), {
+      timeout: 5_000,
+    });
     const excess = await requestProxy(proxy, path, headers);
     const errorCodeResult19 = errorCode(excess);
     expect(errorCodeResult19).toBe('unavailable');

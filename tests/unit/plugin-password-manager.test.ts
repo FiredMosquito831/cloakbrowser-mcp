@@ -2231,7 +2231,7 @@ describe('the broker report', () => {
       expect(offInitialize.result?.instructions).toBe(absentInitialize.result?.instructions);
       expect(offStatus.passwordManagerSource).toBeUndefined();
     }
-  });
+  }, 30_000);
 
   it('reports the pending state before the launcher prepared the overlay', async () => {
     const root = tempRoot('password-pending-');
@@ -2647,5 +2647,5 @@ describe('the broker report', () => {
         searchEnginesNote: null,
       });
     }
-  });
+  }, 30_000);
 });

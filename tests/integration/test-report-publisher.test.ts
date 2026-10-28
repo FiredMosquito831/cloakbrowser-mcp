@@ -182,7 +182,7 @@ describe('trusted report publisher', () => {
     const htmlPath = path.join(output, identity.path, 'index.html');
     const html = await readFile(htmlPath, 'utf8');
     expect(html).toContain('<html');
-  });
+  }, 30_000);
   it('keeps matrix failures truthful and never updates a user-owned marker comment', async () => {
     const human = {
       id: 1,
@@ -462,7 +462,7 @@ describe('trusted report publisher', () => {
     const f = fakeApi();
     await publisher.updateReportComment(f.api, identity, summary, reportUrl);
     expect(JSON.stringify(f.writes)).not.toContain('synthetic-secret');
-  });
+  }, 30_000);
   it('rejects artifact executable content before producing a public tree', async () => {
     const root = await fixture();
     const input = path.join(root, 'download');

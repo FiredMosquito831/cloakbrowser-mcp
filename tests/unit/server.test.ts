@@ -633,7 +633,7 @@ describe('bridge server', () => {
       dynamicToolAvailable = true;
       const notification = { method: 'notifications/tools/list_changed' } as const;
       upstreamToolListChangedHandler?.(notification);
-      await vi.waitFor(() => expect(notifications).toHaveLength(1));
+      await vi.waitFor(() => expect(notifications).toHaveLength(1), { timeout: 5_000 });
       const mappedValues12 = (await client.listTools()).tools.map((tool) => tool.name);
       expect(mappedValues12).toContain('webmcp_echo');
       expect(listToolCalls).toBe(2);

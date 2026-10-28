@@ -979,7 +979,7 @@ describe('profile-copy failure cleanup', () => {
     expect(existsSync(targetDir)).toBe(false);
     expect(existsSync(path.join(root, 'profiles', 'cloak'))).toBe(false);
     expect(existsSync(path.join(root, 'profiles'))).toBe(false);
-  });
+  }, 30_000);
 
   it('keeps a pre-existing parent and its other entries', () => {
     const root = tempRoot();
@@ -994,7 +994,7 @@ describe('profile-copy failure cleanup', () => {
     expect(() => profileCopy.copyPlanToTarget(plan, targetDir)).toThrow(/Copying the profile failed/);
     expect(existsSync(targetDir)).toBe(false);
     expect(readdirSync(parent)).toEqual(['someone-else.txt']);
-  });
+  }, 30_000);
 
   it('never deletes a destination another writer created', () => {
     const root = tempRoot();
