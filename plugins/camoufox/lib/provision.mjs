@@ -1180,8 +1180,7 @@ export function ensureVenv(options = {}) {
     }
     if (probe.held) {
       discardTemp();
-      const error = refuse(probe);
-      throw error;
+      throw refuse(probe);
     }
     aside = `${venvDir}.bad-${pid}`;
     try {
@@ -1199,11 +1198,12 @@ export function ensureVenv(options = {}) {
   try {
     rename(temporary, venvDir);
   } catch (error) {
+    let restored = true;
     if (aside !== null) {
       try {
         rename(aside, venvDir);
       } catch {
-        // The destination is left as it was; the new tree is dropped below.
+        restored = false;
       }
     }
     if (reusable() === null) {
@@ -1211,10 +1211,13 @@ export function ensureVenv(options = {}) {
       return finish('reused', 'another start completed this generation first', null);
     }
     discardTemp();
+    const kept =
+      aside !== null && !restored
+        ? `; the complete previous tree is at ${aside}`
+        : '; the previous generation was kept';
     const message =
       `cannot move the new ${name} runtime into ${venvDir} ` +
-      `(${error?.code ?? error?.message ?? 'unknown error'}); the previous generation was kept. ` +
-      'Restart Claude Code to retry.';
+      `(${error?.code ?? error?.message ?? 'unknown error'})${kept}. Restart Claude Code to retry.`;
     record('failed', message, 'Restart Claude Code to retry.', null);
     throw new Error(message);
   }

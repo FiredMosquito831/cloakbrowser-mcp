@@ -478,6 +478,8 @@ describe('I1 — every failure leaves the previous generation byte-identical', (
     const aside = `${built.venv}.bad-${process.pid}`;
     expect(existsSync(aside)).toBe(true);
     expect(existsSync(path.join(aside, '.provision.json'))).toBe(true);
+    // The message names the tree that could not be put back.
+    expect(String(error?.message)).toContain(`the complete previous tree is at ${aside}`);
   });
 });
 
