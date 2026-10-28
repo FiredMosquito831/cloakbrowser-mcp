@@ -1,7 +1,7 @@
 {
   "name": "camoufox",
   "displayName": "Camoufox",
-  "version": "2.17.0",
+  "version": "2.18.0",
   "description": "Camoufox stealth Firefox through the Playwright MCP tool contract. Provisions a pinned uv, a managed Python and the engine venv automatically; the pinned Camoufox browser build downloads on first use and runs through a plugin-owned overlay that restores the stock search engines (Google by default). Portable profile by default; no CDP.",
   "author": {
     "name": "FiredMosquito831"

@@ -1,7 +1,7 @@
 {
   "name": "cloakbrowser",
   "displayName": "CloakBrowser",
-  "version": "2.17.0",
+  "version": "2.18.0",
   "description": "CloakBrowser stealth Chromium through the Playwright MCP tool contract, via cloakbrowser-mcp. Its camoufox engine runs through a plugin-owned overlay that restores the stock search engines (Google by default).",
   "author": {
     "name": "FiredMosquito831"
@@ -209,6 +209,12 @@
       "title": "Unrestricted file access",
       "description": "Remove Playwright's file-access allowlist for tool-chosen paths and unblock file:// navigation, so the model can read and write any file your operating-system user can, not only the Artifacts directory and the workspace root. A deliberate security trade-off: a prompt-injected page could make the model read or overwrite private files. Leave this off unless you need a path outside those roots. Applies to the cloak, playwright, camoufox and kameleo engines; the camoufox-native engine has no file-path tools and ignores it.",
       "default": false
+    },
+    "extension_paths": {
+      "type": "string",
+      "title": "Unpacked extensions",
+      "description": "Absolute directories of unpacked Chromium extensions to load in every start, as a JSON string array or a comma-separated list. Unpacked directories only: the Chrome Web Store is not available in this Chromium, and a directory cannot contain a comma. Any and all extensions you list are allowed. An extension is privileged code that runs with the browser's privileges on every page and is outside the MCP tool filters: it bypasses disabled_tools, can read page content, cookies and storage, and can send that anywhere your network allows, so only load directories you trust. There is no signature check at load and no automatic update. Its stored data lives in the browser profile and therefore travels with profile copies, retained previous trees and backups. Applies to the cloak engine only, which must run on a persistent profile: with profile_isolation isolated (or on_locked isolated) the server refuses to start until the extension list is cleared or a persistent profile mode is chosen. While the list is set, only these directories are enabled, and any extension you installed by hand in the profile stays disabled for that start. In shared, workspace and account profiles the extension state persists; profile_isolation copy discards a session's extension changes when it ends cleanly, and copy-keep keeps them by swapping the session copy into the base. The other engines ignore the setting and say so in browser_capabilities. An explicit CLOAK_PLAYWRIGHT_MCP_EXTENSION_PATHS in the environment wins over this setting.",
+      "default": ""
     }
   }
 }

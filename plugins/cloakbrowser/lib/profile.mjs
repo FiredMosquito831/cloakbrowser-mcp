@@ -42,6 +42,7 @@ import {
   openSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   rmdirSync,
@@ -1962,6 +1963,215 @@ export function readAccountProxy(file) {
   return { value: parsed.value, error: null, exists: true };
 }
 
+// --- unpacked extension paths (2.18.0) --------------------------------------
+// An opt-in list of unpacked Chromium extension directories for the cloak
+// engine. The bridge (cloakbrowser-mcp) reads CLOAK_PLAYWRIGHT_MCP_EXTENSION_PATHS
+// as a JSON string array or a comma-separated list, validates every entry as an
+// existing directory and, for a persistent profile only, turns the list into
+// --load-extension plus --disable-extensions-except; the engine wrapper joins
+// the list with commas, so a directory whose path contains a comma cannot be
+// expressed at all.
+//
+// The plugin setting is `extension_paths` (STEALTH_EXTENSION_PATHS) and is
+// deliberately not the bridge variable's name: an explicit
+// CLOAK_PLAYWRIGHT_MCP_EXTENSION_PATHS in the environment always wins and is
+// reported as the source, exactly like ping_timeout_ms.
+//
+// Parsing mirrors the bridge's envList, so a value that works in the variable
+// works as a setting: a value that starts with "[" is a JSON string array and
+// anything else is a comma-separated list. Every entry is then canonicalised and
+// validated here, before a backend starts, so a mistake produces one actionable
+// sentence instead of a bridge failure after provisioning. Nothing here reads or
+// writes an extension directory: only its existence and kind are checked.
+export const EXTENSION_PATHS_ENV_VAR = 'CLOAK_PLAYWRIGHT_MCP_EXTENSION_PATHS';
+export const EXTENSION_PATHS_SETTING_VAR = 'STEALTH_EXTENSION_PATHS';
+
+// The settings that together resolve the list: the operator variable first, then
+// the plugin setting.
+function extensionRawValue(env) {
+  for (const [variable, source] of [
+    [EXTENSION_PATHS_ENV_VAR, 'environment'],
+    [EXTENSION_PATHS_SETTING_VAR, 'setting'],
+  ]) {
+    const value = env[variable];
+    if (typeof value !== 'string' || value.trim() === '') {
+      continue;
+    }
+    return { variable, source, raw: value.trim() };
+  }
+  return null;
+}
+
+// The same two forms the bridge accepts. A malformed JSON array is an error, not
+// a comma list: silently splitting it would load directories the user did not
+// name.
+function splitExtensionEntries(raw) {
+  if (raw.startsWith('[')) {
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return { entries: null, error: 'the value starts with "[" but is not valid JSON' };
+    }
+    if (!Array.isArray(parsed)) {
+      return { entries: null, error: 'a "[" value must be a JSON string array' };
+    }
+    return {
+      entries: parsed.map((item) => (typeof item === 'string' ? item.trim() : null)),
+      error: null,
+    };
+  }
+  return { entries: raw.split(',').map((item) => item.trim()), error: null };
+}
+
+// One entry, canonicalised. A comma is refused even from a JSON array: the
+// wrapper joins the list with commas and cannot represent the path.
+function resolveExtensionEntry(index, entry) {
+  if (entry === null) {
+    return { path: null, reason: 'not-string', detail: `entry ${index + 1} is not a string` };
+  }
+  if (entry === '') {
+    return { path: null, reason: 'empty', detail: `entry ${index + 1} is empty` };
+  }
+  if (entry.includes(',')) {
+    return {
+      path: null,
+      reason: 'comma',
+      detail: `entry ${index + 1} contains a comma, and the engine joins the list with commas`,
+    };
+  }
+  if (!path.isAbsolute(entry)) {
+    return {
+      path: null,
+      reason: 'relative',
+      detail: `entry ${index + 1} (${JSON.stringify(entry)}) is not an absolute path`,
+    };
+  }
+  let stats;
+  try {
+    stats = statSync(entry);
+  } catch (error) {
+    const missing = error?.code === 'ENOENT' || error?.code === 'ENOTDIR';
+    return {
+      path: null,
+      reason: missing ? 'missing' : 'unreadable',
+      detail:
+        `entry ${index + 1} (${JSON.stringify(entry)}) ` +
+        (missing
+          ? 'does not exist'
+          : `cannot be read (${typeof error?.code === 'string' ? error.code : 'unknown error'})`),
+    };
+  }
+  if (!stats.isDirectory()) {
+    return {
+      path: null,
+      reason: 'not-directory',
+      detail: `entry ${index + 1} (${JSON.stringify(entry)}) is not a directory`,
+    };
+  }
+  try {
+    return { path: realpathSync(entry), reason: null, detail: null };
+  } catch (error) {
+    return {
+      path: null,
+      reason: 'unreadable',
+      detail:
+        `entry ${index + 1} (${JSON.stringify(entry)}) cannot be resolved ` +
+        `(${typeof error?.code === 'string' ? error.code : 'unknown error'})`,
+    };
+  }
+}
+
+// The complete sentence for a value that cannot be used, shared by the broker
+// log, the refused start and the meta-tool report so all three agree.
+export function extensionPathsProblemText(error) {
+  return (
+    `Unpacked extensions: ${error.detail}. Use absolute unpacked-extension directories, one per entry, ` +
+    'as a JSON string array or a comma-separated list; a comma cannot appear inside a path because the ' +
+    'engine joins the list with commas.'
+  );
+}
+
+// Resolve the effective list from the environment.
+//
+// `configured` is true only when a non-empty value names at least one entry; an
+// unsubstituted ${user_config.*} placeholder is treated as unset (problem
+// "placeholder") and is never a path. `paths` holds the canonical absolute
+// directories and is null when one entry failed: a partial list is never applied,
+// because a half-loaded extension set would quietly change what the browser runs.
+// `entries` is the list as written (null when the value could not be parsed at
+// all) and `error` is `{ index, reason, detail }` for the first failing entry.
+export function resolveExtensionPaths(env = {}) {
+  const found = extensionRawValue(env);
+  if (found === null) {
+    return {
+      configured: false,
+      source: 'none',
+      variable: null,
+      raw: null,
+      entries: null,
+      paths: null,
+      error: null,
+      problem: null,
+    };
+  }
+  const base = { configured: false, source: found.source, variable: found.variable, raw: found.raw };
+  if (found.raw.includes('${')) {
+    return { ...base, entries: null, paths: null, error: null, problem: 'placeholder' };
+  }
+  const split = splitExtensionEntries(found.raw);
+  if (split.error !== null) {
+    return {
+      ...base,
+      configured: true,
+      entries: null,
+      paths: null,
+      error: { index: null, reason: 'invalid', detail: split.error },
+      problem: null,
+    };
+  }
+  const entries = split.entries;
+  if (entries.length === 0) {
+    return { ...base, entries, paths: null, error: null, problem: null };
+  }
+  const paths = [];
+  const seen = new Map();
+  for (const [index, entry] of entries.entries()) {
+    const resolved = resolveExtensionEntry(index, entry);
+    if (resolved.path === null) {
+      return {
+        ...base,
+        configured: true,
+        entries,
+        paths: null,
+        error: { index, reason: resolved.reason, detail: resolved.detail },
+        problem: null,
+      };
+    }
+    // Windows paths are case-insensitive, so two spellings of one directory are
+    // the same extension directory; everywhere else the canonical path compares
+    // exactly.
+    const key = process.platform === 'win32' ? resolved.path.toLowerCase() : resolved.path;
+    if (seen.has(key)) {
+      return {
+        ...base,
+        configured: true,
+        entries,
+        paths: null,
+        error: {
+          index,
+          reason: 'duplicate',
+          detail: `entry ${index + 1} (${JSON.stringify(resolved.path)}) repeats entry ${seen.get(key) + 1}`,
+        },
+        problem: null,
+      };
+    }
+    seen.set(key, index);
+    paths.push(resolved.path);
+  }
+  return { ...base, configured: true, entries, paths, error: null, problem: null };
+}
+
 // Hide the credentials of any URL that carries user information. The bridge
 // strips a credentialed proxy from the child environment it builds; the broker
 // must not reintroduce it through a relayed stderr line or a status payload.
@@ -1986,9 +2196,20 @@ export function redactSecrets(text) {
 // the Cloak bridge passes it through when it sets no user-data-dir, and the
 // Camoufox wrapper reads it in mcp/config.py. With `isolated` false the
 // environment is byte-identical to before.
+// `extensionPaths` (2.18.0) is the resolved unpacked-extension list for the cloak
+// engine, written as CLOAK_PLAYWRIGHT_MCP_EXTENSION_PATHS only when it is
+// non-empty; with null, empty or an isolated start the variable is not written,
+// so the environment is byte-identical to 2.17.0.
 export function backendEnvironment(
   baseEnv,
-  { engineId, profileDir = null, proxyServer = null, outputDir = null, isolated = false } = {},
+  {
+    engineId,
+    profileDir = null,
+    proxyServer = null,
+    outputDir = null,
+    isolated = false,
+    extensionPaths = null,
+  } = {},
 ) {
   const env = { ...(isPlainObject(baseEnv) ? baseEnv : {}), PLAYWRIGHT_MCP_BROWSER_ENGINE: engineId };
   if (nonEmptyString(profileDir)) {
@@ -2000,11 +2221,21 @@ export function backendEnvironment(
   if (nonEmptyString(outputDir)) {
     env.PLAYWRIGHT_MCP_OUTPUT_DIR = outputDir;
   }
+  // Unpacked extensions (2.18.0): the canonical list as a JSON string array,
+  // which the bridge reads exactly like a comma list but without the ambiguity a
+  // comma inside a path would create. An empty or missing list writes nothing, so
+  // the default child environment stays byte-identical to 2.17.0.
+  if (Array.isArray(extensionPaths) && extensionPaths.length > 0) {
+    env[EXTENSION_PATHS_ENV_VAR] = JSON.stringify(extensionPaths);
+  }
   if (isolated === true) {
     // Last, so neither the base environment nor a caller-supplied directory can
     // leave a user-data-dir on an isolated start (both engines refuse or ignore
-    // it there).
+    // it there). An isolated start has no persistent profile, so it can carry no
+    // unpacked extension either: the bridge refuses extension paths without a
+    // user-data-dir, and the broker refuses this combination before spawning.
     delete env.PLAYWRIGHT_MCP_USER_DATA_DIR;
+    delete env[EXTENSION_PATHS_ENV_VAR];
     env.PLAYWRIGHT_MCP_ISOLATED = 'true';
   }
   return env;

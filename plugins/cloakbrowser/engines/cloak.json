@@ -6,6 +6,7 @@
   "contract": "playwright-mcp",
   "defaultToolProfile": "full",
   "singleSeat": true,
+  "extensionPaths": true,
   "profileLock": {
     "file": "lockfile",
     "owner": "exclusive-open-write"

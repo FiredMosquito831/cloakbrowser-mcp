@@ -318,7 +318,7 @@ describe('identity_mode in the shipped manifests', () => {
       expect(setting.description).toContain('.camoufox-identity.json');
       expect(setting.description).toContain('random');
       expect(setting.description).toContain('isolated');
-      expect(plugin.version).toBe('2.17.0');
+      expect(plugin.version).toBe('2.18.0');
     }
     const universal = JSON.parse(
       readFileSync(path.join(universalDir, '.claude-plugin', 'plugin.json'), 'utf8'),
