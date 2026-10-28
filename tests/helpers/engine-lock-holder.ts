@@ -384,10 +384,25 @@ interface WindowsHolder {
 // A real Windows process holding one handle, started and stopped by exact pid.
 // The handle's share mode is the manifest's owner rule (see `lockHolderRoute`).
 function startWindowsHolder(file: string, route: LockHolderRoute): WindowsHolder {
-  const share = route === 'windows-share-read' ? 'Read' : 'None';
+  // `Delete` is added to the share set on purpose and changes nothing the product
+  // sees: a plain read still fails on `exclusive-open` (Read is not shared) and
+  // the `r+` open still fails on `exclusive-open-write` (Write is never shared),
+  // which is exactly what the product's probe reads. What it buys is teardown:
+  // vitest runs a file's `afterEach` BEFORE the test context's finish hooks
+  // (`run.BPv-BBRv.js:3920` vs `:3928`), so on a failing assertion the temp-root
+  // removal meets the still-held file. Sharing delete lets that removal succeed
+  // instead of adding an EPERM to the real failure.
+  const share = route === 'windows-share-read' ? 'Read, Delete' : 'None, Delete';
+  // A failed Open must end the holder, not fall through to the sleep: with the
+  // default error preference PowerShell reports the exception, continues to the
+  // next statement and sleeps for two minutes while the test waits for it. The
+  // catch writes the reason to stderr and exits 1, which the setup loop turns
+  // into an immediate `holder-exited` with that text.
   const script =
-    `$f=[System.IO.File]::Open('${file.replaceAll("'", "''")}','Open','ReadWrite','${share}');` +
-    `Write-Output held; Start-Sleep -Seconds ${HOLDER_LIFETIME_SECONDS}`;
+    "$ErrorActionPreference='Stop';" +
+    `try { $f=[System.IO.File]::Open('${file.replaceAll("'", "''")}','Open','ReadWrite','${share}');` +
+    `Write-Output held; Start-Sleep -Seconds ${HOLDER_LIFETIME_SECONDS} } ` +
+    'catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }';
   const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
