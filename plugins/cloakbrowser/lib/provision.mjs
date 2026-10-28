@@ -713,11 +713,7 @@ export function defaultOpenProbe(file) {
 // mandatory locking, so the same open succeeds while a process runs: there the
 // answer is "cannot tell", never "free".
 export function probeVenvHolders(venvDir, options = {}) {
-  const {
-    platform = process.platform,
-    openProbe = defaultOpenProbe,
-    readdir = readdirSyncSafe,
-  } = options;
+  const { platform = process.platform, openProbe = defaultOpenProbe, readdir = readdirSyncSafe } = options;
   if (platform !== 'win32') {
     return { certain: false, held: false, path: null };
   }
@@ -1159,7 +1155,10 @@ export function ensureVenv(options = {}) {
   // The commit point of the build, and the last byte written into the new tree. It
   // lives inside the tree it describes: a marker outside it could survive a crash
   // and make venvRebuildReason trust bytes that are not there.
-  writeFileSync(path.join(temporary, '.provision.json'), `${JSON.stringify({ ...expected, hash }, null, 2)}\n`);
+  writeFileSync(
+    path.join(temporary, '.provision.json'),
+    `${JSON.stringify({ ...expected, hash }, null, 2)}\n`,
+  );
 
   // The destination name is derived from the pins, so the only trees that can be
   // there are one another start finished first or one a failed attempt left
@@ -1223,7 +1222,9 @@ export function ensureVenv(options = {}) {
     try {
       remove(aside, { recursive: true, force: true });
     } catch (error) {
-      log(`the unusable tree ${aside} could not be removed (${error?.code ?? error?.message}); it is left in place`);
+      log(
+        `the unusable tree ${aside} could not be removed (${error?.code ?? error?.message}); it is left in place`,
+      );
     }
   }
   log(`provisioned the plugin-managed venv ${venvDir}`);
@@ -1302,13 +1303,18 @@ function npmLeftovers(dataDir, readdir = readdirSyncSafe) {
 }
 
 function npmHolderMessage(dir, lease) {
-  const who = lease?.pid === null || lease?.pid === undefined ? '' : ` by another Claude Code session (pid ${lease.pid})`;
+  const who =
+    lease?.pid === null || lease?.pid === undefined
+      ? ''
+      : ` by another Claude Code session (pid ${lease.pid})`;
   const fix =
     lease?.source === 'unknown' && lease?.path
       ? `; delete ${path.basename(lease.path)} in it if nothing runs from it, then restart Claude Code. The existing runtime was left untouched.`
       : '; close that Claude Code session and restart. The existing runtime was left untouched.';
   const message = `the plugin runtime ${dir} is in use${who}${fix}`;
-  return message.length <= HOLDER_MESSAGE_LIMIT ? message : `${message.slice(0, HOLDER_MESSAGE_LIMIT - 3)}...`;
+  return message.length <= HOLDER_MESSAGE_LIMIT
+    ? message
+    : `${message.slice(0, HOLDER_MESSAGE_LIMIT - 3)}...`;
 }
 
 // The npm runtime install shared by launch.mjs and launch-kameleo.mjs. Its

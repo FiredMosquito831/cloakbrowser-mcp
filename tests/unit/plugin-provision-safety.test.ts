@@ -51,20 +51,28 @@ interface VenvResolution {
 interface ProvisionModule {
   PROVISION_SCHEMA_VERSION: number;
   PROVISIONING_RECORD_SCHEMA_VERSION: number;
+  PYTHON_VERSION: string;
   RUNTIME_RECIPE_VERSION: number;
   ensureNpmRuntime(options: Record<string, unknown>): Record<string, unknown>;
   ensureVenv(options: Record<string, unknown>): VenvResolution;
-  probeVenvHolders(venvDir: string, options?: Record<string, unknown>): {
+  probeVenvHolders(
+    venvDir: string,
+    options?: Record<string, unknown>,
+  ): {
     certain: boolean;
     held: boolean;
     path: string | null;
   };
   readProvisioningRecord(dataDir: string, name: string): Record<string, unknown> | null;
-  runtimeLease(target: string, options?: Record<string, unknown>): {
+  runtimeLease(
+    target: string,
+    options?: Record<string, unknown>,
+  ): {
     path: string;
     pid: number | null;
   } | null;
   venvGenerationNames(dataDir: string, name: string): string[];
+  writeProvisioningRecord(dataDir: string, name: string, record: Record<string, unknown>): string | null;
   writeRuntimeLease(target: string, options?: Record<string, unknown>): () => void;
 }
 
@@ -129,11 +137,6 @@ function snapshot(root: string): Record<string, string> {
     walk(root);
   }
   return files;
-}
-
-function writeJson(file: string, value: unknown): void {
-  mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, `${JSON.stringify(value)}\n`);
 }
 
 const uv = { command: 'uv', version: '0.13.5', source: 'path' };
@@ -251,7 +254,9 @@ describe('I4 — a held tree is refused, never renamed, emptied or pruned', () =
     });
     const before = snapshot(built.venv);
     expect(() =>
-      provision.ensureVenv(venvOptions(dataDir, { openProbe: () => ({ held: true, code: 'EBUSY' }) }).options),
+      provision.ensureVenv(
+        venvOptions(dataDir, { openProbe: () => ({ held: true, code: 'EBUSY' }) }).options,
+      ),
     ).toThrow(/is in use \(python\.exe\); close the Claude Code session using it and restart/);
     expect(snapshot(built.venv)).toEqual(before);
     const record = provision.readProvisioningRecord(dataDir, 'camoufox');
@@ -299,6 +304,7 @@ describe('I2/I1 — ordering: build, verify, marker inside the new tree, one ren
   it('writes the marker into the staging tree before the rename and never deletes first', () => {
     const dataDir = tempDir();
     const events: string[] = [];
+    const markerAtRename: boolean[] = [];
     const runner = fakeRunner();
     const options = venvOptions(
       dataDir,
@@ -311,7 +317,7 @@ describe('I2/I1 — ordering: build, verify, marker inside the new tree, one ren
           events.push(`rename:${path.basename(from)}->${path.basename(to)}`);
           // The commit marker must already be inside the tree being moved.
           if (path.basename(from).startsWith('.t-')) {
-            expect(existsSync(path.join(from, '.provision.json'))).toBe(true);
+            markerAtRename.push(existsSync(path.join(from, '.provision.json')));
           }
           rmSync(to, { recursive: true, force: true });
           renameSync(from, to);
@@ -334,6 +340,7 @@ describe('I2/I1 — ordering: build, verify, marker inside the new tree, one ren
     // No delete of anything that existed before the build. The only removal is the
     // no-op clear of this process's own staging path.
     expect(events.filter((entry) => entry.startsWith('remove:') && !entry.includes('.t-'))).toEqual([]);
+    expect(markerAtRename).toEqual([true]);
   });
 
   it('never writes the marker into a tree that is still being filled', () => {
@@ -348,7 +355,9 @@ describe('I2/I1 — ordering: build, verify, marker inside the new tree, one ren
             const result = runner.run(command, args, callOptions);
             if (args[0] === 'pip') {
               const pythonPath = String(args[args.indexOf('--python') + 1]);
-              markerStates.push(existsSync(path.join(path.dirname(path.dirname(pythonPath)), '.provision.json')));
+              markerStates.push(
+                existsSync(path.join(path.dirname(path.dirname(pythonPath)), '.provision.json')),
+              );
             }
             return result;
           },
@@ -567,7 +576,9 @@ describe('I5 — reuse depends only on inputs that change the installed bytes', 
       { packages: ['camoufox==1.0.0', 'fastmcp==3.4.8'] },
       { extra: { build: 'v2' } },
     ]) {
-      expect(provision.ensureVenv(venvOptions(dataDir, overrides).options).generation).not.toBe(base.generation);
+      expect(provision.ensureVenv(venvOptions(dataDir, overrides).options).generation).not.toBe(
+        base.generation,
+      );
     }
   });
 
@@ -603,10 +614,14 @@ describe.skipIf(HOLDER_MODE === 'none')('a real Windows holder (I4)', () => {
       recursive: true,
       force: true,
     });
-    const child = spawn(path.join(built.venv, 'Scripts', 'python.exe'), ['-e', 'setTimeout(() => {}, 600000)'], {
-      stdio: 'ignore',
-      windowsHide: true,
-    });
+    const child = spawn(
+      path.join(built.venv, 'Scripts', 'python.exe'),
+      ['-e', 'setTimeout(() => {}, 600000)'],
+      {
+        stdio: 'ignore',
+        windowsHide: true,
+      },
+    );
     const pid = child.pid;
     expect(pid).toBeTypeOf('number');
     if (pid === undefined) {
@@ -750,6 +765,8 @@ describe('the npm runtime is replaced beside, never deleted first', () => {
     const runtime = path.join(dataDir, 'runtime');
     writeHealthyRuntime(runtime, 'cloakbrowser-mcp@1.14.0');
     const events: string[] = [];
+    const markerBeforeInstall: boolean[] = [];
+    const markerAtRename: boolean[] = [];
     const calls: RunCall[] = [];
     const run = installStub(calls);
     const resolution = provision.ensureNpmRuntime({
@@ -762,13 +779,13 @@ describe('the npm runtime is replaced beside, never deleted first', () => {
       run: (command: string, args: string[], options: RunCall['options']) => {
         events.push(`run:${args[0]}`);
         // The commit marker must not exist before npm has filled the tree.
-        expect(existsSync(path.join(String(options.cwd), '.installed.json'))).toBe(false);
+        markerBeforeInstall.push(existsSync(path.join(String(options.cwd), '.installed.json')));
         return run(command, args, options);
       },
       rename: (from: string, to: string) => {
         events.push(`rename:${path.basename(from)}->${path.basename(to)}`);
         if (path.basename(from).startsWith('.rt-')) {
-          expect(existsSync(path.join(from, '.installed.json'))).toBe(true);
+          markerAtRename.push(existsSync(path.join(from, '.installed.json')));
         }
         renameSync(from, to);
       },
@@ -779,6 +796,8 @@ describe('the npm runtime is replaced beside, never deleted first', () => {
       'rename:.rt-2147483647->runtime',
     ]);
     expect(resolution.reinstalled).toBe(true);
+    expect(markerBeforeInstall).toEqual([false]);
+    expect(markerAtRename).toEqual([true]);
     expect(statExists(path.join(runtime, cliRelative))).toBe(true);
     // The previous tree survives this start; it is deleted only on a later one.
     expect(statExists(path.join(dataDir, '.old-2147483647', cliRelative))).toBe(true);
@@ -813,7 +832,13 @@ describe('the npm runtime is replaced beside, never deleted first', () => {
       const leftover = path.join(dataDir, `${prefix}2147483647`);
       writeHealthyRuntime(leftover);
       const calls: RunCall[] = [];
-      const resolution = provision.ensureNpmRuntime({ env: {}, dataDir, spec, locate, run: installStub(calls) });
+      const resolution = provision.ensureNpmRuntime({
+        env: {},
+        dataDir,
+        spec,
+        locate,
+        run: installStub(calls),
+      });
       expect(calls).toEqual([]);
       expect(resolution.reinstalled).toBe(false);
       expect(statExists(path.join(dataDir, 'runtime', cliRelative))).toBe(true);
@@ -883,9 +908,10 @@ describe('browser_capabilities reports provisioning for the Python engines only'
         if (line === '') continue;
         try {
           const message = JSON.parse(line) as { id?: number; result?: Record<string, unknown> };
-          const resolve = message.id === undefined ? undefined : pending.get(message.id);
-          if (resolve !== undefined) {
-            pending.delete(message.id as number);
+          const id = message.id;
+          const resolve = id === undefined ? undefined : pending.get(id);
+          if (resolve !== undefined && id !== undefined) {
+            pending.delete(id);
             resolve(message);
           }
         } catch {
@@ -913,7 +939,10 @@ describe('browser_capabilities reports provisioning for the Python engines only'
         clientInfo: { name: 'provision-safety-test', version: '1' },
       });
       const answer = await request('tools/call', { name: 'browser_capabilities', arguments: {} });
-      return (answer.result as Record<string, unknown> | undefined)?.structuredContent as Record<string, unknown>;
+      return (answer.result as Record<string, unknown> | undefined)?.structuredContent as Record<
+        string,
+        unknown
+      >;
     } finally {
       child.stdin.end();
       child.kill();
@@ -927,10 +956,15 @@ describe('browser_capabilities reports provisioning for the Python engines only'
       venv: path.join(dataDir, 'venvs', 'camoufox-1a2b3c4d'),
       generation: '1a2b3c4d',
       holderProbe: 'windows',
-      holder: { path: path.join(dataDir, 'venvs', 'camoufox-1a2b3c4d', 'Scripts', 'python.exe'), pid: 4321, source: 'lease' },
+      holder: {
+        path: path.join(dataDir, 'venvs', 'camoufox-1a2b3c4d', 'Scripts', 'python.exe'),
+        pid: 4321,
+        source: 'lease',
+      },
       keptGenerations: ['camoufox'],
       reason: 'the camoufox runtime is in use by pid 4321 (python.exe); close it and restart.',
-      remedy: 'Close the Claude Code session that is running the camoufox runtime (pid 4321), then restart Claude Code.',
+      remedy:
+        'Close the Claude Code session that is running the camoufox runtime (pid 4321), then restart Claude Code.',
     });
     const payload = await capabilities(dataDir, 'camoufox');
     expect(payload.provisioning).toMatchObject({

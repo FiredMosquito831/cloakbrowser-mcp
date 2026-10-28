@@ -31,6 +31,9 @@ interface VenvResolution {
   packages: string[];
   reused: boolean;
   hash: string;
+  generation: string;
+  keptGenerations: string[];
+  state: string;
 }
 
 interface NpmResolution {

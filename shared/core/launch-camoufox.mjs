@@ -241,7 +241,9 @@ async function main() {
   // best-effort: every reader ignores a lease whose pid is gone.
   const releaseLease = writeRuntimeLease(paths.venv);
   process.on('exit', releaseLease);
-  log(`using the ${paths.state === 'built' ? 'new' : 'existing'} venv generation ${paths.generation} at ${paths.venv}`);
+  log(
+    `using the ${paths.state === 'built' ? 'new' : 'existing'} venv generation ${paths.generation} at ${paths.venv}`,
+  );
   ensureBuild(env, paths, build);
   const binary = resolveBinary(env, paths, build);
 

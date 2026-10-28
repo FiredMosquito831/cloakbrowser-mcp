@@ -576,7 +576,10 @@ function validateProvisioning(manifest) {
       return `provisioning has an unsupported field "${key}"`;
     }
   }
-  if (typeof manifest.provisioning.record !== 'string' || !PROVISIONING_NAME_PATTERN.test(manifest.provisioning.record)) {
+  if (
+    typeof manifest.provisioning.record !== 'string' ||
+    !PROVISIONING_NAME_PATTERN.test(manifest.provisioning.record)
+  ) {
     return 'provisioning.record must be 1-64 lowercase letters, digits, ".", "_" or "-"';
   }
   return null;

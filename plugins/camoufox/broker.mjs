@@ -2561,7 +2561,8 @@ function provisioningFacts() {
     : [];
   const text = (value) => (typeof value === 'string' && value.trim() !== '' ? value : null);
   return {
-    venv: typeof record.venv === 'string' && isPathInsideRoot(record.venv, PLUGIN_DATA_DIR) ? record.venv : null,
+    venv:
+      typeof record.venv === 'string' && isPathInsideRoot(record.venv, PLUGIN_DATA_DIR) ? record.venv : null,
     generation: typeof record.generation === 'string' ? record.generation : null,
     state: record.state,
     holderProbe: record.holderProbe === 'cannot-tell' ? 'cannot-tell' : 'windows',
