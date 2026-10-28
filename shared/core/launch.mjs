@@ -129,6 +129,89 @@ function parseName(spec) {
   return at <= 0 ? spec : spec.slice(0, at);
 }
 
+// --seat-status (2.20.0): the broker's layer-2 seat signal, opt-in through
+// seat_limit "vendor-license". The launcher owns provisioning, which the broker
+// cannot do, so this is the one adapter that resolves the engine package and asks
+// the vendor's own licence API for the seats this key holds. One JSON line on
+// stdout and nothing else; every failure is a status, never a crash, because the
+// broker treats any non-"ok" answer as "no seat" and holds.
+const SEAT_STATUS_FLAG = '--seat-status';
+
+function printSeatStatus(status) {
+  process.stdout.write(`${JSON.stringify(status)}\n`);
+}
+
+async function seatStatus() {
+  const env = buildChildEnv(process.env);
+  const key = (env.CLOAKBROWSER_LICENSE_KEY ?? '').trim();
+  if (key === '' || key.includes('${')) {
+    printSeatStatus({
+      state: 'unavailable',
+      active: null,
+      limit: null,
+      reason: 'no licence key is configured',
+    });
+    return 0;
+  }
+  const packageSpec = resolvePackage(env);
+  let runtime;
+  try {
+    runtime = ensureNpmRuntime({
+      env,
+      dataDir: dataDir(env),
+      spec: packageSpec,
+      locate: (dir, name) => {
+        const candidate = cliPath(dir, name);
+        return existsSync(candidate) ? candidate : null;
+      },
+    });
+  } catch (error) {
+    printSeatStatus({
+      state: 'unreachable',
+      active: null,
+      limit: null,
+      reason: `the engine runtime is not provisioned: ${error.message}`,
+    });
+    return 0;
+  }
+  // The vendor's license module is not an exported subpath of the package, so it
+  // is imported by file URL from the provisioned runtime.
+  const licenseFile = path.join(runtime.dir, 'node_modules', 'cloakbrowser', 'dist', 'license.js');
+  if (!existsSync(licenseFile)) {
+    printSeatStatus({
+      state: 'unknown',
+      active: null,
+      limit: null,
+      reason: 'the provisioned engine package has no license module',
+    });
+    return 0;
+  }
+  let seats;
+  try {
+    const module = await import(pathToFileURL(licenseFile).href);
+    if (typeof module.getSessionSeats !== 'function') {
+      printSeatStatus({
+        state: 'unknown',
+        active: null,
+        limit: null,
+        reason: 'the provisioned engine package does not export getSessionSeats',
+      });
+      return 0;
+    }
+    seats = await module.getSessionSeats(key);
+  } catch (error) {
+    printSeatStatus({ state: 'unreachable', active: null, limit: null, reason: error.message });
+    return 0;
+  }
+  printSeatStatus({
+    state: typeof seats?.state === 'string' ? seats.state : 'unknown',
+    active: typeof seats?.active === 'number' ? seats.active : null,
+    limit: typeof seats?.limit === 'number' ? seats.limit : null,
+    reason: typeof seats?.reason === 'string' ? seats.reason : null,
+  });
+  return 0;
+}
+
 function main() {
   const env = buildChildEnv(process.env);
   applyDefaultProfile(env);
@@ -173,5 +256,19 @@ function main() {
 // env helpers without provisioning a runtime or starting a backend.
 const invokedPath = process.argv[1] === undefined ? null : path.resolve(process.argv[1]);
 if (invokedPath !== null && import.meta.url === pathToFileURL(invokedPath).href) {
-  main();
+  if (process.argv.includes(SEAT_STATUS_FLAG)) {
+    // Exit through exitCode, not process.exit(): the vendor call leaves a socket
+    // open, and tearing the loop down under it trips a libuv assertion on Windows.
+    seatStatus().then(
+      (code) => {
+        process.exitCode = code;
+      },
+      (error) => {
+        printSeatStatus({ state: 'unreachable', active: null, limit: null, reason: error.message });
+        process.exitCode = 0;
+      },
+    );
+  } else {
+    main();
+  }
 }

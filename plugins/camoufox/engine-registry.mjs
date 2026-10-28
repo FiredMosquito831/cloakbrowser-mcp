@@ -577,6 +577,65 @@ export function manifestExtensionPaths(manifest) {
   return manifest?.extensionPaths === true;
 }
 
+// Optional identity-tier copy descriptor (2.20.0): the files copy_contents
+// "identity" keeps for this engine, in copy order, plus one honest note about
+// what the tier leaves out. It lives beside profileLock because the files that
+// carry cookies, saved logins, the key that decrypts them and the fingerprint
+// seed differ per browser; the broker and the copy tool filter the same plan with
+// it, so the CLI and a session copy cannot disagree. "keep" entries are
+// "/"-separated patterns relative to the profile root, where "*" is one segment
+// and "**" is any depth; a path, a drive, a wildcard-led segment or a parent
+// segment is refused.
+const IDENTITY_COPY_PATTERN = /^[^\\/:?"<>|]+(?:\/[^\\/:?"<>|]+)*$/u;
+
+function validateIdentityCopy(manifest) {
+  if (manifest.identityCopy === undefined) {
+    return null;
+  }
+  if (!isPlainObject(manifest.identityCopy)) {
+    return 'identityCopy must be an object';
+  }
+  for (const key of Object.keys(manifest.identityCopy)) {
+    if (key !== 'keep' && key !== 'notes') {
+      return `identityCopy has an unsupported field "${key}"`;
+    }
+  }
+  if (manifest.identityCopy.notes !== undefined && typeof manifest.identityCopy.notes !== 'string') {
+    return 'identityCopy.notes must be a string';
+  }
+  const keep = manifest.identityCopy.keep;
+  if (!Array.isArray(keep) || keep.length === 0) {
+    return 'identityCopy.keep must be a non-empty array of patterns';
+  }
+  for (const entry of keep) {
+    if (!nonEmptyString(entry)) {
+      return 'identityCopy.keep must contain only non-empty strings';
+    }
+    const trimmed = entry.trim();
+    if (!IDENTITY_COPY_PATTERN.test(trimmed) || trimmed.split('/').includes('..')) {
+      return `identityCopy.keep entry "${trimmed}" must be a relative pattern inside the profile directory`;
+    }
+  }
+  if (manifest.profileApplies === false) {
+    return 'identityCopy is only meaningful when profileApplies is not false';
+  }
+  return null;
+}
+
+// The identity-tier descriptor, or null for an engine that declares none. A null
+// descriptor means copy_contents "identity" cannot apply: the caller reports it
+// and copies the full tree instead of silently downgrading.
+export function manifestIdentityCopy(manifest) {
+  const descriptor = manifest?.identityCopy;
+  if (descriptor === undefined || descriptor === null || !Array.isArray(descriptor.keep)) {
+    return null;
+  }
+  return {
+    keep: descriptor.keep.map((entry) => String(entry).trim()).filter((entry) => entry !== ''),
+    notes: typeof descriptor.notes === 'string' ? descriptor.notes : null,
+  };
+}
+
 // Optional capability facts. Only the names the broker understands are allowed,
 // so a typo cannot silently disappear from browser_capabilities.
 function validateCapabilities(manifest) {
@@ -797,6 +856,7 @@ export function validateManifest(manifest, expectedId, profileNames, launcherDir
     validateProfileApplies,
     validateSingleSeat,
     validateExtensionPaths,
+    validateIdentityCopy,
     validateProfileLock,
     validateSystemDependencies,
   ]) {

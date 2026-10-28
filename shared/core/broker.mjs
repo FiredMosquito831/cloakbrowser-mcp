@@ -23,6 +23,7 @@ import {
   firstMissingRequiredEnv,
   loadEngineConfiguration,
   manifestExtensionPaths,
+  manifestIdentityCopy,
   manifestProfileApplies,
   manifestSingleSeat,
   manifestSupport,
@@ -54,6 +55,7 @@ import {
   accountNameError,
   accountProxyPath,
   backendEnvironment,
+  COPY_CONTENTS_IDENTITY,
   COPY_KEEP_LOCK_POLL_MS,
   COPY_KEEP_LOCK_WAIT_MS,
   copyPlanToTarget,
@@ -72,17 +74,20 @@ import {
   listPreviousTrees,
   listSessionCopies,
   lockBlocksStart,
+  ON_LOCKED_COPY,
   planCopy,
   PROFILE_FALLBACK_FIRST_SUFFIX,
   PROFILE_FALLBACK_LAST_SUFFIX,
   PROFILE_ISOLATED_NATIVE_NOTE,
   PROFILE_ISOLATED_NOTE,
   PROFILE_ISOLATED_POINTER_NOTE,
+  PROFILE_LIFETIME_BROWSER,
   PROFILE_LOCK_FILENAME,
   PROFILE_ON_LOCKED_ISOLATED_NOTE,
   profileCopyKeepNote,
   profileCopyNotApplicableNote,
   profileCopyNote,
+  profileCopyOnLockReason,
   profileDefaultPointerDir,
   profileDefaultPointerPath,
   profileFallbackReason,
@@ -97,14 +102,22 @@ import {
   readSwapRecord,
   redactSecrets,
   releaseProfileLock,
+  resolveCopyContents,
   resolveExtensionPaths,
   resolveOnLocked,
   resolveProfile,
   resolveProfileIsolation,
+  resolveProfileLifetime,
+  resolveSeatLimit,
+  restrictPlanToIdentity,
+  scanLiveEngineLocks,
+  SEAT_LIMIT_UNLIMITED,
+  SEAT_LIMIT_VENDOR,
   selectFallbackProfile,
   sessionCopyDir,
   sessionCopyHasLiveLock,
   SESSION_OWNER_FILENAME,
+  SESSION_ROOT_DIRNAME,
   swapSessionCopyIntoBase,
   validateAccountName,
   writeProfileDefaultPointer,
@@ -318,6 +331,67 @@ if (onLockedResolution.ignored !== null) {
   log(`ignoring unknown on-locked policy: ${onLockedResolution.ignored}`);
 }
 const onLocked = onLockedResolution.mode;
+// profile_lifetime (2.20.0): how long this session holds the profile facts it
+// owns (the broker's own base lock and, in a copy mode, the session copy). The
+// default is "browser": the lock is taken at the first browser action, released
+// when the browser closes, and taken again on the next browser action. "server"
+// is the 2.12-2.19 behaviour. An unset, empty, placeholder or unknown value is
+// the default; an unknown value is logged once and never fails a start.
+const profileLifetimeSetting =
+  typeof process.env.STEALTH_PROFILE_LIFETIME === 'string' ? process.env.STEALTH_PROFILE_LIFETIME : '';
+const profileLifetimeResolution = resolveProfileLifetime(profileLifetimeSetting);
+if (profileLifetimeResolution.placeholder !== null) {
+  log(`ignoring unsubstituted profile-lifetime placeholder: ${profileLifetimeResolution.placeholder.trim()}`);
+}
+if (profileLifetimeResolution.ignored !== null) {
+  log(`ignoring unknown profile lifetime: ${profileLifetimeResolution.ignored}`);
+}
+const profileLifetime = profileLifetimeResolution.mode;
+// copy_contents (2.20.0): what a session copy contains. "full" is the whole plan
+// and therefore exactly what 2.12-2.19 copied; "identity" keeps the identity core
+// the engine's manifest lists. An engine without an identityCopy descriptor
+// cannot honour the tier, so it copies the full tree and says so.
+const copyContentsSetting =
+  typeof process.env.STEALTH_COPY_CONTENTS === 'string' ? process.env.STEALTH_COPY_CONTENTS : '';
+const copyContentsResolution = resolveCopyContents(copyContentsSetting);
+if (copyContentsResolution.placeholder !== null) {
+  log(`ignoring unsubstituted copy-contents placeholder: ${copyContentsResolution.placeholder.trim()}`);
+}
+if (copyContentsResolution.ignored !== null) {
+  log(`ignoring unknown copy contents: ${copyContentsResolution.ignored}`);
+}
+const identityCopyDescriptor = engine === null ? null : manifestIdentityCopy(engine);
+const copyContentsRequested = copyContentsResolution.mode;
+const copyContents =
+  copyContentsRequested === COPY_CONTENTS_IDENTITY && identityCopyDescriptor === null
+    ? 'full'
+    : copyContentsRequested;
+if (copyContentsRequested !== copyContents) {
+  log(
+    `copy_contents is "identity" but the "${selected.id}" engine declares no identityCopy descriptor, ` +
+      'so a copy keeps the full tree (nothing is silently downgraded without this line)',
+  );
+}
+const copyContentsIgnoredNote =
+  copyContentsRequested !== copyContents
+    ? `copy_contents is "${COPY_CONTENTS_IDENTITY}", but the "${selected.id}" engine declares no identityCopy ` +
+      'descriptor, so the copy keeps the full tree.'
+    : null;
+// seat_limit (2.20.0): the concurrent-browser capacity of an engine that has a
+// seat concept. "engine-default" is the manifest's own rule (today's behaviour);
+// "unlimited" and "vendor-license" are the user's licence assertions. The
+// setting is declared in the universal plugin only, so the dedicated Camoufox
+// plugin has no key and this resolves to the default there.
+const seatLimitSetting =
+  typeof process.env.STEALTH_SEAT_LIMIT === 'string' ? process.env.STEALTH_SEAT_LIMIT : '';
+const seatLimitResolution = resolveSeatLimit(seatLimitSetting);
+if (seatLimitResolution.placeholder !== null) {
+  log(`ignoring unsubstituted seat-limit placeholder: ${seatLimitResolution.placeholder.trim()}`);
+}
+if (seatLimitResolution.ignored !== null) {
+  log(`ignoring unknown seat limit: ${seatLimitResolution.ignored}`);
+}
+const seatLimit = seatLimitResolution.mode;
 // An engine that owns its profile elsewhere, or attaches to one, declares
 // profileApplies: false; the whole profile model is inert for it.
 const profileApplies = engine !== null && manifestProfileApplies(engine);
@@ -457,6 +531,19 @@ let onLockedIsolated = false;
 // is configuration, not identity) and a fresh sibling has no file of its own. The
 // workspace rule keeps reading the sibling's own file, as it always has.
 let onLockedFallbackBase = null;
+// --- copy on lock (2.20.0) ---------------------------------------------------
+// on_locked=copy runs this session on a temporary copy of the base profile it
+// resolved. The base stays its owner's: the copy takes no lock of its own, and
+// under profile_isolation copy/copy-keep the value means "wait for the base,
+// then take the copy" (a copy is never taken of a copy). The copy lands in the
+// same .sessions layout a copy-mode session uses, so list/prune and the owner
+// marker are unchanged.
+// `pendingCopy` is a copy this session owes but has not taken yet: under
+// profile_lifetime "browser" nothing is locked or copied until the first browser
+// action. The session directory is computed once, here, and reused for every
+// re-copy in this session, because the backend was started with it.
+let pendingCopy = null;
+let copyFallbackOwner = null;
 // --- single-seat hold (2.16.0) ----------------------------------------------
 // An engine that declares one concurrent browser seat cannot start a second
 // browser on a sibling profile, so a busy profile is not moved aside: the server
@@ -475,6 +562,10 @@ const holdState = {
   attempts: 0,
   recoveredAt: null,
   reason: null,
+  // The seat facts that made this start wait (2.20.0), or null when the wait is
+  // the plain single-seat rule. Reported by browser_capabilities and
+  // browser_engine_status inside hold.
+  seat: null,
   // { source: 'cache' | 'none', path, savedAt, error } once a held list is served.
   cache: null,
   // The client's own lines to replay into the backend on recovery. Only the
@@ -546,6 +637,40 @@ if (engineError === null && profileApplies && profileResolution.profileSource !=
       // a hold creates and moves nothing, which is exactly why the sibling rule
       // excludes an explicit path.
       beginHold(lockDir, bridgeBlocks ? lock : null, bridgeBlocks ? null : engineOwnerLock);
+    } else if ((bridgeBlocks || engineBlocks) && onLocked === ON_LOCKED_COPY && pluginManaged && !copyMode) {
+      // Copy on lock (2.20.0). The base keeps its owner: the copy takes no lock
+      // of its own, because the owner's lock is the reservation. A seat-limited
+      // engine is gated before anything is copied: a browser may only start when
+      // a seat is free, and "no seat" is the existing hold, never a second
+      // CloakBrowser.
+      const blocking = bridgeBlocks ? lock : engineOwnerLock;
+      const seat = seatFacts();
+      if (seat !== null && seat.seatFree === false) {
+        beginHold(lockDir, bridgeBlocks ? lock : null, bridgeBlocks ? null : engineOwnerLock);
+        holdState.reason = seatHoldReason(lockDir, blocking?.owner ?? null, seat);
+        holdState.seat = seat;
+        log(holdState.reason);
+      } else {
+        copyFallbackOwner = blocking?.owner ?? null;
+        pendingCopy = {
+          kind: 'on-locked',
+          baseDir: lockDir,
+          sessionDir: sessionCopyDir(selected.id, PLUGIN_DATA_DIR, lockDir),
+          owner: copyFallbackOwner,
+          at: new Date().toISOString(),
+          lock: blocking,
+        };
+        profileFallback = copyFallbackFor(pendingCopy);
+        log(
+          `on_locked=copy: ${lockDir} is busy, so this session will run on a temporary copy ` +
+            `at ${pendingCopy.sessionDir}`,
+        );
+      }
+    } else if ((bridgeBlocks || engineBlocks) && onLocked === ON_LOCKED_COPY && copyMode && pluginManaged) {
+      // A copy is never taken of a copy. Under profile_isolation copy/copy-keep
+      // this value means "wait for the base, then take the copy": the 2.16.0
+      // hold, whose recovery path prepares the copy through prepareCopySession.
+      beginHold(lockDir, bridgeBlocks ? lock : null, bridgeBlocks ? null : engineOwnerLock);
     } else if (bridgeBlocks) {
       const workspaceProfile =
         !singleSeat &&
@@ -556,8 +681,11 @@ if (engineError === null && profileApplies && profileResolution.profileSource !=
       // (A single-seat engine never gets a sibling of any kind: a workspace
       // sibling is a second browser it cannot run, so the workspace rule is
       // skipped for it under every policy and `block` stops the start instead.)
-      const fallbackKind = workspaceProfile ? 'workspace' : 'on-locked';
-      const wantsFallback = workspaceProfile || (onLocked === 'fallback' && pluginManaged);
+      const fallbackKind = workspaceProfile ? 'workspace' : 'sibling';
+      // 2.20.0 seals the 2.16.0 regression: the copy modes never move to a
+      // numbered sibling. Their base is either free to copy or the start is
+      // refused loudly, exactly as 2.12-2.15 behaved.
+      const wantsFallback = workspaceProfile || (onLocked === 'fallback' && pluginManaged && !copyMode);
       // A sibling is free only when both of its locks are free. The workspace rule
       // keeps its original bridge-lock-only test so its outcome does not change.
       const siblingBlocked = workspaceProfile
@@ -572,7 +700,14 @@ if (engineError === null && profileApplies && profileResolution.profileSource !=
         profileFallback = {
           from: lockDir,
           to: fallbackDir,
-          reason: profileFallbackReason(lock, fallbackDir, fallbackKind),
+          kind: fallbackKind === 'workspace' ? 'workspace' : 'sibling',
+          // The 2026-10-28 incident: a sibling that did not exist is created
+          // empty, and the session runs on a profile with none of the base's
+          // data. The fact is reported, and the sentence says it out loud.
+          createdEmpty: !existsSync(fallbackDir),
+          reason: profileFallbackReason(lock, fallbackDir, fallbackKind, {
+            createdEmpty: !existsSync(fallbackDir),
+          }),
         };
         profileResolution.profileDir = fallbackDir;
         profileLock = readProfileLock(fallbackDir);
@@ -643,7 +778,7 @@ if (engineError === null && profileApplies && profileResolution.profileSource !=
         }
       }
       engineProfileLock = { ...engineOwnerLockNow, fix: engineProfileLockFix(engineOwnerLockNow) };
-      if (engineLockBlocksStart(engineOwnerLockNow)) {
+      if (engineLockBlocksStart(engineOwnerLockNow) && pendingCopy === null) {
         engineError = engineProfileLockMessage(
           engineOwnerLockNow,
           attemptedFallback
@@ -665,6 +800,14 @@ if (engineError === null && profileApplies && profileResolution.profileSource !=
         );
       } else if (engineOwnerLockNow.state === 'unknown') {
         log(engineOwnerLockNow.error);
+      } else if (pendingCopy !== null) {
+        // on_locked=copy (2.20.0): the base's own lock is live, and that is the
+        // reservation this session relies on. Nothing is started on the base; the
+        // copy runs on its own directory and owns no lock.
+        log(
+          `on_locked=copy: the engine lock ${engineOwnerLockNow.path} is held by the base's owner; ` +
+            'this session runs on its copy and never on the base',
+        );
       }
     }
   }
@@ -844,8 +987,131 @@ let copySession = null;
 // outside the reportable `copySession` object so no file identity leaks into a
 // payload.
 let copyBaseLockHandle = null;
-function prepareCopySession() {
-  const baseDir = effectiveProfileDir(profileResolution);
+// The engine's own lock file name, excluded from every copy plan.
+function copyEngineLockFile() {
+  return engine !== null && engine.profileLock !== undefined && typeof engine.profileLock.file === 'string'
+    ? engine.profileLock.file
+    : null;
+}
+// A copy that fails because the operating system refused a read has one usual
+// cause, and the user needs it named: on Windows a browser that is still writing
+// its profile holds some of its databases exclusively (measured 2026-10-28: the
+// live Default/Network/Cookies cannot even be opened for reading), so no retry
+// can win while it runs. The refusal stays a refusal - a copy without the cookie
+// jar would look logged in and would not be - and the alternatives are offered.
+const COPY_REFUSAL_CODES = new Set(['EBUSY', 'EACCES', 'EPERM']);
+
+// One sentence with exactly one full stop, whichever layer wrote the text.
+function sentence(text) {
+  const trimmed = String(text).trim();
+  return trimmed.endsWith('.') ? `${trimmed} ` : `${trimmed}. `;
+}
+
+function copyFailureHint(error) {
+  const code = error?.code ?? '';
+  const message = String(error?.message ?? '');
+  // The copy engine wraps a refused file in a ProfileCopyError, so the original
+  // code survives only in the text ("EBUSY: resource busy or locked").
+  const refused =
+    COPY_REFUSAL_CODES.has(code) ||
+    COPY_REFUSAL_CODES.has(error?.cause?.code ?? '') ||
+    /(EBUSY|EACCES|EPERM)/u.test(message) ||
+    /resource busy or locked/iu.test(message);
+  if (!refused) {
+    return '';
+  }
+  return (
+    ' Windows refused to read a file the copy needs because another process holds it exclusively; a browser ' +
+    'that is still writing the profile is the usual cause, and closing it (or setting on_locked to ' +
+    '"fallback" or "block") is the fix. Nothing was copied from that profile and it was not written.'
+  );
+}
+
+// The plan for one copy. "full" is exactly the plan 2.12-2.19 produced, byte for
+// byte; "identity" filters that same plan through the engine's identityCopy
+// descriptor, so the two tiers can never disagree about exclusions or bytes.
+function copyPlanFor(baseDir) {
+  const plan = planCopy(baseDir, { engineLockFile: copyEngineLockFile() });
+  if (copyContents !== COPY_CONTENTS_IDENTITY || identityCopyDescriptor === null) {
+    return plan;
+  }
+  const restricted = restrictPlanToIdentity(plan, identityCopyDescriptor.keep);
+  log(
+    `copy_contents "identity": keeping ${restricted.files.length} of ${plan.files.length} files ` +
+      `(${restricted.bytes} of ${plan.bytes} bytes)`,
+  );
+  return restricted;
+}
+// The copy object every report reads. `state` moves prepared -> discarded (the
+// tree was removed) or leftover (it could not be removed, and is reported).
+function buildCopyReport({ kind, baseDir, sessionDir, baseCreated, plan, lockHandle, owner, at }) {
+  return {
+    kind,
+    baseDir,
+    sessionDir,
+    baseCreated,
+    owner: owner ?? null,
+    takenAt: at ?? new Date().toISOString(),
+    baseLock:
+      lockHandle === null
+        ? null
+        : { path: lockHandle.path, owner: lockHandle.owner, reclaimed: lockHandle.reclaimed },
+    copied: {
+      files: plan.files.length,
+      directories: plan.directories.length,
+      bytes: plan.bytes,
+    },
+    scope: copyContents,
+    ...(plan.identity === undefined
+      ? {}
+      : { identity: { keep: plan.identity.keep.length, keptFiles: plan.identity.keptFiles } }),
+    state: 'prepared',
+    discarded: false,
+    leftover: null,
+    // copy-keep only: the swap this session will attempt on a clean close. While
+    // the session runs its state is "pending"; the result is written to the
+    // engine's swap record and reported by the next browser_profiles call.
+    swap: copyKeepMode ? { state: 'pending', previousDir: null, restored: false, error: null } : null,
+  };
+}
+// Copy one base into one session directory and mark it. Nothing outside the
+// session directory is created, written, moved or deleted.
+function writeSessionCopy({ baseDir, sessionDir, label, plan }) {
+  copyPlanToTarget(plan, sessionDir, { targetName: path.basename(sessionDir) });
+  // Mark the copy as owned by this broker before the engine starts, so an
+  // explicit --prune can never remove it in the window before the bridge writes
+  // its own lock. A failed marker write is logged and does not stop the session:
+  // the bridge lock takes over as soon as the backend starts.
+  try {
+    writeFileSync(
+      path.join(sessionDir, SESSION_OWNER_FILENAME),
+      `${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString(), baseDir }, null, 2)}\n`,
+    );
+  } catch (error) {
+    log(
+      `profile ${label}: cannot write the session owner marker in ${sessionDir}: ${error.message}; ` +
+        'the bridge lock protects the copy once the backend starts',
+    );
+  }
+}
+// profile_isolation=copy and copy-keep (2.12.0, 2.13.0). The preflight above
+// proved the base has no live owner. From here the broker becomes the base's
+// writer-owner for the session: it holds the bridge's own lock format (so a
+// shared/workspace start, and the bridge itself, refuse the base), copies the
+// base tree through the shared copy plan into
+// profiles/<engine>/.sessions/<base>-<stamp>-<pid>, and starts the engine on that
+// copy. The base is never written. Every failure is loud, releases the lock,
+// removes only a partial copy, and leaves the base untouched; there is never a
+// silent fallback to another profile. copy-keep also refuses a base outside the
+// plugin data directory, because it replaces the base tree on a clean close.
+// Since 2.20.0 the session directory can be passed in (profile_lifetime
+// "browser" reuses one path for every re-copy, because the backend was started
+// with it).
+function prepareCopySession(options = {}) {
+  const baseDir =
+    typeof options.baseDir === 'string' && options.baseDir !== ''
+      ? options.baseDir
+      : effectiveProfileDir(profileResolution);
   if (baseDir === null) {
     engineError = `profile_isolation "${copyModeLabel}" could not resolve a base profile directory. The backend was not started.`;
     log(engineError);
@@ -868,7 +1134,10 @@ function prepareCopySession() {
   // own profile folder), a whole-tree rename would move the session copy along
   // with the base, so copy-keep refuses before it takes a lock or copies
   // anything. "copy" is unaffected: it never renames the base.
-  const sessionDir = sessionCopyDir(selected.id, PLUGIN_DATA_DIR, baseDir);
+  const sessionDir =
+    typeof options.sessionDir === 'string' && options.sessionDir !== ''
+      ? options.sessionDir
+      : sessionCopyDir(selected.id, PLUGIN_DATA_DIR, baseDir);
   if (copyKeepMode && isPathInsideRoot(sessionDir, baseDir)) {
     engineError =
       `profile_isolation "copy-keep" cannot replace the base profile ${baseDir} because it contains ` +
@@ -876,6 +1145,20 @@ function prepareCopySession() {
       "folder, not to the folder that holds the engine's profiles. The backend was not started.";
     log(engineError);
     return null;
+  }
+  // A re-copy reuses this session's path, so a tree that could not be removed
+  // when the browser closed is retried once before the fresh copy is refused.
+  if (existsSync(sessionDir)) {
+    const removed = removeSessionCopyWithRetry(sessionDir);
+    if (!removed.ok) {
+      engineError =
+        `profile_isolation "${copyModeLabel}" cannot take a fresh copy because the previous session copy ` +
+        `${sessionDir} could not be removed (${redactSecrets(removed.error ?? 'unknown error')}). ` +
+        'Close anything holding it, or remove it with scripts/profile-copy.mjs --prune, then call again. ' +
+        'The backend was not started.';
+      log(engineError);
+      return null;
+    }
   }
   let baseCreated = false;
   try {
@@ -900,22 +1183,18 @@ function prepareCopySession() {
     log(engineError);
     return null;
   }
-  const engineLockFile =
-    engine !== null && engine.profileLock !== undefined && typeof engine.profileLock.file === 'string'
-      ? engine.profileLock.file
-      : null;
   let plan;
   try {
-    plan = planCopy(baseDir, { engineLockFile });
-    copyPlanToTarget(plan, sessionDir, { targetName: path.basename(sessionDir) });
+    plan = copyPlanFor(baseDir);
+    writeSessionCopy({ baseDir, sessionDir, label: copyModeLabel, plan });
   } catch (error) {
     const released = releaseProfileLock(held);
     if (released.error !== null) {
       log(released.error);
     }
     engineError =
-      `The ${copyModeLabel}-mode session copy failed: ${redactSecrets(error?.message ?? String(error))} ` +
-      'The backend was not started.';
+      `The ${copyModeLabel}-mode session copy failed: ${sentence(redactSecrets(error?.message ?? String(error)))}` +
+      `${copyFailureHint(error)} The backend was not started.`;
     log(engineError);
     return null;
   }
@@ -923,45 +1202,600 @@ function prepareCopySession() {
     `profile ${copyModeLabel}: base=${baseDir} copy=${sessionDir} files=${plan.files.length} ` +
       `bytes=${plan.bytes}${baseCreated ? ' baseCreated=true' : ''}`,
   );
-  // Mark the copy as owned by this broker before the engine starts, so an
-  // explicit --prune can never remove it in the window before the bridge writes
-  // its own lock. A failed marker write is logged and does not stop the session:
-  // the bridge lock takes over as soon as the backend starts.
-  try {
-    writeFileSync(
-      path.join(sessionDir, SESSION_OWNER_FILENAME),
-      `${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString(), baseDir }, null, 2)}\n`,
-    );
-  } catch (error) {
-    log(
-      `profile ${copyModeLabel}: cannot write the session owner marker in ${sessionDir}: ${error.message}; ` +
-        'the bridge lock protects the copy once the backend starts',
-    );
-  }
   copyBaseLockHandle = held;
-  return {
+  return buildCopyReport({
+    kind: copyKeepMode ? 'copy-keep' : 'copy',
     baseDir,
     sessionDir,
     baseCreated,
-    baseLock: { path: held.path, owner: held.owner, reclaimed: held.reclaimed },
-    copied: {
-      files: plan.files.length,
-      directories: plan.directories.length,
-      bytes: plan.bytes,
-    },
-    discarded: false,
-    // copy-keep only: the swap this session will attempt on a clean close. While
-    // the session runs its state is "pending"; the result is written to the
-    // engine's swap record and reported by the next browser_profiles call.
-    swap: copyKeepMode ? { state: 'pending', previousDir: null, restored: false, error: null } : null,
+    plan,
+    lockHandle: held,
+    at: new Date().toISOString(),
+  });
+}
+// on_locked=copy (2.20.0): the base keeps its owner, so this copy takes no lock
+// of its own and the base is only ever read. A base that does not exist here is
+// a fact the caller must not paper over: the copy would be empty, which is the
+// incident this mode exists to avoid.
+function prepareOnLockedCopy(request) {
+  const baseDir = request.baseDir;
+  const sessionDir = request.sessionDir;
+  if (!existsSync(baseDir)) {
+    engineError =
+      `on_locked "copy" cannot copy the busy profile ${baseDir} because it no longer exists. ` +
+      'The backend was not started; no other profile was used.';
+    log(engineError);
+    return null;
+  }
+  if (existsSync(sessionDir)) {
+    const removed = removeSessionCopyWithRetry(sessionDir);
+    if (!removed.ok) {
+      engineError =
+        `on_locked "copy" cannot take a fresh copy because the previous session copy ${sessionDir} could not ` +
+        `be removed (${redactSecrets(removed.error ?? 'unknown error')}). Close anything holding it, or remove ` +
+        'it with scripts/profile-copy.mjs --prune, then call again. The backend was not started; no other ' +
+        'profile was used.';
+      log(engineError);
+      return null;
+    }
+  }
+  let plan;
+  try {
+    plan = copyPlanFor(baseDir);
+    writeSessionCopy({ baseDir, sessionDir, label: 'copy-on-lock', plan });
+  } catch (error) {
+    engineError =
+      `The copy-on-lock session copy failed: ${sentence(redactSecrets(error?.message ?? String(error)))}` +
+      `${copyFailureHint(error)} The backend was not started; no other profile was used.`;
+    log(engineError);
+    return null;
+  }
+  log(
+    `on_locked=copy: base=${baseDir} copy=${sessionDir} files=${plan.files.length} bytes=${plan.bytes} ` +
+      `owner=${request.owner?.pid ?? 'unknown'}`,
+  );
+  return buildCopyReport({
+    kind: 'on-locked',
+    baseDir,
+    sessionDir,
+    baseCreated: false,
+    plan,
+    lockHandle: null,
+    owner: request.owner ?? null,
+    at: request.at ?? new Date().toISOString(),
+  });
+}
+// The profileFallback object an on_locked=copy start reports. Its reason is the
+// one sentence every surface shares (R8 wording for 2.20.0).
+function copyFallbackFor(request) {
+  return {
+    from: request.baseDir,
+    to: request.sessionDir,
+    kind: 'copy',
+    createdEmpty: false,
+    reason: profileCopyOnLockReason({
+      baseDir: request.baseDir,
+      sessionDir: request.sessionDir,
+      owner: request.owner,
+      at: request.at,
+      contents: copyContents,
+    }),
   };
 }
+// Take the copy this session owes as soon as the setting allows it. Under
+// profile_lifetime "server" that is now (start), under "browser" it is the first
+// browser action (takePendingCopyAtBrowserAction).
+function takePendingCopyNow() {
+  if (pendingCopy === null) {
+    return false;
+  }
+  const request = pendingCopy;
+  const copy =
+    request.kind === 'on-locked'
+      ? prepareOnLockedCopy(request)
+      : prepareCopySession({ baseDir: request.baseDir, sessionDir: request.sessionDir });
+  if (copy === null) {
+    return false;
+  }
+  pendingCopy = null;
+  copySession = copy;
+  return true;
+}
+// The copy this session owes is taken at the first browser action. The backend is
+// spawned with the copy's directory in its environment, so the copy is on disk
+// before the spawn; a re-copy after the browser closed reuses this session's path
+// (the backend was started with it and cannot be told a new one without M2).
+function ensureBrowserSessionCopy(rawLine) {
+  if (state.profile.pendingCopy === null) {
+    return { ok: true };
+  }
+  const before = engineError;
+  if (!takePendingCopyNow()) {
+    // A per-call refusal, not a dead session: the base may be busy now and free
+    // on the next call, so the state keeps its previous refusal (null on a clean
+    // start) and the copy stays owed.
+    const refusal = engineError;
+    engineError = before;
+    state.profile.copyPendingError = refusal;
+    state.profile.pendingCopy = pendingCopy;
+    return { ok: false, error: refusal ?? 'the session copy could not be taken' };
+  }
+  state.profile.copy = copySession;
+  state.profile.dir = copySession.sessionDir;
+  state.profile.pendingCopy = null;
+  state.profile.copyPendingError = null;
+  // The copy directory is now known, so the identity facts (and the sentence the
+  // handshake carries) describe the profile this session actually uses.
+  state.identity = identityFacts();
+  if (state.child === null) {
+    if (outputDirUnresolved()) {
+      // The artifact directory still needs the client's roots (bounded 2 s). The
+      // call is buffered and replayed by the deferred-start path, after the
+      // handshake has been replayed into the backend.
+      deferredStart.lines.push(rawLine);
+      state.hold.handshakePending = true;
+      if (!holdResolutionPending) {
+        holdResolutionPending = true;
+        const resume = () => {
+          holdResolutionPending = false;
+          startBackendIfNeeded();
+          notifyToolsListChanged();
+        };
+        resolveOutputDir().then(resume, resume);
+      }
+      return { ok: true, queued: true };
+    }
+    startBackend();
+    if (state.child === null) {
+      return { ok: false, error: state.lastError ?? backendDescription() };
+    }
+    // The client's handshake was answered by the broker (no backend existed yet);
+    // the new backend gets the exact lines through the one replay function.
+    if (state.clientHandshake.initializeLine !== null) {
+      state.hold.initializeLine = state.clientHandshake.initializeLine;
+    }
+    if (state.clientHandshake.initializedLine !== null) {
+      state.hold.initializedLine = state.clientHandshake.initializedLine;
+    }
+    replayHeldHandshake();
+    notifyToolsListChanged();
+  }
+  return { ok: true };
+}
+
+// The isError a first browser action gets when the copy it owes cannot be taken.
+function pendingCopyToolError(name) {
+  const detail =
+    state.profile.copyPendingError ??
+    (state.profile.pendingCopy === null
+      ? 'The session copy is not ready.'
+      : copyFallbackFor(state.profile.pendingCopy).reason);
+  return (
+    `Cannot call "${String(name)}" yet. ${detail} ` +
+    'This session did not start a browser and no other profile was used; the next tool call tries again.'
+  );
+}
+
 // on_locked=isolated (2.16.0) before a copy: the busy base turned this start
 // into an isolated one, so there is nothing to copy and no profile to hold. The
 // switch is reported by profileFallback and onLocked on every surface. A held
 // start (single-seat engine) makes its copy at recovery, when the base is free.
+// profile_lifetime "browser" (2.20.0, the default) defers both the base lock and
+// the copy to the first browser action: an idle session locks and copies nothing.
 if (copyMode && engineError === null && profileApplies && !onLockedIsolated && !holdState.active) {
-  copySession = prepareCopySession();
+  const baseDir = effectiveProfileDir(profileResolution);
+  if (profileLifetime === PROFILE_LIFETIME_BROWSER && baseDir !== null) {
+    pendingCopy = {
+      kind: 'isolation',
+      baseDir,
+      sessionDir: sessionCopyDir(selected.id, PLUGIN_DATA_DIR, baseDir),
+      owner: null,
+      at: new Date().toISOString(),
+    };
+  } else {
+    copySession = prepareCopySession();
+  }
+} else if (engineError === null && profileApplies && pendingCopy !== null) {
+  if (profileLifetime === PROFILE_LIFETIME_BROWSER) {
+    log(
+      `profile_lifetime "browser": the copy of ${pendingCopy.baseDir} and the base lock are taken at the ` +
+        'first browser action, not at start',
+    );
+  } else {
+    takePendingCopyNow();
+  }
+}
+
+// --- session copy lifetime (2.20.0) ------------------------------------------
+// Deleting a session copy is the one destructive operation in this file, so it
+// is asserted to a path this broker created: <plugin data>/profiles/<engine>/
+// .sessions/<something>. Retried because a browser that has just exited may
+// still hold a file for a few hundred milliseconds on Windows; a tree that still
+// cannot be removed is kept and reported as a leftover, never silently lost.
+const COPY_DELETE_ATTEMPTS = 6;
+const COPY_DELETE_BACKOFF_MS = Object.freeze([250, 500, 750, 1000, 1250, 1500]);
+
+function sessionCopyRoot() {
+  return path.join(PLUGIN_DATA_DIR, 'profiles', selected.id, SESSION_ROOT_DIRNAME);
+}
+
+function removeSessionCopyWithRetry(sessionDir) {
+  if (!isPathInsideRoot(sessionDir, sessionCopyRoot())) {
+    return {
+      ok: false,
+      attempts: 0,
+      error: `${sessionDir} is not a session copy of the "${selected.id}" engine, so it is never removed`,
+    };
+  }
+  let lastError = null;
+  for (let attempt = 1; attempt <= COPY_DELETE_ATTEMPTS; attempt += 1) {
+    try {
+      rmSync(sessionDir, { recursive: true, force: true });
+      return { ok: true, attempts: attempt, error: null };
+    } catch (error) {
+      lastError = error?.message ?? String(error);
+      if (attempt < COPY_DELETE_ATTEMPTS) {
+        sleepSync(COPY_DELETE_BACKOFF_MS[attempt - 1]);
+      }
+    }
+  }
+  return { ok: false, attempts: COPY_DELETE_ATTEMPTS, error: lastError };
+}
+
+// --- seat gate (2.20.0) -------------------------------------------------------
+// The rule is capacity, not a permanent "one browser": the manifest's singleSeat
+// is the free-tier default, and seat_limit raises or removes the cap. Three
+// layers, in this order and never merged: (1) this scan of the engine locks the
+// plugin manages, always and offline; (2) the vendor's own session-seat API,
+// only when seat_limit is "vendor-license" AND a licence key is configured (a
+// live network call, opt-in, documented); (3) the exit-code interpretation in
+// noteSeatDenial, always on, as the backstop. "Unknown" is treated as no seat,
+// which falls back to the hold and always works.
+const SEAT_VENDOR_CACHE_MS = 60_000;
+let vendorSeatCache = null;
+
+function configuredLicenceKey() {
+  const raw =
+    typeof process.env.CLOAKBROWSER_LICENSE_KEY === 'string'
+      ? process.env.CLOAKBROWSER_LICENSE_KEY.trim()
+      : '';
+  return raw === '' || raw.includes('${') ? null : raw;
+}
+
+// The launcher adapter (launch.mjs --seat-status) resolves and provisions the
+// engine package, which the broker cannot do; it prints one JSON line. Any
+// failure is reported as an unavailable answer, never as a seat.
+function vendorSeatStatus() {
+  if (configuredLicenceKey() === null) {
+    return { state: 'unavailable', reason: 'no licence key is configured', limit: null, active: null };
+  }
+  const now = Date.now();
+  if (vendorSeatCache !== null && now - vendorSeatCache.at < SEAT_VENDOR_CACHE_MS) {
+    return vendorSeatCache.status;
+  }
+  let status;
+  try {
+    const launcher = path.join(PLUGIN_ROOT, resolveLauncherName(engine));
+    const result = spawnSync(process.execPath, [launcher, '--seat-status'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      encoding: 'utf8',
+      env: process.env,
+      timeout: 120_000,
+      windowsHide: true,
+    });
+    const line = String(result?.stdout ?? '')
+      .trim()
+      .split('\n')
+      .filter((entry) => entry.trim() !== '')
+      .pop();
+    const parsed = line === undefined ? null : JSON.parse(line);
+    status =
+      parsed !== null && typeof parsed === 'object'
+        ? {
+            state: typeof parsed.state === 'string' ? parsed.state : 'unknown',
+            active: typeof parsed.active === 'number' ? parsed.active : null,
+            limit: typeof parsed.limit === 'number' ? parsed.limit : null,
+            reason: typeof parsed.reason === 'string' ? parsed.reason : null,
+          }
+        : { state: 'unknown', active: null, limit: null, reason: null };
+  } catch (error) {
+    status = { state: 'unavailable', active: null, limit: null, reason: error?.message ?? String(error) };
+  }
+  log(
+    `seat_limit "vendor-license": the vendor answered state=${status.state}` +
+      `${status.limit === null ? '' : ` limit=${status.limit}`}` +
+      `${status.reason === null ? '' : ` (${status.reason})`}`,
+  );
+  vendorSeatCache = { at: now, status };
+  return status;
+}
+
+// The effective capacity and use count, or null when the engine has no seat
+// concept at all (no singleSeat and the default setting) — then no seat key and
+// no gate ever appears.
+function seatFacts() {
+  if (!singleSeat && seatLimit === 'engine-default') {
+    return null;
+  }
+  let capacity = singleSeat ? 1 : 'unlimited';
+  let source = 'manifest';
+  let vendor = null;
+  if (seatLimit === SEAT_LIMIT_UNLIMITED) {
+    capacity = 'unlimited';
+    source = 'setting';
+  } else if (seatLimit === SEAT_LIMIT_VENDOR) {
+    vendor = vendorSeatStatus();
+    if (vendor.state === 'ok' && typeof vendor.limit === 'number') {
+      capacity = vendor.limit;
+      source = 'vendor';
+    } else if (vendor.state === 'ok') {
+      // An OK answer without a cap is the vendor saying "no limit to count".
+      capacity = 'unlimited';
+      source = 'vendor';
+    }
+  }
+  const scan = scanLiveEngineLocks(selected.id, PLUGIN_DATA_DIR, engine?.profileLock ?? null);
+  const seatsInUse = scan.count;
+  const seatFree = capacity === 'unlimited' ? true : seatsInUse < capacity;
+  return {
+    seatLimit: capacity,
+    seatLimitSource: source,
+    seatsInUse,
+    seatFree,
+    seatScanTruncated: scan.truncated === true,
+    seatVendor: vendor === null ? null : { state: vendor.state, reason: vendor.reason },
+  };
+}
+
+function seatHoldReason(profileDir, owner, seat) {
+  return (
+    `The profile ${profileDir} is in use (${holdOwnerText(owner)}) and the ${selected.id} seat limit for this ` +
+    `licence is reached (${seat.seatsInUse}/${String(seat.seatLimit)}), so this session waits; it will start ` +
+    'on the real profile when a seat frees. It is not running on a different profile.'
+  );
+}
+
+// Layer 3: the engine's own licence denial. The wrapper documents exit codes
+// 76-79 for a seat over-cap, a bad key, an unreachable licence server and a local
+// configuration problem; Playwright embeds the number as "<process did exit:
+// exitCode=N>". The patterns are the wrapper's own (dist/license.js), anchored so
+// an unrelated "exitCode=" cannot false-match. Once seen, the session never
+// re-attempts the same launch: retrying a licence denial is a loop, not a fix.
+const SEAT_DENIAL_CODES = new Map([
+  [76, 'the session limit for this licence is reached'],
+  [77, 'the licence key is invalid, expired or missing'],
+  [78, 'the licence could not be verified (the licence server was unreachable)'],
+  [79, 'a local configuration problem prevented the licence check'],
+]);
+const SEAT_DENIAL_PATTERNS = Object.freeze([
+  /process did exit:\s*exitCode=(\d+)/u,
+  /Failed to launch the browser process:\s*Code:\s*(\d+)/u,
+  /exited with (?:exit )?code (\d+)/iu,
+]);
+
+function seatDenialFromText(text) {
+  if (typeof text !== 'string' || text === '') {
+    return null;
+  }
+  for (const pattern of SEAT_DENIAL_PATTERNS) {
+    const match = text.match(pattern);
+    if (match !== null) {
+      const code = Number(match[1]);
+      const reason = SEAT_DENIAL_CODES.get(code);
+      if (reason !== undefined) {
+        return { code, reason };
+      }
+      // A known pattern with an unrelated code (a genuine crash) is not a
+      // licence answer: it must keep its own error, never be relabelled.
+      return null;
+    }
+  }
+  return null;
+}
+
+function recordSeatDenial(denial, source) {
+  if (state.seatDenied !== null) {
+    return;
+  }
+  state.seatDenied = { code: denial.code, reason: denial.reason, source, at: new Date().toISOString() };
+  log(
+    `seat gate: ${source} reported licence exit code ${denial.code} (${denial.reason}); this session will not ` +
+      'attempt another launch',
+  );
+}
+
+function noteSeatDenialInAnswer(message) {
+  if (state.seatDenied !== null) {
+    return;
+  }
+  const texts = [];
+  if (typeof message?.error?.message === 'string') {
+    texts.push(message.error.message);
+  }
+  const content = message?.result?.content;
+  if (Array.isArray(content)) {
+    for (const entry of content) {
+      if (entry !== null && typeof entry === 'object' && typeof entry.text === 'string') {
+        texts.push(entry.text);
+      }
+    }
+  }
+  for (const text of texts) {
+    const denial = seatDenialFromText(text);
+    if (denial !== null) {
+      recordSeatDenial(denial, 'a tool answer');
+      return;
+    }
+  }
+}
+
+// --- browser lifecycle: the engine lock is the authority (2.20.0) -------------
+// The browser is created on the first tool call, so the engine's own lock file
+// (Chromium lockfile / Firefox parent.lock) is probed right after every forwarded
+// tool response and, only while it is latched open, polled. browser_close and a
+// result carrying _meta.isClose are the instant paths. The bridge's lock is
+// never touched (M2): it stays server-scoped and every payload says so.
+const BROWSER_POLL_MS = 1000;
+const CLOSE_TOOL_NAMES = (() => {
+  const names = new Set(['browser_close']);
+  const aliases = engine !== null && typeof engine.toolAliases === 'object' ? engine.toolAliases : {};
+  for (const [canonical, native] of Object.entries(aliases)) {
+    if (canonical === 'browser_close' || native === 'browser_close') {
+      names.add(canonical);
+      names.add(String(native));
+    }
+  }
+  return names;
+})();
+
+function isCloseToolName(name) {
+  return typeof name === 'string' && CLOSE_TOOL_NAMES.has(name);
+}
+
+// The directory whose engine lock proves a browser is open for this session, or
+// null when this start has no profile or the engine declares no lock file.
+function browserProfileDir() {
+  if (!profileApplies || state.profile.isolated || state.profile.onLockedIsolated) {
+    return null;
+  }
+  if (state.engine === null || state.engine.profileLock === undefined) {
+    return null;
+  }
+  return currentProfileDir();
+}
+
+function probeBrowser() {
+  const dir = browserProfileDir();
+  if (dir === null) {
+    return null;
+  }
+  let lock;
+  try {
+    lock = readEngineProfileLock(dir, state.engine.profileLock);
+  } catch {
+    return null;
+  }
+  return { dir, lock, live: engineLockBlocksStart(lock) };
+}
+
+function stopBrowserWatch() {
+  if (state.browser.timer !== null) {
+    clearInterval(state.browser.timer);
+    state.browser.timer = null;
+  }
+}
+
+function startBrowserWatch() {
+  if (state.browser.timer !== null || state.shuttingDown) {
+    return;
+  }
+  state.browser.timer = setInterval(() => {
+    const probe = probeBrowser();
+    if (probe === null) {
+      stopBrowserWatch();
+      return;
+    }
+    if (!probe.live) {
+      noteBrowserClosed('engine-lock');
+    }
+  }, BROWSER_POLL_MS);
+}
+
+// Called after every forwarded tools/call response. Latches the fact that a
+// browser is open (the call created it), and releases the session copy when the
+// browser is already gone.
+function noteBrowserAfterCall(pending, message) {
+  const result = message !== null && typeof message === 'object' ? message.result : null;
+  const failed = message?.error !== undefined || result?.isError === true;
+  if (!failed && result !== null && typeof result === 'object' && result._meta?.isClose === true) {
+    noteBrowserClosed('close-meta');
+    return;
+  }
+  if (!failed && isCloseToolName(pending?.name)) {
+    noteBrowserClosed('close-tool');
+    return;
+  }
+  if (failed) {
+    return;
+  }
+  const probe = probeBrowser();
+  if (probe === null) {
+    return;
+  }
+  if (probe.live) {
+    if (state.browser.open !== true) {
+      state.browser.open = true;
+      state.browser.source = 'engine-lock';
+      state.browser.changedAt = Date.now();
+      log(`browser open: the engine lock ${probe.lock.path} is held by the browser on ${probe.dir}`);
+    }
+    startBrowserWatch();
+    return;
+  }
+  if (state.browser.open === true) {
+    noteBrowserClosed('engine-lock');
+  }
+}
+
+function noteBrowserClosed(source) {
+  stopBrowserWatch();
+  const wasOpen = state.browser.open;
+  state.browser.open = false;
+  state.browser.source = source;
+  state.browser.changedAt = Date.now();
+  if (wasOpen !== true) {
+    log(`browser close observed (${source})`);
+  } else {
+    log(`browser closed (${source}); releasing what this session holds for it`);
+  }
+  releaseSessionForClosedBrowser();
+}
+
+// The copy is discarded when the browser closes: the base lock is released, the
+// session copy is removed (six bounded attempts) and the next browser action
+// takes a fresh copy at the same path. copy-keep is deliberately excluded: its
+// tree holds the session's changes and is swapped into the base at a clean
+// close, so nothing here may remove or roll it back. Under profile_lifetime
+// "server" nothing is released here; the clean shutdown does it, as before.
+function releaseSessionForClosedBrowser() {
+  const copy = state.profile.copy;
+  if (copy === null || copy === undefined || state.profile.lifetime !== PROFILE_LIFETIME_BROWSER) {
+    return;
+  }
+  if (copy.kind === 'copy-keep' || copy.state === 'discarded') {
+    return;
+  }
+  const removed = removeSessionCopyWithRetry(copy.sessionDir);
+  if (!removed.ok) {
+    copy.state = 'leftover';
+    copy.leftover = { path: copy.sessionDir, error: removed.error };
+    log(
+      `profile ${copy.kind}: the session copy ${copy.sessionDir} could not be removed after ` +
+        `${removed.attempts} attempts (${removed.error}); it is kept and listed by browser_profiles and ` +
+        'scripts/profile-copy.mjs --prune',
+    );
+    return;
+  }
+  copy.state = 'discarded';
+  copy.discarded = true;
+  copy.leftover = null;
+  log(`profile ${copy.kind}: discarded session copy ${copy.sessionDir} after the browser closed`);
+  // The copy is owed again: the next browser action takes a fresh snapshot of the
+  // base at this same path (the backend was started with it and cannot be told a
+  // new one without M2). Without this re-arm the backend would recreate an EMPTY
+  // profile at the deleted path and the session would silently lose its identity.
+  if (copy.kind !== 'on-locked') {
+    releaseCopyBaseLock();
+  }
+  pendingCopy = {
+    kind: copy.kind,
+    baseDir: copy.baseDir,
+    sessionDir: copy.sessionDir,
+    owner: copy.owner ?? null,
+    at: new Date().toISOString(),
+  };
+  state.profile.pendingCopy = pendingCopy;
+  log(`profile ${copy.kind}: a fresh copy will be taken at the next browser action`);
 }
 
 // --- device identity (2.14.0) ----------------------------------------------
@@ -1015,8 +1849,14 @@ function identityProfileDirForStart() {
   if (!profileApplies || profileResolution.profileSource === 'isolated') {
     return null;
   }
-  if (copyMode) {
-    return copySession === null || copySession === undefined ? null : copySession.sessionDir;
+  if (copyMode || (pendingCopy !== null && pendingCopy.kind === 'on-locked')) {
+    if (copySession !== null && copySession !== undefined) {
+      return copySession.sessionDir;
+    }
+    // profile_lifetime "browser": the copy this session will run on is known by
+    // path before it is taken, so the identity file the report names is the one
+    // the copy will carry.
+    return pendingCopy !== null ? pendingCopy.sessionDir : null;
   }
   return effectiveProfileDir(profileResolution);
 }
@@ -1133,7 +1973,11 @@ function identityFacts() {
   if (mode === 'random') {
     return { mode, applies: true, source: 'random', file: null, note: IDENTITY_RANDOM_NOTE };
   }
-  if (copyMode && (copySession === null || copySession === undefined)) {
+  if (
+    (copyMode || (pendingCopy !== null && pendingCopy.kind === 'on-locked')) &&
+    copySession === null &&
+    pendingCopy === null
+  ) {
     return {
       mode,
       applies: true,
@@ -1777,7 +2621,9 @@ const state = {
             profileResolution.profileSource === 'pointer' ||
             // on_locked=fallback (2.16.0) can move the engine default to a numbered
             // sibling; the broker sets that directory exactly like an account.
-            profileFallback !== null
+            // An on_locked=copy fallback (2.20.0) must NOT: its base is another
+            // process's, and the session only ever runs on the copy.
+            (profileFallback !== null && profileFallback.kind !== 'copy')
           ? profileResolution.profileDir
           : null,
     source: profileResolution.profileSource,
@@ -1804,11 +2650,29 @@ const state = {
     // that declares none, and then no payload key is added.
     engineLock: engineProfileLock,
     fallback: profileFallback,
+    // profile_lifetime (2.20.0): how long this session keeps the profile facts it
+    // owns, and why it is what it is. `pendingCopy` is the copy this session owes
+    // at its first browser action; nothing is locked or copied while it is set.
+    lifetime: profileLifetime,
+    lifetimeSource: profileLifetimeResolution.source,
+    pendingCopy,
+    copyContents,
+    copyContentsSource: copyContentsResolution.source,
+    copyContentsIgnoredNote,
+    seatLimit: seatLimitResolution.mode,
+    seatLimitSource: seatLimitResolution.source,
     // The default-profile pointer as read at start: { path, exists, name, state,
     // error }, or null for an engine whose profile the broker does not own. It is
     // reported whether or not it supplied this start's profile.
     pointer: profilePointer,
   },
+  // Browser lifecycle (2.20.0): the engine-lock latch. `open` is null until the
+  // first observation; `source` says which signal set it last; the poll timer is
+  // created only while the latch is open and cleared on close and shutdown.
+  browser: { open: null, source: null, changedAt: null, timer: null },
+  // The exit-code backstop (2.20.0): the licence denial this session saw, so a
+  // refused launch is never retried in a loop.
+  seatDenied: null,
   // Device identity (2.14.0): the resolved mode and the file this start would
   // use. The created-at value and corruption notes are read by identityReport().
   identity: identityState,
@@ -2151,6 +3015,9 @@ function prepareCopySessionAfterHold() {
     copySession = prepared;
     state.profile.copy = prepared;
     state.profile.dir = prepared.sessionDir;
+    // The copy directory is now known, so the identity facts (and the sentence
+    // the handshake carries) describe the profile this session actually uses.
+    state.identity = identityFacts();
     return;
   }
   // prepareCopySession reports a refusal through the module's engineError; the
@@ -2244,6 +3111,9 @@ function holdReport() {
             ...(state.hold.cache.error === null ? {} : { error: state.hold.cache.error }),
           },
         }),
+    // The seat facts that made this start wait (2.20.0), only when a seat limit
+    // is what held it; a plain single-seat hold keeps its 2.16.0 shape.
+    ...(state.hold.seat === null ? {} : { seat: { ...state.hold.seat } }),
     ...(state.engineError === null ? {} : { error: state.engineError }),
   };
 }
@@ -2258,6 +3128,25 @@ function holdInstructionText() {
       ? "The tool list you have comes from this session's cached copy and is filtered exactly like a live one."
       : 'No cached tool list exists yet, so only the broker meta-tools answer until then.';
   return `${state.hold.reason ?? holdReasonText(state.hold.profileDir, state.hold.owner)} ${list}`;
+}
+
+// profile_lifetime "browser" (2.20.0): the backend is not started yet because the
+// session runs on a copy that is taken at the first browser action. The sentence
+// says why, names the base and the owner, and states what the copy carries.
+function copyPendingInstructionText() {
+  const cache = ensureHeldToolList();
+  const list =
+    cache.source === 'cache'
+      ? "The tool list you have comes from this session's cached copy and is filtered exactly like a live one."
+      : 'No cached tool list exists yet, so only the broker meta-tools answer until then.';
+  const reason =
+    state.profile.pendingCopy === null
+      ? 'This session runs on a temporary copy of its profile.'
+      : copyFallbackFor(state.profile.pendingCopy).reason;
+  return (
+    `${reason} The copy is taken at the first browser action, so nothing is locked or copied while no ` +
+    `browser is used. ${list}`
+  );
 }
 
 // --- dead-backend recovery: honest liveness and one restart (2.19.0) --------
@@ -2327,6 +3216,14 @@ function restartRefusal() {
   }
   if (state.hold.active) {
     return 'the profile is held by another session';
+  }
+  if (state.seatDenied !== null) {
+    // Layer 3 of the seat gate: the engine itself refused the launch. Retrying the
+    // same launch would fail the same way, so this session never does.
+    return (
+      `the engine refused the launch with licence exit code ${state.seatDenied.code} ` +
+      `(${state.seatDenied.reason})`
+    );
   }
   if (
     state.restart.window > 0 &&
@@ -2689,6 +3586,13 @@ function startBackendIfNeeded() {
     log('backend start held until the profile is free; this session retries on its next tool call');
     return;
   }
+  // profile_lifetime "browser" (2.20.0): the backend is spawned with the session
+  // copy's directory in its environment, so it cannot start before that copy
+  // exists. The first browser action takes the copy and starts it.
+  if (state.profile.pendingCopy !== null && state.child === null) {
+    log('backend start deferred until the first browser action: this session runs on a session copy');
+    return;
+  }
   if (state.child === null) {
     startBackend();
   }
@@ -2914,26 +3818,141 @@ function systemDependencyHint() {
 // changes. The leftover session copies and the retained previous trees are
 // listed whenever one exists, so a crashed or swapped session is discoverable
 // from any mode. Every other mode's payload is unchanged.
+// --- lifetime reporting (2.20.0) ---------------------------------------------
+// Every lock is reported with the lifetime it really has, never the setting's
+// intent: the engine lock belongs to the browser, the bridge lock to the bridge
+// process (server-scoped until M2, whatever profile_lifetime says), and a base
+// lock this broker holds follows profile_lifetime. `heldBy` is resolved against
+// this process, so "by whom" has an answer when the pid can be compared.
+function lockLifetimeFields(lock, kind) {
+  if (lock === null || typeof lock !== 'object' || lock.state === 'free' || lock.state === 'stale') {
+    return lock;
+  }
+  const heldByThisSession =
+    lock.state === 'live' &&
+    lock.owner !== null &&
+    lock.owner !== undefined &&
+    lock.owner.pid === process.pid;
+  if (kind === 'engine') {
+    return {
+      ...lock,
+      lockKind: 'engine',
+      lifetime: 'browser',
+      lifetimeReason: 'engine-native',
+      heldBy: lock.state === 'live' ? (heldByThisSession ? 'this-session' : 'another-session') : null,
+    };
+  }
+  return {
+    ...lock,
+    lockKind: 'bridge',
+    lifetime: 'server',
+    lifetimeReason: 'engine-bridge-lock',
+    heldBy: lock.state === 'live' ? (heldByThisSession ? 'this-session' : 'another-session') : null,
+  };
+}
+
+// The profile_lifetime facts plus the engine-lock latch. Additive and only for an
+// engine whose profile the broker manages: an isolated start has no profile and
+// an inert engine has no lock to observe, so neither gains a key.
+function profileLifetimeFields() {
+  if (!state.profile.appliesToEngine || isolatedStartNow()) {
+    return {};
+  }
+  return {
+    profileLifetime: state.profile.lifetime,
+    profileLifetimeSource: state.profile.lifetimeSource,
+    browserOpen: state.browser.open,
+    browserOpenSource: state.browser.source,
+  };
+}
+
+// The seat facts, additive and only for an engine that has a seat concept (its
+// manifest declares singleSeat) or whose seat_limit setting is not the default.
+// The count is this broker's own scan; the limit is the manifest, the setting or
+// the vendor's licence answer, and the source says which.
+function seatFields() {
+  const facts = seatFacts();
+  if (facts === null) {
+    return {};
+  }
+  return {
+    seatLimit: facts.seatLimit,
+    seatLimitSource: facts.seatLimitSource,
+    seatsInUse: facts.seatsInUse,
+    seatFree: facts.seatFree,
+    ...(facts.seatScanTruncated ? { seatScanTruncated: true } : {}),
+    ...(facts.seatVendor === null ? {} : { seatVendor: facts.seatVendor }),
+    ...(state.seatDenied === null ? {} : { seatDenied: state.seatDenied }),
+  };
+}
+
+// What a copy would hold (copy_contents, 2.20.0): the effective tier, where the
+// value came from, why an identity request could not be honoured, and the
+// manifest's own identity list. Additive and only when the tier can act on this
+// engine, so a clean payload of an engine that cannot copy gains nothing. The
+// measured files/bytes of a plan are NOT computed here: walking a large profile
+// costs over a second, and a meta-tool must stay local and cheap.
+function copyContentsFields() {
+  if (state.profile.appliesToEngine !== true) {
+    return {};
+  }
+  return {
+    copyContents: state.profile.copyContents,
+    copyContentsSource: state.profile.copyContentsSource,
+    ...(state.profile.copyContentsIgnoredNote === null
+      ? {}
+      : { copyContentsNote: state.profile.copyContentsIgnoredNote }),
+    ...(identityCopyDescriptor === null
+      ? {}
+      : {
+          identityCopy: {
+            keep: identityCopyDescriptor.keep.length,
+            notes: identityCopyDescriptor.notes,
+          },
+        }),
+  };
+}
+
 function copyReport() {
   const copy = state.profile.copy;
   if (copy === null || copy === undefined) {
     return null;
   }
   const baseLock = readProfileLock(copy.baseDir);
+  const onLockedCopy = copy.kind === 'on-locked';
   return {
     baseDir: copy.baseDir,
     sessionDir: copy.sessionDir,
+    // 2.20.0: which rule took this copy ("copy", "copy-keep", "on-locked"), what
+    // it holds ("full" or "identity"), and where its lifecycle stands.
+    kind: copy.kind,
+    scope: copy.scope,
+    state: copy.state,
+    takenAt: copy.takenAt,
+    ...(copy.owner === null || copy.owner === undefined ? {} : { baseOwner: copy.owner }),
     baseCreated: copy.baseCreated,
     baseLock: {
       state: baseLock.state,
       path: baseLock.path,
       owner: baseLock.owner,
-      reclaimed: copy.baseLock.reclaimed,
+      reclaimed: copy.baseLock === null || copy.baseLock === undefined ? null : copy.baseLock.reclaimed,
       heldByThisSession:
         baseLock.state === 'live' && baseLock.owner !== null && baseLock.owner.pid === process.pid,
+      // The base lock's real lifetime: in a copy mode it is this session's own and
+      // follows profile_lifetime; for a copy-on-lock it is the base owner's bridge
+      // lock, which stays server-scoped until M2.
+      lifetime: onLockedCopy ? 'server' : state.profile.lifetime,
+      lifetimeReason: onLockedCopy ? 'engine-bridge-lock' : 'setting',
+      heldBy:
+        baseLock.state === 'live' && baseLock.owner !== null
+          ? baseLock.owner.pid === process.pid
+            ? 'this-session'
+            : 'another-session'
+          : null,
     },
     copied: { ...copy.copied },
     discarded: copy.discarded,
+    ...(copy.leftover === null || copy.leftover === undefined ? {} : { leftover: copy.leftover }),
     // copy-keep only: the clean-close swap. On a running session it is
     // "pending"; a hard kill writes no result and leaves the trees in place.
     ...(copy.swap === null || copy.swap === undefined ? {} : { swap: { ...copy.swap } }),
@@ -2943,6 +3962,12 @@ function copyReport() {
 function copyReportNote() {
   const copy = state.profile.copy;
   if (copy !== null && copy !== undefined) {
+    if (copy.kind === 'on-locked') {
+      // The on_locked=copy sentence is the fallback reason, which every surface
+      // already carries exactly once (initialize.instructions, capabilities,
+      // status and browser_profiles). Repeating it here would say it twice.
+      return null;
+    }
     return state.profile.isolation === 'copy-keep'
       ? profileCopyKeepNote(copy.baseDir, copy.sessionDir)
       : profileCopyNote(copy.baseDir, copy.sessionDir);
@@ -3182,6 +4207,12 @@ function capabilitiesPayload(clientRoots) {
     // on_locked (2.16.0), additive and only where it can act: an engine whose
     // manifest declares profileApplies false keeps its exact previous payload.
     ...(state.profile.appliesToEngine ? { onLocked: state.profile.onLocked } : {}),
+    // profile_lifetime and the engine-lock latch (2.20.0), additive and only for
+    // an engine whose profile the broker manages, plus the seat facts where the
+    // engine has a seat concept.
+    ...profileLifetimeFields(),
+    ...seatFields(),
+    ...copyContentsFields(),
     profileFallback: state.profile.fallback,
     // A single-seat hold (2.16.0), additive and only while (or after) one
     // happened: why this session waited, the owner, how many recovery attempts
@@ -3193,8 +4224,10 @@ function capabilitiesPayload(clientRoots) {
     // automatic restarts ran and how the last one ended.
     ...(state.backendSubstate === null ? {} : { backendSubstate: state.backendSubstate }),
     ...(restartNow === null ? {} : { backendRestart: restartNow }),
-    profileLock: state.profile.lock,
-    ...(state.profile.engineLock === null ? {} : { engineProfileLock: state.profile.engineLock }),
+    profileLock: lockLifetimeFields(state.profile.lock, 'bridge'),
+    ...(state.profile.engineLock === null
+      ? {}
+      : { engineProfileLock: lockLifetimeFields(state.profile.engineLock, 'engine') }),
     // Copy start (2.12.0) and copy-keep (2.13.0), additive only in those modes.
     // profileCopy names the base, the session copy, the lock this session holds
     // on the base and the copy size; in copy-keep it also carries the pending
@@ -3203,7 +4236,8 @@ function capabilitiesPayload(clientRoots) {
     // profileCopySupported is false. sessionCopies lists leftover copies and
     // lastSwap the last completed clean-close swap, both only when they exist, so
     // a clean payload is unchanged.
-    ...(isCopyIsolation(state.profile.isolation) && !state.profile.onLockedIsolated
+    ...((isCopyIsolation(state.profile.isolation) || state.profile.copy !== null) &&
+    !state.profile.onLockedIsolated
       ? {
           profileCopy: copyNow,
           profileCopySupported: state.profile.appliesToEngine,
@@ -3356,6 +4390,12 @@ function statusPayload() {
     profileApplies: state.profile.appliesToEngine,
     // on_locked (2.16.0), additive and only where it can act.
     ...(state.profile.appliesToEngine ? { onLocked: state.profile.onLocked } : {}),
+    // profile_lifetime and the engine-lock latch (2.20.0), additive and only for
+    // an engine whose profile the broker manages, plus the seat facts where the
+    // engine has a seat concept.
+    ...profileLifetimeFields(),
+    ...seatFields(),
+    ...copyContentsFields(),
     profileFallback: state.profile.fallback,
     // A single-seat hold (2.16.0), additive and only while (or after) one
     // happened: why this session waited, the owner, how many recovery attempts
@@ -3367,12 +4407,15 @@ function statusPayload() {
     // automatic restarts ran and how the last one ended.
     ...(state.backendSubstate === null ? {} : { backendSubstate: state.backendSubstate }),
     ...(restartNow === null ? {} : { backendRestart: restartNow }),
-    profileLock: state.profile.lock,
-    ...(state.profile.engineLock === null ? {} : { engineProfileLock: state.profile.engineLock }),
+    profileLock: lockLifetimeFields(state.profile.lock, 'bridge'),
+    ...(state.profile.engineLock === null
+      ? {}
+      : { engineProfileLock: lockLifetimeFields(state.profile.engineLock, 'engine') }),
     // Copy start (2.12.0) and copy-keep (2.13.0), additive only in those modes,
     // same values as browser_capabilities. profileSource is reported with it so a
     // status read alone shows where the base came from.
-    ...(isCopyIsolation(state.profile.isolation) && !state.profile.onLockedIsolated
+    ...((isCopyIsolation(state.profile.isolation) || state.profile.copy !== null) &&
+    !state.profile.onLockedIsolated
       ? {
           profileSource: state.profile.source,
           profileCopy: copyNow,
@@ -3520,14 +4563,45 @@ function profileStatePayload() {
     // on_locked (2.16.0), additive and only where it can act: the policy that
     // decided what this start did when the profile was in use.
     ...(state.profile.appliesToEngine ? { onLocked: state.profile.onLocked } : {}),
+    // profile_lifetime, the engine-lock latch and the seat facts (2.20.0), the
+    // same values browser_capabilities and browser_engine_status report.
+    ...profileLifetimeFields(),
+    ...seatFields(),
+    // The 2026-10-28 incident's blind spot: browser_profiles did not say that
+    // this start was moved to a sibling or a copy while the other two meta-tools
+    // did. Reported whenever a fallback happened, with its kind and whether the
+    // destination was created empty.
+    ...(state.profile.fallback === null ? {} : { profileFallback: state.profile.fallback }),
+    // The copy this session still owes (profile_lifetime "browser"), so an idle
+    // session says nothing is locked or copied yet instead of looking broken.
+    ...(state.profile.pendingCopy === null || state.profile.pendingCopy === undefined
+      ? {}
+      : {
+          profileCopyPending: {
+            kind: state.profile.pendingCopy.kind,
+            baseDir: state.profile.pendingCopy.baseDir,
+            sessionDir: state.profile.pendingCopy.sessionDir,
+            ...(state.profile.copyPendingError === null || state.profile.copyPendingError === undefined
+              ? {}
+              : { error: state.profile.copyPendingError }),
+          },
+        }),
+    // copy_contents (2.20.0): what a copy would carry for this engine, and
+    // whether the requested tier could be honoured. The same keys the other two
+    // meta-tools report.
+    ...copyContentsFields(),
     // A single-seat hold (2.16.0), reported with the profile this session uses.
     ...(holdReport() === null ? {} : { hold: holdReport() }),
-    profileLock: lock === null ? null : { ...lock, fix: lockBlocksStart(lock) ? profileLockFix(lock) : null },
+    profileLock:
+      lock === null
+        ? null
+        : lockLifetimeFields({ ...lock, fix: lockBlocksStart(lock) ? profileLockFix(lock) : null }, 'bridge'),
     // Copy start (2.12.0) and copy-keep (2.13.0), additive only in those modes:
     // the base, the session copy this server runs on, the base lock this session
     // holds and the note on what happens to the changes. The lock above is the
     // session copy's own bridge lock once the backend has started.
-    ...(isCopyIsolation(state.profile.isolation) && !state.profile.onLockedIsolated
+    ...((isCopyIsolation(state.profile.isolation) || state.profile.copy !== null) &&
+    !state.profile.onLockedIsolated
       ? {
           profileCopy: copyReport(),
           profileCopySupported: state.profile.appliesToEngine,
@@ -3581,7 +4655,7 @@ function respondProfiles(id, args) {
       // one exists (in every mode), so a crashed copy or a completed swap is
       // discoverable; previous trees are user data and pruning never removes
       // them.
-      ...(isCopyIsolation(state.profile.isolation)
+      ...(isCopyIsolation(state.profile.isolation) || state.profile.copy !== null
         ? {
             profileCopySupported: state.profile.appliesToEngine,
             ...(copyReportNote() === null ? {} : { profileCopyNote: copyReportNote() }),
@@ -3747,14 +4821,16 @@ function synthesizeInitialize(id, reason) {
   // itself, so it gets its own honest sentence instead of "restart Claude Code".
   const instructions = state.hold.active
     ? `${holdInstructionText()} ${artifactDirectorySentence()}`
-    : `The ${state.engineId} backend is unavailable: ${reason} ` +
-      'Call browser_engine_status for details. Only broker meta-tools are exposed until Claude Code restarts the MCP server.' +
-      (state.profile.fallback === null ? '' : ` ${state.profile.fallback.reason}`) +
-      (dependencyHint === null ? '' : ` ${dependencyHint}`) +
-      (state.profile.isolated && state.profile.appliesToEngine && !state.profile.onLockedIsolated
-        ? ` ${PROFILE_ISOLATED_NOTE}`
-        : '') +
-      ` ${artifactDirectorySentence()}`;
+    : state.profile.pendingCopy !== null
+      ? `${copyPendingInstructionText()} ${artifactDirectorySentence()}`
+      : `The ${state.engineId} backend is unavailable: ${reason} ` +
+        'Call browser_engine_status for details. Only broker meta-tools are exposed until Claude Code restarts the MCP server.' +
+        (state.profile.fallback === null ? '' : ` ${state.profile.fallback.reason}`) +
+        (dependencyHint === null ? '' : ` ${dependencyHint}`) +
+        (state.profile.isolated && state.profile.appliesToEngine && !state.profile.onLockedIsolated
+          ? ` ${PROFILE_ISOLATED_NOTE}`
+          : '') +
+        ` ${artifactDirectorySentence()}`;
   sendResult(id, {
     protocolVersion: state.requestedProtocolVersion ?? '2025-06-18',
     capabilities: { tools: {} },
@@ -3831,21 +4907,33 @@ function killBackendTree(target = state.child) {
 // and browser_profiles / scripts/profile-copy.mjs --prune list it.
 function discardCopySession() {
   const copy = state.profile.copy;
-  if (copy === null || copy === undefined || copy.discarded) {
+  if (copy === null || copy === undefined) {
     return;
   }
-  try {
-    rmSync(copy.sessionDir, { recursive: true, force: true });
-    copy.discarded = true;
-    log(`profile ${copyModeLabel}: discarded session copy ${copy.sessionDir} after a clean shutdown`);
-  } catch (error) {
-    // A file a dying browser still holds on Windows: keep the tree, say where
-    // it is and how to remove it later. Nothing is forced.
-    log(
-      `profile ${copyModeLabel}: could not discard the session copy ${copy.sessionDir}: ${error.message}; ` +
-        'it is left in place for browser_profiles list and scripts/profile-copy.mjs --prune',
-    );
+  // A copy already discarded at a browser close may have been re-created empty by
+  // the backend on the deleted path (it still holds that user-data-dir until M2),
+  // so the tree is checked on disk, not only in the flag.
+  if (copy.discarded && !existsSync(copy.sessionDir)) {
+    return;
   }
+  const removed = removeSessionCopyWithRetry(copy.sessionDir);
+  if (removed.ok) {
+    copy.discarded = true;
+    copy.state = 'discarded';
+    copy.leftover = null;
+    log(`profile ${copyModeLabel}: discarded session copy ${copy.sessionDir} after a clean shutdown`);
+    return;
+  }
+  // A file a dying browser still holds on Windows: keep the tree, say where it is
+  // and how to remove it later. Nothing is forced.
+  copy.discarded = false;
+  copy.state = 'leftover';
+  copy.leftover = { path: copy.sessionDir, error: removed.error };
+  log(
+    `profile ${copyModeLabel}: could not discard the session copy ${copy.sessionDir} after ` +
+      `${removed.attempts} attempts (${removed.error}); it is left in place for browser_profiles list and ` +
+      'scripts/profile-copy.mjs --prune',
+  );
 }
 
 // Keep the base lock when a copy-keep swap did not complete: the brief's rule is
@@ -4046,6 +5134,7 @@ function beginShutdown() {
     return;
   }
   state.shuttingDown = true;
+  stopBrowserWatch();
   log('stdin closed; stopping backend');
   const child = state.child;
   if (child === null || child.exitCode !== null || child.signalCode !== null) {
@@ -4153,6 +5242,21 @@ function handleClientRequest(message, rawLine) {
         return;
       }
     }
+    if (state.profile.pendingCopy !== null) {
+      // profile_lifetime "browser" (2.20.0): this is the first browser action (or
+      // the first one after the browser closed), so the session copy is taken
+      // now, before the backend is started with it or forwarded this call.
+      const sessionCopy = ensureBrowserSessionCopy(rawLine);
+      if (sessionCopy.queued === true) {
+        // Buffered behind the artifact-directory resolution; the deferred start
+        // replays it, so nothing is answered here.
+        return;
+      }
+      if (!sessionCopy.ok) {
+        sendToolError(id, pendingCopyToolError(name));
+        return;
+      }
+    }
     if (!backendUsable()) {
       // Dead-backend recovery (2.19.0): this call is the retry. One bounded
       // restart runs, then the call is forwarded below as if nothing had
@@ -4179,11 +5283,12 @@ function handleClientRequest(message, rawLine) {
     }
     if (method === 'initialize') {
       noteInitializeRequest(message);
-      if (state.hold.active) {
+      if (state.hold.active || state.profile.pendingCopy !== null) {
         // The broker answers the handshake now and replays it to the backend on
-        // recovery, so the client is never left waiting on a busy profile. The
-        // artifact directory is resolved in the background meanwhile, so a
-        // recovery start already knows where artifacts go.
+        // recovery, so the client is never left waiting on a busy profile or on a
+        // session copy that is only taken at the first browser action. The
+        // artifact directory is resolved in the background meanwhile, so the
+        // later start already knows where artifacts go.
         state.hold.initializeLine = rawLine;
         const settle = () => {};
         resolveOutputDir().then(settle, settle);
@@ -4192,7 +5297,7 @@ function handleClientRequest(message, rawLine) {
       return;
     }
     if (method === 'tools/list') {
-      if (state.hold.active) {
+      if (state.hold.active || state.profile.pendingCopy !== null) {
         sendHeldToolList(id, message.params?.cursor);
         return;
       }
@@ -4313,6 +5418,13 @@ function handleBackendMessage(message, rawLine) {
   if (isResponse) {
     noteBackendAnswered(pending);
     state.pendingRequests.delete(id);
+  }
+  // Browser lifecycle (2.20.0): one engine-lock probe after each tool response,
+  // except on the two instant paths (browser_close, _meta.isClose). The seat
+  // backstop reads the same answer for a licence exit code.
+  if (isResponse && pending?.method === 'tools/call') {
+    noteBrowserAfterCall(pending, message);
+    noteSeatDenialInAnswer(message);
   }
 
   // An engine whose manifest declares a runtime hint gets one actionable
@@ -4561,6 +5673,12 @@ function startBackend() {
       state.lastError =
         launcherLine === null ? `Backend exited (${detail}).` : `Backend exited (${detail}): ${launcherLine}`;
       log(state.lastError);
+      // Layer 3 of the seat gate: a licence exit code anywhere in the backend's
+      // own stderr tail is a permanent answer for this session.
+      const denial = seatDenialFromText(state.stderrTail) ?? seatDenialFromText(state.lastError);
+      if (denial !== null) {
+        recordSeatDenial(denial, 'the backend exit');
+      }
       drainPendingRequests(backendDescription());
     }
     if (state.shuttingDown) {
@@ -4613,7 +5731,7 @@ readline
     // the handshake is synthesized and kept for the replay, the tool list comes
     // from the cache and every call retries. Buffering here would leave the
     // client waiting for an initialize that cannot come.
-    if (outputDirUnresolved() && state.hold.active === false) {
+    if (outputDirUnresolved() && state.hold.active === false && state.profile.pendingCopy === null) {
       deferredStart.lines.push(line);
       if (message.method === 'initialize') {
         noteInitializeRequest(message);
@@ -4651,6 +5769,11 @@ if (state.engineError !== null) {
 // session waits, serves its cached list and retries on the next tool call.
 if (state.hold.active) {
   log('backend start held until the profile is free; this session retries on its next tool call');
+} else if (state.profile.pendingCopy !== null) {
+  log(
+    'backend start deferred until the first browser action: profile_lifetime "browser" takes the session ' +
+      'copy (and, in a copy mode, the base lock) then',
+  );
 } else if (outputDirUnresolved() && state.engineError === null) {
   log('backend start deferred until initialize: the artifact directory depends on the client roots');
 } else {
