@@ -109,6 +109,7 @@ interface BrokerOptions {
 }
 
 const STUB_TOOLS = ['browser_navigate', 'browser_close'];
+const META_TOOLS = ['browser_capabilities', 'browser_engine_status', 'browser_profiles'];
 
 // The stub answers every tool call, records the profile directory it was started
 // with, and can create or delete the engine lock file on request so the broker's
@@ -330,18 +331,26 @@ async function callTool(session: BrokerSession, name: string, args: Record<strin
   return session.request('tools/call', { name, arguments: args });
 }
 
+// A test may only call a tool the last tools/list returned (2.21.0, Q13): the
+// exposed set is what the client would actually have.
+async function toolNames(session: BrokerSession): Promise<string[]> {
+  const list = await session.request('tools/list', {});
+  return (list.result?.tools ?? []).map((tool) => tool.name ?? '');
+}
+
 describe('copy_contents, profile_lifetime and seat_limit settings', () => {
   it('defaults and explicit values', () => {
-    expect(profile.DEFAULT_COPY_CONTENTS).toBe('full');
+    // 2.21.0: the default tier is identity, and every non-value input takes it.
+    expect(profile.DEFAULT_COPY_CONTENTS).toBe('identity');
     expect(profile.COPY_CONTENTS_VALUES).toEqual(['full', 'identity']);
-    expect(profile.resolveCopyContents('')).toMatchObject({ mode: 'full', source: 'default' });
+    expect(profile.resolveCopyContents('')).toMatchObject({ mode: 'identity', source: 'default' });
     expect(profile.resolveCopyContents('IDENTITY')).toMatchObject({ mode: 'identity', source: 'setting' });
     expect(profile.resolveCopyContents('half')).toMatchObject({
-      mode: 'full',
+      mode: 'identity',
       source: 'default',
       ignored: 'half',
     });
-    expect(profile.resolveCopyContents('${user_config.copy_contents}')).toMatchObject({ mode: 'full' });
+    expect(profile.resolveCopyContents('${user_config.copy_contents}')).toMatchObject({ mode: 'identity' });
 
     expect(profile.DEFAULT_PROFILE_LIFETIME).toBe('browser');
     expect(profile.PROFILE_LIFETIME_VALUES).toEqual(['browser', 'server']);
@@ -362,12 +371,14 @@ describe('copy_contents, profile_lifetime and seat_limit settings', () => {
   it('is declared in the plugin manifests with the documented counts and defaults', () => {
     const expected: Record<string, Record<string, { options?: string[]; default: unknown }>> = {
       cloakbrowser: {
-        copy_contents: { options: ['full', 'identity'], default: 'full' },
+        copy_contents: { options: ['full', 'identity'], default: 'identity' },
+        on_locked: { options: ['block', 'fallback', 'isolated', 'copy'], default: 'copy' },
         profile_lifetime: { options: ['browser', 'server'], default: 'browser' },
         seat_limit: { options: ['engine-default', 'vendor-license', 'unlimited'], default: 'engine-default' },
       },
       camoufox: {
-        copy_contents: { options: ['full', 'identity'], default: 'full' },
+        copy_contents: { options: ['full', 'identity'], default: 'identity' },
+        on_locked: { options: ['block', 'fallback', 'isolated', 'copy'], default: 'copy' },
         profile_lifetime: { options: ['browser', 'server'], default: 'browser' },
       },
     };
@@ -522,7 +533,7 @@ describe('broker on_locked=copy', () => {
       userDataDir: base,
     });
     const before = readFileSync(path.join(base, 'Default', 'Network', 'Cookies'), 'utf8');
-    const session = startBroker({ dataDir, onLocked: 'copy', lifetime: 'server' });
+    const session = startBroker({ dataDir, onLocked: 'copy', lifetime: 'server', contents: 'full' });
     const initialized = await initialize(session);
     const caps = await capabilities(session);
     expect(caps.onLocked).toBe('copy');
@@ -587,29 +598,30 @@ describe('broker on_locked=copy', () => {
     expect(existsSync(path.join(sessionDir, 'Default', 'Network', 'Cookies-shm'))).toBe(false);
   });
 
-  it('defers the copy of a copy-mode session to the first browser action (browser lifetime)', async () => {
+  it('takes the copy at start on a cold surface, then stays lazy (browser lifetime)', async () => {
     const root = tempRoot('browser-lifetime-');
     const dataDir = createRuntime(root);
     const base = path.join(dataDir, 'profiles', 'default');
     seedBase(base);
+    // No cached tool list exists for this configuration, so 2.21.0 takes the copy
+    // before the client asks for its tools: a client whose list is the three
+    // meta-tools could never take the copy that would create the cache.
+    expect(existsSync(path.join(dataDir, 'cache', 'playwright'))).toBe(false);
     const session = startBroker({ dataDir, isolation: 'copy' });
     await initialize(session);
     const before = await capabilities(session);
     expect(before.profileLifetime).toBe('browser');
-    expect(before.profileCopy).toBeNull();
-    expect(before.profileDir).toBeNull();
-    // Nothing is locked or copied while no browser is used.
-    expect(profile.readProfileLock(base)).toMatchObject({ state: 'free' });
-    expect(existsSync(path.join(dataDir, 'profiles', 'playwright', '.sessions'))).toBe(false);
-
-    const call = await callTool(session, 'browser_navigate', { url: 'data:text/html,x' });
-    expect(call.result?.isError).toBe(false);
-    const after = await capabilities(session);
-    const copy = after.profileCopy as Record<string, unknown>;
+    const copy = before.profileCopy as Record<string, unknown>;
     expect(copy).toMatchObject({ kind: 'copy', state: 'prepared' });
-    expect(after.profileDir).toBe(copy.sessionDir);
+    expect(before.profileDir).toBe(copy.sessionDir);
     expect((copy.baseLock as Record<string, unknown>).lifetime).toBe('browser');
     expect((copy.baseLock as Record<string, unknown>).heldByThisSession).toBe(true);
+    // The copy is the identity tier by default (2.21.0).
+    expect(copy.scope).toBe('identity');
+    // The client gets a list it can act on, and calling one of those tools works.
+    expect(await toolNames(session)).toEqual([...STUB_TOOLS, ...META_TOOLS]);
+    const call = await callTool(session, 'browser_navigate', { url: 'data:text/html,x' });
+    expect(call.result?.isError).toBe(false);
 
     // Closing the browser discards the copy and releases the base lock; the next
     // browser action takes a fresh copy at the same path.
@@ -630,6 +642,38 @@ describe('broker on_locked=copy', () => {
     const recopied = await profilesCurrent(session);
     expect(recopied.profileCopy).toMatchObject({ state: 'prepared' });
     expect(recopied.profileCopyPending).toBeUndefined();
+  });
+
+  it('stays lazy on a warm surface: a second session locks and copies nothing idle', async () => {
+    const root = tempRoot('browser-warm-');
+    const dataDir = createRuntime(root);
+    const base = path.join(dataDir, 'profiles', 'default');
+    seedBase(base);
+    // A previous session of this configuration wrote the cache (2.21.0 writes it
+    // for every engine).
+    const first = startBroker({ dataDir, isolation: 'copy' });
+    await initialize(first);
+    expect(await toolNames(first)).toContain('browser_navigate');
+    await first.close();
+    expect(existsSync(path.join(dataDir, 'cache', 'playwright'))).toBe(true);
+    rmSync(path.join(dataDir, 'profiles', 'playwright', '.sessions'), {
+      recursive: true,
+      force: true,
+    });
+
+    const second = startBroker({ dataDir, isolation: 'copy' });
+    await initialize(second);
+    const caps = await capabilities(second);
+    // The cache answers tools/list, so nothing is locked or copied while idle.
+    expect(caps.profileCopy).toBeNull();
+    expect(caps.profileDir).toBeNull();
+    expect(profile.readProfileLock(base)).toMatchObject({ state: 'free' });
+    expect(existsSync(path.join(dataDir, 'profiles', 'playwright', '.sessions'))).toBe(false);
+    const names = await toolNames(second);
+    expect(names).toContain('browser_navigate');
+    const call = await callTool(second, 'browser_navigate', { url: 'data:text/html,x' });
+    expect(call.result?.isError).toBe(false);
+    expect((await capabilities(second)).profileCopy).toMatchObject({ state: 'prepared' });
   });
 
   // The engine-lock latch is proven by holding the copied profile's lock file so

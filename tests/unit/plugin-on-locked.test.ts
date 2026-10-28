@@ -366,6 +366,7 @@ function createScratchPlugin(root: string): string {
   for (const file of [
     'attach.mjs',
     'camoufox-overlay.mjs',
+    'launcher-settings.mjs',
     'password-manager.mjs',
     'ping-timeout.mjs',
     'profile.mjs',
@@ -481,15 +482,15 @@ async function holdExclusiveFile(file: string): Promise<{ stop: () => Promise<vo
 }
 
 describe('on_locked setting values', () => {
-  it('defaults to fallback for unset, empty, placeholder and unknown values', () => {
+  it('defaults to copy for unset, empty, placeholder and unknown values', () => {
     for (const value of ['', '   ', undefined as unknown as string]) {
-      expect(profile.resolveOnLocked(value)).toMatchObject({ mode: 'fallback', source: 'default' });
+      expect(profile.resolveOnLocked(value)).toMatchObject({ mode: 'copy', source: 'default' });
     }
     const placeholder = profile.resolveOnLocked('${user_config.on_locked}');
-    expect(placeholder).toMatchObject({ mode: 'fallback', source: 'default' });
+    expect(placeholder).toMatchObject({ mode: 'copy', source: 'default' });
     expect(placeholder.placeholder).not.toBeNull();
     const unknown = profile.resolveOnLocked('per-window');
-    expect(unknown).toMatchObject({ mode: 'fallback', source: 'default', ignored: 'per-window' });
+    expect(unknown).toMatchObject({ mode: 'copy', source: 'default', ignored: 'per-window' });
   });
 
   it('accepts the four documented values', () => {
@@ -497,7 +498,7 @@ describe('on_locked setting values', () => {
       expect(profile.resolveOnLocked(value)).toMatchObject({ mode: value, source: 'setting' });
     }
     expect(profile.ON_LOCKED_VALUES).toEqual(['block', 'fallback', 'isolated', 'copy']);
-    expect(profile.DEFAULT_ON_LOCKED).toBe('fallback');
+    expect(profile.DEFAULT_ON_LOCKED).toBe('copy');
     expect(profile.ON_LOCKED_BLOCK).toBe('block');
     expect(profile.ON_LOCKED_FALLBACK).toBe('fallback');
     expect(profile.ON_LOCKED_ISOLATED).toBe('isolated');
@@ -514,7 +515,7 @@ describe('on_locked setting values', () => {
       const setting = manifest.userConfig.on_locked;
       expect(setting.type).toBe('string');
       expect(setting.options).toEqual(['block', 'fallback', 'isolated', 'copy']);
-      expect(setting.default).toBe('fallback');
+      expect(setting.default).toBe('copy');
       expect(setting.description).toContain('separate cookies, logins and fingerprint seed');
       expect(setting.description).toContain('an explicit Profile directory keeps the block behaviour');
       expect(setting.description).toContain('nothing is saved and nothing persists');
@@ -688,7 +689,7 @@ describe('broker on_locked: a live profile lock', () => {
 
   for (const source of sources) {
     describe(`${source.name} profile`, () => {
-      it('starts on the first free numbered sibling under the default policy', async () => {
+      it('starts on the first free numbered sibling under on_locked=fallback', async () => {
         const dataDir = createRuntime(tempRoot(`on-locked-${source.name}-fallback-`));
         const workspace = path.join(tempRoot(`on-locked-${source.name}-cwd2-`), 'project');
         mkdirSync(workspace, { recursive: true });
@@ -696,7 +697,7 @@ describe('broker on_locked: a live profile lock', () => {
         writeLock(base, process.pid);
         // -2 is live-locked too, so the first free sibling is -3.
         writeLock(`${base}-2`, process.pid);
-        const session = startBroker(source.options(dataDir, workspace));
+        const session = startBroker({ ...source.options(dataDir, workspace), onLocked: 'fallback' });
         const initialized = await initialize(session);
         const instructions = initialized.result?.instructions ?? '';
         expect(instructions).toContain(base);
@@ -854,7 +855,7 @@ describe('broker on_locked: sibling selection and exhaustion', () => {
     const base = path.join(dataDir, 'profiles', 'default');
     writeLock(base, process.pid);
     writeLock(`${base}-2`, DEAD_PID);
-    const session = startBroker({ dataDir, engine: 'playwright' });
+    const session = startBroker({ dataDir, engine: 'playwright', onLocked: 'fallback' });
     await initialize(session);
     const caps = await capabilities(session);
     expect(caps.profileFallback).toMatchObject({ from: base, to: `${base}-2` });
@@ -867,7 +868,7 @@ describe('broker on_locked: sibling selection and exhaustion', () => {
     for (const suffix of ['', '-2', '-3', '-4', '-5']) {
       writeLock(`${base}${suffix}`, process.pid);
     }
-    const session = startBroker({ dataDir, engine: 'playwright' });
+    const session = startBroker({ dataDir, engine: 'playwright', onLocked: 'fallback' });
     const initialized = await initialize(session);
     const instructions = initialized.result?.instructions ?? '';
     expect(instructions).toContain('The numbered sibling profiles (suffixes 2 to 5) are also in use.');
@@ -879,15 +880,15 @@ describe('broker on_locked: sibling selection and exhaustion', () => {
     expect(String(caps.engineError)).toContain('numbered sibling profiles (suffixes 2 to 5)');
   });
 
-  it('treats an unknown value as fallback and logs it once', async () => {
+  it('treats an unknown value as copy and logs it once', async () => {
     const dataDir = createRuntime(tempRoot('on-locked-unknown-'));
     const base = path.join(dataDir, 'profiles', 'default');
     writeLock(base, process.pid);
     const session = startBroker({ dataDir, engine: 'playwright', onLocked: 'per-window' });
     await initialize(session);
     const caps = await capabilities(session);
-    expect(caps.onLocked).toBe('fallback');
-    expect(caps.profileFallback).toMatchObject({ from: base, to: `${base}-2` });
+    expect(caps.onLocked).toBe('copy');
+    expect(caps.profileFallback).toMatchObject({ from: base, kind: 'copy' });
     expect(session.stderr()).toContain('ignoring unknown on-locked policy: per-window');
   });
 });
@@ -903,8 +904,8 @@ describe('broker on_locked: the engine profile lock', () => {
     return startBroker({ dataDir, engine: 'lock-engine', pluginDir: plugin, onLocked: policy });
   }
 
-  it('moves to a sibling when another process holds the engine lock (default policy)', async () => {
-    const session = setupEngineLock(undefined, (base) => {
+  it('moves to a sibling when another process holds the engine lock (on_locked=fallback)', async () => {
+    const session = setupEngineLock('fallback', (base) => {
       writeFileSync(path.join(base, 'owner.lock'), `${process.pid}\n`);
     });
     await initialize(session);
@@ -931,7 +932,7 @@ describe('broker on_locked: the engine profile lock', () => {
   });
 
   it('reports engine-lock exhaustion with the sibling wording', async () => {
-    const session = setupEngineLock(undefined, (base) => {
+    const session = setupEngineLock('fallback', (base) => {
       for (const suffix of ['', '-2', '-3', '-4', '-5']) {
         mkdirSync(`${base}${suffix}`, { recursive: true });
         writeFileSync(path.join(`${base}${suffix}`, 'owner.lock'), `${process.pid}\n`);
@@ -958,7 +959,12 @@ describe('broker on_locked: the engine profile lock', () => {
     // opened, which is exactly what the manifest's `exclusive-open` rule reads.
     const holder = await holdExclusiveFile(path.join(base, 'parent.lock'));
     try {
-      const session = startBroker({ dataDir, engine: 'firefox-lock', pluginDir: plugin });
+      const session = startBroker({
+        dataDir,
+        engine: 'firefox-lock',
+        pluginDir: plugin,
+        onLocked: 'fallback',
+      });
       await initialize(session);
       const caps = await capabilities(session);
       expect(caps.profileFallback).toMatchObject({ from: base, to: `${base}-2` });
@@ -973,14 +979,14 @@ describe('broker on_locked: the engine profile lock', () => {
 
 describe('broker on_locked: the copy modes never fall back to a sibling (2.20.0)', () => {
   it('refuses a busy copy-mode base loudly instead of creating a sibling', async () => {
-    // The 2.16.0 regression: copy mode plus on_locked=fallback (the default) moved
-    // to a numbered sibling and copied that empty profile. 2.20.0 restores the
-    // 2.12-2.15 rule and says so.
+    // The 2.16.0 regression: copy mode plus on_locked=fallback moved to a numbered
+    // sibling and copied that empty profile. 2.20.0 restores the 2.12-2.15 rule and
+    // says so; 2.21.0 makes fallback an opt-in, so the case is stated explicitly.
     const dataDir = createRuntime(tempRoot('on-locked-copy-busy-'));
     const base = path.join(dataDir, 'profiles', 'default');
     seedBase(base);
     writeLock(base, process.pid);
-    const session = startBroker({ dataDir, isolation: 'copy', engine: 'playwright' });
+    const session = startBroker({ dataDir, isolation: 'copy', engine: 'playwright', onLocked: 'fallback' });
     const initialized = await initialize(session);
     const caps = await capabilities(session);
     expect(caps.onLocked).toBe('fallback');
@@ -1074,7 +1080,7 @@ describe('broker on_locked: engines and isolation that cannot use it', () => {
     const initialized = await initialize(session);
     const caps = await capabilities(session);
     expect(caps).toMatchObject({
-      onLocked: 'fallback',
+      onLocked: 'copy',
       profileIsolation: 'isolated',
       profileSource: 'isolated',
       profileDir: null,
@@ -1092,7 +1098,7 @@ describe('broker on_locked: additional guards and edge paths', () => {
     const base = path.join(dataDir, 'profiles', 'playwright', 'alice');
     writeLock(base, process.pid);
     writeFileSync(path.join(dataDir, 'profiles', 'playwright', 'alice.proxy'), 'http://proxy.example:8080\n');
-    const session = startBroker({ dataDir, account: 'alice', engine: 'playwright' });
+    const session = startBroker({ dataDir, account: 'alice', engine: 'playwright', onLocked: 'fallback' });
     await initialize(session);
     const caps = await capabilities(session);
     expect(caps.profileFallback).toMatchObject({ from: base, to: `${base}-2` });
@@ -1114,7 +1120,12 @@ describe('broker on_locked: additional guards and edge paths', () => {
     mkdirSync(`${base}-2`, { recursive: true });
     writeFileSync(path.join(base, 'owner.lock'), `${process.pid}\n`);
     writeFileSync(path.join(`${base}-2`, 'owner.lock'), `${process.pid}\n`);
-    const session = startBroker({ dataDir, engine: 'lock-engine', pluginDir: plugin });
+    const session = startBroker({
+      dataDir,
+      engine: 'lock-engine',
+      pluginDir: plugin,
+      onLocked: 'fallback',
+    });
     await initialize(session);
     const caps = await capabilities(session);
     expect(caps.profileFallback).toMatchObject({ to: `${base}-3` });
@@ -1131,7 +1142,12 @@ describe('broker on_locked: additional guards and edge paths', () => {
     writeLock(base, process.pid);
     mkdirSync(`${base}-2`, { recursive: true });
     writeFileSync(path.join(`${base}-2`, 'owner.lock'), `${process.pid}\n`);
-    const session = startBroker({ dataDir, engine: 'lock-engine', pluginDir: plugin });
+    const session = startBroker({
+      dataDir,
+      engine: 'lock-engine',
+      pluginDir: plugin,
+      onLocked: 'fallback',
+    });
     await initialize(session);
     const caps = await capabilities(session);
     expect(caps.profileFallback).toMatchObject({ from: base, to: `${base}-3` });
@@ -1148,7 +1164,12 @@ describe('broker on_locked: additional guards and edge paths', () => {
     writeLock(base, process.pid);
     mkdirSync(base, { recursive: true });
     writeFileSync(path.join(base, 'owner.lock'), `${process.pid}\n`);
-    const session = startBroker({ dataDir, engine: 'lock-engine', pluginDir: plugin });
+    const session = startBroker({
+      dataDir,
+      engine: 'lock-engine',
+      pluginDir: plugin,
+      onLocked: 'fallback',
+    });
     await initialize(session);
     const caps = await capabilities(session);
     expect(caps.profileFallback).toMatchObject({ from: base, to: `${base}-2` });

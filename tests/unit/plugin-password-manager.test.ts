@@ -449,7 +449,7 @@ describe('password_manager in the shipped manifests', () => {
       version: string;
       userConfig: Record<string, { type?: string; default?: unknown; description?: string }>;
     };
-    expect(plugin.version).toBe('2.20.0');
+    expect(plugin.version).toBe('2.21.0');
     const setting = plugin.userConfig.password_manager;
     expect(setting, `${name} declares password_manager`).toBeDefined();
     expect(setting.type).toBe('boolean');
@@ -521,7 +521,7 @@ describe('password_manager in the shipped manifests', () => {
       expect(readme).toContain('search.json.mozlz4');
     }
     expect(readFileSync(path.join(universalDir, 'README.md'), 'utf8')).toContain('native-unavailable');
-    expect(readFileSync(path.join(camoufoxDir, 'README.md'), 'utf8')).toContain('**2.20.0**');
+    expect(readFileSync(path.join(camoufoxDir, 'README.md'), 'utf8')).toContain('**2.21.0**');
   });
 });
 
@@ -1974,7 +1974,7 @@ describe('launcher wiring', () => {
   });
 
   it.each(['cloakbrowser', 'camoufox'])('ships %s byte-identical overlay helpers', (name) => {
-    for (const file of ['camoufox-overlay.mjs', 'password-manager.mjs']) {
+    for (const file of ['camoufox-overlay.mjs', 'launcher-settings.mjs', 'password-manager.mjs']) {
       const canonical = readFileSync(path.join(repoRoot, 'shared', 'core', 'lib', file));
       const copy = path.join(repoRoot, 'plugins', name, 'lib', file);
       expect(existsSync(copy), `${name}/${file}`).toBe(true);
@@ -2028,6 +2028,7 @@ function createStubPlugin(root: string): string {
   for (const file of [
     'attach.mjs',
     'camoufox-overlay.mjs',
+    'launcher-settings.mjs',
     'password-manager.mjs',
     'ping-timeout.mjs',
     'profile.mjs',

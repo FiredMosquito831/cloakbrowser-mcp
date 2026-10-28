@@ -10,16 +10,20 @@
 // read and can never be served stale.
 //
 // The file lives under the plugin data directory and is keyed by the engine, the
-// tool profile and a short digest of everything else that shapes the list (the
-// seven tool-group switches, the MCP package pin and the broker version), so a
-// pin bump or a caps change cannot serve a list the backend would not produce.
-// Nothing here throws: a missing, unreadable, oversized or malformed cache is
-// reported as an error string and the held start falls back to the meta-tools.
+// tool profile and a digest of everything else that shapes the list (the seven
+// tool-group switches, the MCP package pin and the manifest fields that shape the
+// surface). Since 2.21.0 the key no longer includes the broker version, which
+// never shaped a backend list and made every release start with no cache; the
+// version below is the STORED-SHAPE version and moves only when the payload
+// layout does. Nothing here throws: a missing, unreadable, oversized or malformed
+// cache is reported as an error string and the caller decides what to answer.
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-export const TOOL_CACHE_VERSION = 1;
+// 2: the payload carries the surface digest in `caps` instead of the broker
+// version, so a previous release's file can never be read as this one's.
+export const TOOL_CACHE_VERSION = 2;
 export const TOOL_CACHE_DIRNAME = 'cache';
 export const TOOL_CACHE_MAX_BYTES = 2 * 1024 * 1024;
 export const TOOL_CACHE_MAX_TOOLS = 400;

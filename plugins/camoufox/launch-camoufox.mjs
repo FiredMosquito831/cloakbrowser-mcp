@@ -17,6 +17,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { applyLauncherSettings } from './lib/launcher-settings.mjs';
 import { applyPingTimeout, pingTimeoutProblemNote } from './lib/ping-timeout.mjs';
 import { applyCamoufoxOverlay } from './lib/password-manager.mjs';
 import { ensurePython, ensureUv, ensureVenv } from './lib/provision.mjs';
@@ -93,6 +94,12 @@ export function buildChildEnv(source) {
     }
   }
   applyUnrestrictedFileAccess(env);
+  // Launcher-side safe branches (2.21.0): headless is always written in its
+  // canonical spelling (an unset value must never fall to the wrapper's POSIX
+  // "no DISPLAY means headless" rule), and a placeholder proxy or output path is
+  // dropped instead of being used as a URL or a directory. One stderr line per
+  // value that was not used.
+  applyLauncherSettings(env, 'launch-camoufox.mjs', log);
   // Server heartbeat (2.14.1). The wrapper pings every 3 s and closes the
   // browser and the session when the answer is more than the deadline late;
   // mcp/server.py:105-107 installs no heartbeat at all at 0. The plugin default

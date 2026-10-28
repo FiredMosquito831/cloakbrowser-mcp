@@ -299,7 +299,31 @@ function withIdentityCopy(keys: string[]): string[] {
   return copy;
 }
 
-const CLOAK_CAPABILITIES_KEYS = withEngineLock(withIdentityCopy(withSeat(CAPABILITIES_KEYS_295)));
+// 2.21.0: copy_contents defaults to identity, and the synthetic engines declare
+// no identityCopy list, so the clamp to "full" is reported with its reason and one
+// additive key appears in both payloads. An engine that declares the list (cloak,
+// playwright, camoufox) honours identity and carries no note.
+function withCopyContentsNote(keys: string[]): string[] {
+  const copy = [...keys];
+  copy.splice(copy.indexOf('copyContentsSource') + 1, 0, 'copyContentsNote');
+  return copy;
+}
+
+const SYNTHETIC_CAPABILITIES_KEYS = withCopyContentsNote(CAPABILITIES_KEYS_295);
+const SYNTHETIC_STATUS_KEYS = withCopyContentsNote(STATUS_KEYS_293);
+
+// 2.21.0 adds the launcher-side settings for an engine whose launcher turns them
+// into a child environment (cloak runs launch.mjs; the synthetic engines name
+// launchers this module does not know).
+function withLauncherSettings(keys: string[]): string[] {
+  const copy = [...keys];
+  copy.splice(copy.indexOf('ignoredSettings') + 1, 0, 'launcherSettings');
+  return copy;
+}
+
+const CLOAK_CAPABILITIES_KEYS = withLauncherSettings(
+  withEngineLock(withIdentityCopy(withSeat(CAPABILITIES_KEYS_295))),
+);
 const CLOAK_STATUS_KEYS = withEngineLock(withIdentityCopy(withSeat(STATUS_KEYS_293)));
 
 const tempRoots: string[] = [];
@@ -893,6 +917,7 @@ function createLockPlugin(root: string): string {
   for (const file of [
     'attach.mjs',
     'camoufox-overlay.mjs',
+    'launcher-settings.mjs',
     'password-manager.mjs',
     'ping-timeout.mjs',
     'profile.mjs',
@@ -1178,8 +1203,8 @@ describe('broker engine-lock preflight', () => {
     expect(await toolNames(session)).toContain('browser_navigate');
     const caps = await payload(session, 'browser_capabilities');
     const statusPayload = await payload(session, 'browser_engine_status');
-    expect(Object.keys(caps)).toEqual(CAPABILITIES_KEYS_295);
-    expect(Object.keys(statusPayload)).toEqual(STATUS_KEYS_293);
+    expect(Object.keys(caps)).toEqual(SYNTHETIC_CAPABILITIES_KEYS);
+    expect(Object.keys(statusPayload)).toEqual(SYNTHETIC_STATUS_KEYS);
     expect('engineProfileLock' in caps).toBe(false);
     expect('engineProfileLock' in statusPayload).toBe(false);
   });

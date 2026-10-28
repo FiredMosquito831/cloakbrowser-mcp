@@ -159,6 +159,7 @@ function createStubPlugin(root: string): string {
   for (const file of [
     'attach.mjs',
     'camoufox-overlay.mjs',
+    'launcher-settings.mjs',
     'password-manager.mjs',
     'ping-timeout.mjs',
     'profile.mjs',
@@ -485,11 +486,12 @@ describe('the camoufox launcher child environment', () => {
   it.each(['abc', '-1', '1.5'])('falls back to 0 with exactly one stderr line for %j', (raw) => {
     const write = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const env = camoufoxLauncher.buildChildEnv({ STEALTH_PING_TIMEOUT_MS: raw });
-    // Every line the launcher writes carries the [camoufox] prefix; an invalid
-    // value must produce exactly one of them and nothing else.
+    // Every line the launcher writes carries the [camoufox] prefix. An invalid
+    // value produces exactly one line about the heartbeat (2.21.0 may add its own
+    // safe-branch line for another setting, which is not this test's subject).
     const lines = write.mock.calls
       .map(([chunk]) => String(chunk))
-      .filter((line) => line.includes('[camoufox]'));
+      .filter((line) => line.includes('[camoufox]') && line.includes('Ping timeout'));
     expect(env.PLAYWRIGHT_MCP_PING_TIMEOUT_MS).toBe('0');
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain('Ping timeout');
@@ -503,7 +505,7 @@ describe('the camoufox launcher child environment', () => {
     const env = camoufoxLauncher.buildChildEnv({ STEALTH_PING_TIMEOUT_MS: '' });
     const lines = write.mock.calls
       .map(([chunk]) => String(chunk))
-      .filter((line) => line.includes('[camoufox]'));
+      .filter((line) => line.includes('[camoufox]') && line.toLowerCase().includes('ping'));
     expect(env.PLAYWRIGHT_MCP_PING_TIMEOUT_MS).toBe('0');
     expect(lines).toHaveLength(0);
     write.mockRestore();

@@ -30,6 +30,7 @@ export const CORE_FILES = Object.freeze([
   'engines/profiles.json',
   'lib/attach.mjs',
   'lib/camoufox-overlay.mjs',
+  'lib/launcher-settings.mjs',
   'lib/password-manager.mjs',
   'lib/ping-timeout.mjs',
   'lib/profile.mjs',

@@ -63,6 +63,7 @@ interface CopyOptions {
   to?: string;
   dataDir?: string | null;
   dryRun?: boolean;
+  contents?: string;
   env?: Record<string, string | undefined>;
   home?: string;
   pluginRoot?: string;
@@ -575,7 +576,7 @@ describe('profile-copy behaviour', () => {
   it('copies identity files and leaves every excluded class behind', () => {
     const dataDir = tempRoot();
     const expectedBytes = createCloakFixture(dataDir);
-    const result = run({ from: 'default', to: 'alice', dataDir });
+    const result = run({ from: 'default', to: 'alice', dataDir, contents: 'full' });
     expect(result.ok).toBe(true);
     const summary = result.summary!;
     expect(summary).toMatchObject({
@@ -686,14 +687,14 @@ describe('profile-copy behaviour', () => {
     createCloakFixture(dataDir);
     const targetDir = path.join(dataDir, 'profiles', 'cloak', 'alice');
 
-    const dry = run({ from: 'default', to: 'alice', dataDir, dryRun: true }).summary!;
+    const dry = run({ from: 'default', to: 'alice', dataDir, dryRun: true, contents: 'full' }).summary!;
     expect(dry.dryRun).toBe(true);
     expect(dry.targetDir).toBe(targetDir);
     expect(existsSync(targetDir)).toBe(false);
     expect(dry.topLevel.some((entry) => entry.path === 'Cache' && entry.excluded === 'cache')).toBe(true);
     expect(dry.topLevel.some((entry) => entry.path === 'Cookies' && entry.excluded === null)).toBe(true);
 
-    const real = run({ from: 'default', to: 'alice', dataDir }).summary!;
+    const real = run({ from: 'default', to: 'alice', dataDir, contents: 'full' }).summary!;
     expect(real.copied).toEqual(dry.copied);
     expect(real.excluded).toEqual(dry.excluded);
     expect(real.topLevel).toEqual(dry.topLevel);
@@ -757,7 +758,13 @@ describe('profile-copy behaviour', () => {
     expect(wrong.error?.code).toBe('unknown-engine');
     expect(wrong.error?.message).toContain('Supported engines: camoufox');
 
-    const right = camoufoxCopy.runProfileCopy({ engine: 'camoufox', from: 'default', to: 'alice', dataDir });
+    const right = camoufoxCopy.runProfileCopy({
+      engine: 'camoufox',
+      from: 'default',
+      to: 'alice',
+      dataDir,
+      contents: 'full',
+    });
     expect(right.ok).toBe(true);
     expect(right.summary?.targetDir).toBe(path.join(dataDir, 'profiles', 'camoufox', 'alice'));
     expect(existsSync(path.join(dataDir, 'profiles', 'camoufox', 'alice', 'Cookies'))).toBe(true);
@@ -855,7 +862,7 @@ describe('camoufox exclusions', () => {
   it('excludes Firefox caches, thumbnails and parent.lock, keeps the WAL and drops the SHM', () => {
     const dataDir = tempRoot();
     createCamoufoxFixture(dataDir);
-    const result = run({ engine: 'camoufox', from: 'default', to: 'alice', dataDir });
+    const result = run({ engine: 'camoufox', from: 'default', to: 'alice', dataDir, contents: 'full' });
     expect(result.ok).toBe(true);
     const summary = result.summary!;
     expect(summary).toMatchObject({
@@ -993,7 +1000,7 @@ describe('behaviour-preserving equality', () => {
       '12345',
     ].reduce((total, content) => total + Buffer.byteLength(content), 0);
 
-    const result = run({ from: 'default', to: 'alice', dataDir });
+    const result = run({ from: 'default', to: 'alice', dataDir, contents: 'full' });
     expect(result.ok).toBe(true);
     const summary = result.summary!;
     expect(summary.copied).toEqual({ files: 4, directories: 0, bytes: expectedBytes });
@@ -1060,11 +1067,63 @@ describe('profile-copy failure cleanup', () => {
   });
 });
 
+describe('the identity tier is the default (2.21.0)', () => {
+  it('copies the identity core by default and reports where the tier came from', () => {
+    const dataDir = tempRoot();
+    const expectedBytes = createCloakFixture(dataDir);
+    const result = run({ from: 'default', to: 'alice', dataDir });
+    expect(result.ok).toBe(true);
+    const summary = result.summary!;
+    // The default is the identity tier, and the summary says so.
+    expect(summary.contents).toBe('identity');
+    expect(summary.contentsSource).toBe('default');
+    // It copies strictly fewer files than the full plan of the same fixture.
+    const full = run({ from: 'default', to: 'alice-full', dataDir, contents: 'full' });
+    expect(full.summary?.contents).toBe('full');
+    expect(full.summary?.contentsSource).toBe('option');
+    expect(summary.copied.files).toBeLessThan(full.summary!.copied.files);
+    expect(summary.copied.files).toBeGreaterThan(0);
+    expect(expectedBytes).toBeGreaterThan(0);
+  });
+
+  it('honours --contents and the copy_contents setting, in that order', () => {
+    const dataDir = tempRoot();
+    createCloakFixture(dataDir);
+    const fromSetting = run({
+      from: 'default',
+      to: 'alice',
+      dataDir,
+      env: { STEALTH_COPY_CONTENTS: 'full' },
+    });
+    expect(fromSetting.summary?.contents).toBe('full');
+    expect(fromSetting.summary?.contentsSource).toBe('setting');
+    const fromOption = run({
+      from: 'default',
+      to: 'bob',
+      dataDir,
+      contents: 'identity',
+      env: { STEALTH_COPY_CONTENTS: 'full' },
+    });
+    expect(fromOption.summary?.contents).toBe('identity');
+    expect(fromOption.summary?.contentsSource).toBe('option');
+  });
+});
+
 describe('profile-copy output', () => {
   it('prints a machine-readable JSON summary and nothing else', () => {
     const dataDir = tempRoot();
     createCloakFixture(dataDir);
-    const cli = runCli(['--from', 'default', '--to', 'json-target', '--data-dir', dataDir, '--json']);
+    const cli = runCli([
+      '--from',
+      'default',
+      '--to',
+      'json-target',
+      '--data-dir',
+      dataDir,
+      '--contents',
+      'full',
+      '--json',
+    ]);
     expect(cli.status).toBe(0);
     expect(cli.stderr).toBe('');
     const parsed = JSON.parse(cli.stdout) as CopySummary;
@@ -1091,7 +1150,7 @@ describe('profile-copy output', () => {
   it('never prints file contents or a URL credential', () => {
     const dataDir = tempRoot();
     createCloakFixture(dataDir);
-    const summary = run({ from: 'default', to: 'alice', dataDir }).summary!;
+    const summary = run({ from: 'default', to: 'alice', dataDir, contents: 'full' }).summary!;
     const human = profileCopy.formatHumanSummary(summary);
     const json = JSON.stringify(summary);
     for (const text of [human, json]) {
@@ -1108,7 +1167,7 @@ describe('profile-copy output', () => {
     expect(human).toContain('stale lock ignored');
     expect(human).toContain('The per-account <name>.proxy file was not copied');
 
-    const cli = runCli(['--from', 'default', '--to', 'other', '--data-dir', dataDir]);
+    const cli = runCli(['--from', 'default', '--to', 'other', '--data-dir', dataDir, '--contents', 'full']);
     expect(cli.status).toBe(0);
     expect(cli.stdout).not.toContain(SECRET_COOKIE);
     expect(cli.stdout).not.toContain(SECRET_SEED);

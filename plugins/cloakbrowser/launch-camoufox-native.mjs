@@ -20,7 +20,8 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { pathToFileURL, fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { applyLauncherSettings } from './lib/launcher-settings.mjs';
 import { ensurePython, ensureUv, ensureVenv, venvExecutablePath } from './lib/provision.mjs';
 
 const PACKAGE_PIN = 'mcp-camoufox==0.4.5';
@@ -148,6 +149,11 @@ export function buildChildEnv(source, platform = process.platform) {
     }
   }
   applyUnrestrictedFileAccess(env);
+  // Launcher-side safe branches (2.21.0): a placeholder profile name or data
+  // directory is dropped before the app's own name rule sees it (a placeholder
+  // used to fail the whole start), and headless is resolved to the documented
+  // default below. One stderr line per value that was not used.
+  applyLauncherSettings(env, 'launch-camoufox-native.mjs', log);
   const profile = env.CAMOUFOX_PROFILE?.trim();
   if (profile !== undefined && profile !== '' && !PROFILE_PATTERN.test(profile)) {
     fail(
@@ -160,7 +166,11 @@ export function buildChildEnv(source, platform = process.platform) {
   } else {
     env.CAMOUFOX_PROFILE = profile;
   }
-  const dataDir = source.CAMOUFOX_DATA_DIR?.trim();
+  // Read back the resolved values (2.21.0): applyLauncherSettings already
+  // dropped a placeholder profile or data directory and wrote headless in its
+  // canonical spelling, so these three reads use the resolved environment, never
+  // the raw input.
+  const dataDir = env.CAMOUFOX_DATA_DIR?.trim();
   env.CAMOUFOX_DATA_DIR =
     dataDir !== undefined && dataDir !== ''
       ? dataDir
@@ -170,7 +180,7 @@ export function buildChildEnv(source, platform = process.platform) {
   env.CAMOUFOX_DAEMON = 'false';
   // mcp-camoufox accepts true, false or virtual. virtual is Xvfb (Linux only),
   // so a Windows user must never receive it; the plugin has a boolean switch.
-  const headless = source.PLAYWRIGHT_MCP_HEADLESS?.trim().toLowerCase() === 'true';
+  const headless = env.PLAYWRIGHT_MCP_HEADLESS === 'true';
   env.CAMOUFOX_HEADLESS = headless ? 'true' : 'false';
   env.CAMOUFOX_BROWSER_VERSION = normalizeBuild(
     source.CAMOUFOX_NATIVE_BROWSER_BUILD ?? source.CAMOUFOX_BROWSER_VERSION,

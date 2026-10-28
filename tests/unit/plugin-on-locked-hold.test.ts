@@ -261,18 +261,56 @@ function callText(response: JsonRpcResponse): string {
 // A first, unheld start writes the tool-list cache; closing it frees the profile
 // so a second start can be held by a lock file. No browser is involved.
 async function seedToolCache(dataDir: string): Promise<void> {
-  const session = startBroker({ dataDir });
+  const session = startBroker({ dataDir, onLocked: 'fallback' });
   await initialize(session);
   await session.request('tools/list', {});
   await session.close();
 }
 
-describe('single-seat hold: while the profile is busy', () => {
-  it('keeps the server usable, spawns no backend and serves the meta-tools without a cache', async () => {
+describe('cold surface under the default policy (2.21.0)', () => {
+  it('takes the copy and starts on the first tools/list, never answering with the meta-tools', async () => {
+    // Before 2.21.0 this was the meta-only deadlock: the copy was deferred to the
+    // first browser action, tools/list was answered from a tool cache that did not
+    // exist, and the three meta-tools start no browser — so the copy that would
+    // have created the cache could never be taken, and only a restart escaped.
+    // No configuration may leave the client with a list it cannot act on: on a
+    // surface this machine has never cached, the copy is taken and the backend
+    // started before the list is answered.
+    const dataDir = createRuntime(tempRoot('seat-cold-eager-'));
+    const base = path.join(dataDir, 'profiles', 'default');
+    mkdirSync(path.join(base, 'Default'), { recursive: true });
+    writeFileSync(path.join(base, 'Default', 'Cookies'), 'cookie-bytes');
+    writeLock(base, process.pid);
+    // The surface has never been cached: this is the cold case.
+    expect(existsSync(path.join(dataDir, 'cache', 'cloak'))).toBe(false);
+    const session = startBroker({ dataDir });
+    await initialize(session);
+    // The list is the backend's own list plus the meta-tools, not the meta-tools.
+    expect(await toolNames(session)).toEqual([...STUB_TOOLS, ...META_TOOLS]);
+    const caps = await capabilities(session);
+    expect(caps).toMatchObject({ onLocked: 'copy', profileFallback: { kind: 'copy' } });
+    const copy = caps.profileCopy as Record<string, unknown>;
+    expect(copy).toMatchObject({ baseDir: base, kind: 'on-locked', state: 'prepared' });
+    // The first browser call works and runs on the copy.
+    const response = await callTool(session, 'browser_navigate');
+    expect(response.result?.isError).toBeFalsy();
+    const environment = JSON.parse(callText(response)) as { profileDir: string };
+    expect(environment.profileDir).toBe(copy.sessionDir);
+    // The base was read, never written; the copy carries its cookies.
+    expect(readFileSync(path.join(base, 'Default', 'Cookies'), 'utf8')).toBe('cookie-bytes');
+    expect(
+      readFileSync(path.join(String(copy.sessionDir), 'Default', 'Cookies'), 'utf8'),
+    ).toBe('cookie-bytes');
+    // The surface is cached now, so the next start of this configuration is lazy.
+    expect(existsSync(path.join(dataDir, 'cache', 'cloak'))).toBe(true);
+    expect(session.stderr()).toContain('cold start: no cached tool list exists');
+  });
+
+  it('holds on_locked=fallback with no backend and serves the meta-tools', async () => {
     const dataDir = createRuntime(tempRoot('seat-hold-'));
     const base = path.join(dataDir, 'profiles', 'default');
     writeLock(base, process.pid);
-    const session = startBroker({ dataDir });
+    const session = startBroker({ dataDir, onLocked: 'fallback' });
     const initialized = await initialize(session);
     const instructions = initialized.result?.instructions ?? '';
     expect(instructions).toContain(`The cloak browser profile ${base} is already in use`);
@@ -304,7 +342,7 @@ describe('single-seat hold: while the profile is busy', () => {
     expect(existsSync(cacheRoot)).toBe(true);
     const base = path.join(dataDir, 'profiles', 'default');
     writeLock(base, process.pid);
-    const session = startBroker({ dataDir, disabledTools: 'browser_snapshot' });
+    const session = startBroker({ dataDir, disabledTools: 'browser_snapshot', onLocked: 'fallback' });
     await initialize(session);
     const names = await toolNames(session);
     // The cached backend list through manifest → profile → disabled_tools.
@@ -319,7 +357,7 @@ describe('single-seat hold: while the profile is busy', () => {
     const dataDir = createRuntime(tempRoot('seat-busy-call-'));
     const base = path.join(dataDir, 'profiles', 'default');
     writeLock(base, process.pid);
-    const session = startBroker({ dataDir });
+    const session = startBroker({ dataDir, onLocked: 'fallback' });
     await initialize(session);
     const first = await callTool(session, 'browser_navigate');
     expect(first.result?.isError).toBe(true);
@@ -339,7 +377,7 @@ describe('single-seat hold: while the profile is busy', () => {
     const dataDir = createRuntime(tempRoot('seat-explicit-'));
     const explicit = path.join(tempRoot('seat-explicit-profile-'), 'profile');
     writeLock(explicit, process.pid);
-    const session = startBroker({ dataDir, profileDir: explicit });
+    const session = startBroker({ dataDir, profileDir: explicit, onLocked: 'fallback' });
     const initialized = await initialize(session);
     expect(initialized.result?.instructions).toContain(
       `The cloak browser profile ${explicit} is already in use`,
@@ -377,7 +415,7 @@ describe('single-seat hold: recovery', () => {
     await seedToolCache(dataDir);
     const base = path.join(dataDir, 'profiles', 'default');
     const lockFile = writeLock(base, process.pid);
-    const session = startBroker({ dataDir });
+    const session = startBroker({ dataDir, onLocked: 'fallback' });
     await initialize(session);
     expect(await toolNames(session)).toEqual([...STUB_TOOLS, ...META_TOOLS]);
     // The other session closes: the bridge lock is gone.
@@ -435,7 +473,7 @@ describe('single-seat hold: recovery', () => {
     // is reported identically on every platform. The base starts outside it.
     const base = path.join(tempRoot('seat-outside-'), 'profile');
     const lockFile = writeLock(base, process.pid);
-    const session = startBroker({ dataDir, isolation: 'copy-keep', profileDir: base });
+    const session = startBroker({ dataDir, isolation: 'copy-keep', profileDir: base, onLocked: 'fallback' });
     await initialize(session);
     expect((await capabilities(session)).hold).toMatchObject({ state: 'waiting' });
     rmSync(lockFile);

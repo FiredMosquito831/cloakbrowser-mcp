@@ -464,6 +464,7 @@ function createScratchPlugin(root: string): string {
   for (const file of [
     'attach.mjs',
     'camoufox-overlay.mjs',
+    'launcher-settings.mjs',
     'password-manager.mjs',
     'ping-timeout.mjs',
     'profile.mjs',
@@ -947,7 +948,13 @@ describe('broker profile preflight', () => {
     // lock only, which does not block the start; the bridge reclaims it.
     writeLock(`${base}-2`, process.pid);
     writeLock(`${base}-3`, deadPid(tempRoot('pr10-fallback-dead-')));
-    const session = startBroker({ dataDir, isolation: 'workspace', cwd: workspace, engine: 'playwright' });
+    const session = startBroker({
+      dataDir,
+      isolation: 'workspace',
+      cwd: workspace,
+      engine: 'playwright',
+      onLocked: 'fallback',
+    });
     const initialized = await initialize(session);
     const instructions = initialized.result?.instructions ?? '';
     expect(instructions).toContain(base);
@@ -976,7 +983,13 @@ describe('broker profile preflight', () => {
     for (const suffix of ['', '-2', '-3', '-4', '-5']) {
       writeLock(`${base}${suffix}`, process.pid);
     }
-    const session = startBroker({ dataDir, isolation: 'workspace', cwd: workspace, engine: 'playwright' });
+    const session = startBroker({
+      dataDir,
+      isolation: 'workspace',
+      cwd: workspace,
+      engine: 'playwright',
+      onLocked: 'fallback',
+    });
     const initialized = await initialize(session);
     expect(initialized.result?.instructions).toContain('numbered workspace fallbacks');
     expect(await toolNames(session)).toEqual([
