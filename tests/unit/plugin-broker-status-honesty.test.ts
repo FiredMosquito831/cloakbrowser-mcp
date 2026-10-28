@@ -43,6 +43,7 @@ const STUB_TOOLS = ['browser_navigate', 'browser_snapshot', 'browser_evaluate'];
 const PROTOCOL_2026_MESSAGE =
   'connection is serving the 2026-07-28 protocol; the initialize handshake is not accepted';
 const GENERIC_MESSAGE = 'initialize refused by policy';
+const NOT_CONNECTED = 'Not connected';
 
 const STUB_SOURCE = `#!/usr/bin/env node
 // Deterministic stand-in for the cloakbrowser-mcp CLI. MODE decides the
@@ -62,7 +63,7 @@ function send(message) {
 function handle(message) {
   if (MODE === 'silent') return;
   if (message.method === 'initialize') {
-    if (MODE === 'normal') {
+    if (MODE === 'normal' || MODE === 'internal-32603' || MODE === 'wrong-code') {
       send({
         jsonrpc: '2.0',
         id: message.id,
@@ -85,6 +86,16 @@ function handle(message) {
     return;
   }
   if (message.method === 'tools/list') {
+    // internal-32603 is a different transport-era failure with the same numeric
+    // code; only the pinned "Not connected" wording means a dead upstream.
+    if (MODE === 'wrong-code') {
+      send({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: __NOT_CONNECTED__ } });
+      return;
+    }
+    if (MODE === 'internal-32603') {
+      send({ jsonrpc: '2.0', id: message.id, error: { code: -32603, message: 'Internal error' } });
+      return;
+    }
     send({
       jsonrpc: '2.0',
       id: message.id,
@@ -121,7 +132,7 @@ rl.on('line', (line) => {
 rl.on('close', () => process.exit(0));
 `;
 
-type StubMode = 'normal' | 'reject-2026' | 'reject-generic' | 'silent';
+type StubMode = 'normal' | 'reject-2026' | 'reject-generic' | 'silent' | 'internal-32603' | 'wrong-code';
 
 const tempRoots: string[] = [];
 const sessions: BrokerSession[] = [];
@@ -167,7 +178,8 @@ function createRuntime(mode: StubMode): string {
   const source = STUB_SOURCE.replace('__MODE__', JSON.stringify(mode))
     .replace('__TOOLS__', JSON.stringify(STUB_TOOLS))
     .replace('__PROTOCOL_MESSAGE__', JSON.stringify(PROTOCOL_2026_MESSAGE))
-    .replace('__GENERIC_MESSAGE__', JSON.stringify(GENERIC_MESSAGE));
+    .replace('__GENERIC_MESSAGE__', JSON.stringify(GENERIC_MESSAGE))
+    .replace('__NOT_CONNECTED__', JSON.stringify(NOT_CONNECTED));
   writeFileSync(path.join(modules, 'cloakbrowser-mcp', 'dist', 'cli.js'), source);
   return root;
 }
@@ -318,6 +330,25 @@ describe('broker status after a rejected initialize that still answers', () => {
   });
 });
 
+// The additive groups every engine reports in browser_engine_status, in order.
+// They carry not-applicable values for an engine that cannot use them, which is
+// why they are part of the baseline rather than conditional keys.
+const IDENTITY_KEYS = [
+  'identityMode',
+  'identityApplies',
+  'identitySource',
+  'identityFile',
+  'identityCreatedAt',
+  'identityNote',
+];
+const PING_TIMEOUT_KEYS = [
+  'pingTimeoutApplies',
+  'pingTimeoutMs',
+  'pingTimeoutSource',
+  'heartbeatEnabled',
+  'pingTimeoutNote',
+];
+
 describe('normal backend status stays byte-identical', () => {
   it('reports running with no initializeRejected key and the usual timing values', async () => {
     const dataDir = createRuntime('normal');
@@ -329,10 +360,12 @@ describe('normal backend status stays byte-identical', () => {
     });
     expect(initialize.result?.serverInfo?.name).toBe('stub-broker-status');
     // 2.9.5 appends one artifact sentence to every handshake; the stub sends no
-    // instructions of its own, so that sentence is the whole value.
+    // instructions of its own, so that sentence opens the value.
     expect(initialize.result?.instructions).toMatch(
       /^Browser artifacts \(screenshots, traces, downloads\) go to /,
     );
+    // 2.19.0 (user decision Q5) appends one URL sentence, and only that.
+    expect(initialize.result?.instructions).toContain('browser_navigate takes a full URL: a bare word');
 
     const listed = await callStatus(session);
     expect(listed.backendState).toBe('running');
@@ -357,6 +390,89 @@ describe('normal backend status stays byte-identical', () => {
     expect(after.waitMs).toBeNull();
     expect(typeof after.startupMs).toBe('number');
     expect(Object.hasOwn(after, 'initializeRejected')).toBe(false);
+    // 2.19.0 adds nothing to a healthy payload: the dead-backend keys exist only
+    // on the degraded path or after an automatic restart.
+    expect(Object.hasOwn(after, 'backendSubstate')).toBe(false);
+    expect(Object.hasOwn(after, 'backendRestart')).toBe(false);
+    // The key order of a healthy status is the one 2.18.0 produced (plus the
+    // 2.19.0 sentence above, which is not a status key). Every key added later
+    // must be conditional, and this list is where that is enforced.
+    expect(Object.keys(after)).toEqual([
+      'engine',
+      'label',
+      'engineSource',
+      'engineError',
+      'transport',
+      'contract',
+      'toolProfile',
+      'backendState',
+      'backendPid',
+      'backendVersion',
+      'backendServerName',
+      'lastError',
+      'startupMs',
+      'waitMs',
+      'toolsListWaitMs',
+      'pendingRequestCount',
+      'uptimeMs',
+      'backendToolCount',
+      'exposedToolCount',
+      'metaToolCount',
+      'brokerVersion',
+      'howToChangeEngine',
+      'backendStderrTail',
+      'account',
+      'profileDir',
+      'profileIsolation',
+      'profileApplies',
+      'onLocked',
+      'profileFallback',
+      'profileLock',
+      // The cloak manifest declares its own profileLock (Chromium's lockfile).
+      'engineProfileLock',
+      ...IDENTITY_KEYS,
+      ...PING_TIMEOUT_KEYS,
+    ]);
+  });
+});
+
+describe('F1 — only the pinned dead-upstream answer is classified', () => {
+  it('relays a plain -32603 with another message byte-for-byte and keeps running', async () => {
+    const dataDir = createRuntime('internal-32603');
+    const session = startBroker(dataDir);
+    await session.request('initialize', {
+      protocolVersion: '2025-06-18',
+      capabilities: {},
+      clientInfo: { name: 'test', version: '1' },
+    });
+    const list = await session.request('tools/list', {});
+    // The same numeric code with a different message is a backend error, not a
+    // death: it is relayed unchanged and no degraded state is recorded.
+    expect(list.error).toEqual({ code: -32603, message: 'Internal error' });
+    const payload = await callStatus(session);
+    expect(payload.backendState).toBe('running');
+    expect(payload.lastError).toBeNull();
+    expect(Object.hasOwn(payload, 'backendSubstate')).toBe(false);
+    expect(Object.hasOwn(payload, 'backendRestart')).toBe(false);
+    expect(session.stderr()).not.toContain('dead-backend recovery');
+  });
+});
+
+describe('F1 — the wording alone is not a death either', () => {
+  it('does not classify "Not connected" under another error code', async () => {
+    const dataDir = createRuntime('wrong-code');
+    const session = startBroker(dataDir);
+    await session.request('initialize', {
+      protocolVersion: '2025-06-18',
+      capabilities: {},
+      clientInfo: { name: 'test', version: '1' },
+    });
+    const list = await session.request('tools/list', {});
+    expect(list.error).toEqual({ code: -32000, message: 'Not connected' });
+    const payload = await callStatus(session);
+    expect(payload.backendState).toBe('running');
+    expect(Object.hasOwn(payload, 'backendSubstate')).toBe(false);
+    expect(session.stderr()).not.toContain('dead-backend recovery');
   });
 });
 

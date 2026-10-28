@@ -463,7 +463,7 @@ describe('copy-keep as a profile_isolation value', () => {
       expect(setting.description).toContain('previous-');
       expect(setting.description).toContain('never deleted automatically');
       expect(setting.description).not.toContain('in memory');
-      expect(manifest.version).toBe('2.18.0');
+      expect(manifest.version).toBe('2.19.0');
     }
     expect(profile.PROFILE_ISOLATION_VALUES).toEqual([
       'shared',

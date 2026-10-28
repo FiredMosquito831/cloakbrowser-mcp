@@ -12,6 +12,8 @@ tools/video/**/node_modules/
 *.tsbuildinfo
 
 # Test and coverage output
+# Local scratch inside the checkout (sessions keep theirs in the project root).
+/.scratch/
 /coverage/
 /.nyc_output/
 /.vitest/

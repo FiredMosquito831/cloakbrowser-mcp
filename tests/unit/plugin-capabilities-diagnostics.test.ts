@@ -318,6 +318,12 @@ function comparable(value: unknown): unknown {
   return value;
 }
 
+// 2.19.0 (user decision Q5) appends one URL sentence to every healthy handshake,
+// after the artifact sentence: a bare word becomes https://<word> and fails.
+const NAVIGATE_URL_SENTENCE =
+  'browser_navigate takes a full URL: a bare word is sent to the browser as https://<word> and fails to resolve, ' +
+  'so pass the whole address (https://…), and use a search URL if you mean a search.';
+
 describe('browser_capabilities artifact diagnostics', () => {
   it('reports serverCwd, the client-root outputDir and the roots the client answered', async () => {
     const root = tempRoot('capabilities-roots-');
@@ -596,7 +602,8 @@ describe('browser_capabilities artifact diagnostics', () => {
     // Declared no roots, so no probe and no wait: the plugin-data default.
     expect(String(initialized.result?.instructions)).toBe(
       `Browser artifacts (screenshots, traces, downloads) go to ${path.join(dataDir, 'output', 'cloak')} because ` +
-        'the output_dir setting is empty and no file root was available from the client; set that setting to change it.',
+        'the output_dir setting is empty and no file root was available from the client; set that setting to ' +
+        `change it. ${NAVIGATE_URL_SENTENCE}`,
     );
   });
 
@@ -612,7 +619,8 @@ describe('browser_capabilities artifact diagnostics', () => {
         dataDir,
         'output',
         'cloak',
-      )} because the output_dir setting is empty and no file root was available from the client; set that setting to change it.`,
+      )} because the output_dir setting is empty and no file root was available from the client; set that setting to ` +
+        `change it. ${NAVIGATE_URL_SENTENCE}`,
     );
   });
 });
