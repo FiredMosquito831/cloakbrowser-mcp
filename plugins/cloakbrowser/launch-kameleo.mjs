@@ -22,6 +22,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { buildEndpoint, validateEndpointSetting } from './lib/attach.mjs';
+import { applyLauncherSettings } from './lib/launcher-settings.mjs';
 import { ensureNpmRuntime, resolveNpmPackage } from './lib/provision.mjs';
 
 const LOG_PREFIX = '[kameleo]';
@@ -155,6 +156,11 @@ export function buildChildEnv(source, endpoint) {
     delete env[name];
   }
   applyUnrestrictedFileAccess(env);
+  // Launcher-side safe branches (2.21.0): of the settings this launcher turns into
+  // the CLI's environment, only the artifact directory is one, and a placeholder
+  // path is dropped instead of being used literally (Kameleo owns the window, its
+  // proxy and its browser build, so those never reach the CLI at all).
+  applyLauncherSettings(env, 'launch-kameleo.mjs', log);
   applyToolGroups(env);
   if (typeof endpoint === 'string' && endpoint !== '') {
     // Both spellings are passed: the flag is the documented CLI contract and

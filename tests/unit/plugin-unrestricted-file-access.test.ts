@@ -130,6 +130,13 @@ describe('launcher child environment', () => {
         CLAUDE_PLUGIN_DATA: 'D:/scratch/plugin-data',
         PLAYWRIGHT_MCP_HEADLESS: 'false',
         PATH: 'C:/Windows/System32',
+        // 2.21.0 writes the documented safe branches explicitly, so neither the
+        // bridge's own defaults (headless on, humanize off) nor a throwing
+        // placeholder parser can apply by omission. With a supplied value these
+        // keys are the value; unset they are the safe branch.
+        CLOAK_PLAYWRIGHT_MCP_HUMANIZE: 'true',
+        CLOAK_PLAYWRIGHT_MCP_HUMAN_PRESET: 'default',
+        CLOAK_PLAYWRIGHT_MCP_RELEASE_CHANNEL: 'stable',
       },
       camoufox: {
         CLAUDE_PLUGIN_DATA: 'D:/scratch/plugin-data',

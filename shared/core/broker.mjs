@@ -11,6 +11,7 @@
 // Windows rules: no detached children, stdin EOF is the shutdown signal, and the
 // backend process tree is killed with taskkill after a 300 ms grace period.
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -49,15 +50,19 @@ import {
   sha256File,
 } from './lib/password-manager.mjs';
 import { isRealDirectory, overlayPolicyPath, overlayRoot } from './lib/camoufox-overlay.mjs';
+import { launcherSettingsReport } from './lib/launcher-settings.mjs';
 import { PING_TIMEOUT_ENGINE_ID, pingTimeoutProblemNote, resolvePingTimeout } from './lib/ping-timeout.mjs';
 import { readToolCache, toolCacheKey, toolCachePath, writeToolCache } from './lib/tool-cache.mjs';
 import {
   accountNameError,
   accountProxyPath,
   backendEnvironment,
+  COPY_CONTENTS_FULL,
   COPY_CONTENTS_IDENTITY,
+  COPY_CONTENTS_SOURCE_CLAMPED,
   COPY_KEEP_LOCK_POLL_MS,
   COPY_KEEP_LOCK_WAIT_MS,
+  copyContentsClampedNote,
   copyPlanToTarget,
   createProfileLock,
   DEFAULT_PROFILE_NAME,
@@ -347,10 +352,12 @@ if (profileLifetimeResolution.ignored !== null) {
   log(`ignoring unknown profile lifetime: ${profileLifetimeResolution.ignored}`);
 }
 const profileLifetime = profileLifetimeResolution.mode;
-// copy_contents (2.20.0): what a session copy contains. "full" is the whole plan
-// and therefore exactly what 2.12-2.19 copied; "identity" keeps the identity core
-// the engine's manifest lists. An engine without an identityCopy descriptor
-// cannot honour the tier, so it copies the full tree and says so.
+// copy_contents (2.20.0): what a session copy contains. "identity" (the default
+// since 2.21.0) keeps the identity core the engine's manifest lists; "full" is
+// the whole plan and therefore exactly what 2.12-2.19 copied. An engine without
+// an identityCopy descriptor cannot honour the tier, so it copies the full tree
+// and says so. The effective tier also depends on the isolation mode (copy-keep
+// may never run on a thin tree), so it is computed below, after copyKeepMode.
 const copyContentsSetting =
   typeof process.env.STEALTH_COPY_CONTENTS === 'string' ? process.env.STEALTH_COPY_CONTENTS : '';
 const copyContentsResolution = resolveCopyContents(copyContentsSetting);
@@ -362,21 +369,6 @@ if (copyContentsResolution.ignored !== null) {
 }
 const identityCopyDescriptor = engine === null ? null : manifestIdentityCopy(engine);
 const copyContentsRequested = copyContentsResolution.mode;
-const copyContents =
-  copyContentsRequested === COPY_CONTENTS_IDENTITY && identityCopyDescriptor === null
-    ? 'full'
-    : copyContentsRequested;
-if (copyContentsRequested !== copyContents) {
-  log(
-    `copy_contents is "identity" but the "${selected.id}" engine declares no identityCopy descriptor, ` +
-      'so a copy keeps the full tree (nothing is silently downgraded without this line)',
-  );
-}
-const copyContentsIgnoredNote =
-  copyContentsRequested !== copyContents
-    ? `copy_contents is "${COPY_CONTENTS_IDENTITY}", but the "${selected.id}" engine declares no identityCopy ` +
-      'descriptor, so the copy keeps the full tree.'
-    : null;
 // seat_limit (2.20.0): the concurrent-browser capacity of an engine that has a
 // seat concept. "engine-default" is the manifest's own rule (today's behaviour);
 // "unlimited" and "vendor-license" are the user's licence assertions. The
@@ -409,6 +401,35 @@ const copyKeepMode = profileIsolation.mode === 'copy-keep';
 // The mode's own name in every user-facing sentence, so "copy" text stays
 // byte-identical and "copy-keep" never claims to be the other mode.
 const copyModeLabel = profileIsolation.mode;
+// The effective copy tier (2.21.0). Two clamps, in this order:
+//   1. copy-keep always keeps the full tree. Its session copy is renamed into the
+//      base path on a clean close (swapSessionCopyIntoBase), so a thin identity
+//      copy would REPLACE the base's IndexedDB, OPFS and caches with a fragment and
+//      the loss would be permanent from the live path. A setting may never
+//      silently destroy data, so the tier is replaced in code and every payload
+//      reports copyContentsSource "clamped" with the one-line reason.
+//   2. an engine with no identityCopy descriptor can only copy the whole plan.
+const copyContentsClamped = copyKeepMode === true;
+const copyContents =
+  copyContentsClamped || (copyContentsRequested === COPY_CONTENTS_IDENTITY && identityCopyDescriptor === null)
+    ? COPY_CONTENTS_FULL
+    : copyContentsRequested;
+const copyContentsSource = copyContentsClamped ? COPY_CONTENTS_SOURCE_CLAMPED : copyContentsResolution.source;
+if (copyContentsRequested !== copyContents) {
+  log(
+    copyContentsClamped
+      ? `copy_contents is "${copyContentsRequested}", but profile_isolation "${copyModeLabel}" replaces the base ` +
+          'profile on a clean close, so its copy keeps the full tree (clamped; nothing is silently destroyed)'
+      : `copy_contents is "identity" but the "${selected.id}" engine declares no identityCopy descriptor, ` +
+          'so a copy keeps the full tree (nothing is silently downgraded without this line)',
+  );
+}
+const copyContentsIgnoredNote = copyContentsClamped
+  ? copyContentsClampedNote(copyModeLabel)
+  : copyContentsRequested !== copyContents
+    ? `copy_contents is "${COPY_CONTENTS_IDENTITY}", but the "${selected.id}" engine declares no identityCopy ` +
+      'descriptor, so the copy keeps the full tree.'
+    : null;
 
 // The default-profile pointer (2.10.0). It is read once here, next to the
 // profiles, and is only a candidate: resolveProfile applies it after profile_dir
@@ -544,6 +565,11 @@ let onLockedFallbackBase = null;
 // re-copy in this session, because the backend was started with it.
 let pendingCopy = null;
 let copyFallbackOwner = null;
+// The live state object, once it exists. The copy helpers run at module level
+// (a "server" lifetime takes its copy during startup, before `state` is built),
+// and a few of them must also correct the already-built state when they run
+// later; this is the one reference that makes that safe on both paths.
+let stateRef = null;
 // --- single-seat hold (2.16.0) ----------------------------------------------
 // An engine that declares one concurrent browser seat cannot start a second
 // browser on a sibling profile, so a busy profile is not moved aside: the server
@@ -905,10 +931,17 @@ function proxyCandidate() {
 // is read. An isolated start has no profile either, so its account proxy file is
 // not used; proxy_server still applies because a proxy is not profile state.
 function resolveProxy() {
-  const setting =
+  const raw =
     typeof process.env.PLAYWRIGHT_MCP_PROXY_SERVER === 'string'
       ? process.env.PLAYWRIGHT_MCP_PROXY_SERVER.trim()
       : '';
+  // An unsubstituted placeholder is a missing substitution, not a proxy: used as
+  // a URL it would fail the browser at its first start (2.21.0). It is treated
+  // exactly like an empty value, and the launchers drop it for the same reason.
+  const setting = raw.includes('${') ? '' : raw;
+  if (setting === '' && raw !== '') {
+    log(`ignoring unsubstituted proxy-server placeholder: ${raw}`);
+  }
   const candidate = proxyCandidate();
   if (setting !== '') {
     if (candidate !== null && existsSync(accountProxyPath(candidate))) {
@@ -1217,9 +1250,34 @@ function prepareCopySession(options = {}) {
 // of its own and the base is only ever read. A base that does not exist here is
 // a fact the caller must not paper over: the copy would be empty, which is the
 // incident this mode exists to avoid.
+//
+// 2.21.0: the seat is re-read here, at take time. The start-time preflight
+// checked it when the copy was planned; a lazy copy is taken at the first browser
+// action, and another session may have opened its browser in between. A session
+// with no seat free must never start a second CloakBrowser, so the copy is not
+// taken and this start goes down the 2.16.0 hold path instead: the copy is no
+// longer owed, the cached tool list stays, and when the base is free this session
+// runs on the real profile.
 function prepareOnLockedCopy(request) {
   const baseDir = request.baseDir;
   const sessionDir = request.sessionDir;
+  const seat = seatFacts();
+  if (seat !== null && seat.seatFree === false) {
+    pendingCopy = null;
+    copyFallbackOwner = null;
+    profileFallback = null;
+    beginHold(baseDir, request.lock ?? null, null);
+    holdState.reason = seatHoldReason(baseDir, request.owner ?? null, seat);
+    holdState.seat = seat;
+    if (stateRef !== null) {
+      stateRef.profile.fallback = null;
+      stateRef.profile.pendingCopy = null;
+      stateRef.profile.copyPendingError = null;
+      stateRef.backend.state = 'waiting-for-profile';
+    }
+    log(holdState.reason);
+    return null;
+  }
   if (!existsSync(baseDir)) {
     engineError =
       `on_locked "copy" cannot copy the busy profile ${baseDir} because it no longer exists. ` +
@@ -1301,6 +1359,67 @@ function takePendingCopyNow() {
   copySession = copy;
   return true;
 }
+// The copy was just taken: make the live state describe it. Used by both paths
+// that take a copy after the module's own state was built (the first browser
+// action since 2.20.0, the cold-surface start since 2.21.0), so the two can never
+// disagree about the directory the backend runs on.
+function adoptTakenCopy() {
+  state.profile.copy = copySession;
+  state.profile.dir = copySession.sessionDir;
+  state.profile.pendingCopy = null;
+  state.profile.copyPendingError = null;
+  // The copy directory is now known, so the identity facts (and the sentence the
+  // handshake carries) describe the profile this session actually uses.
+  state.identity = identityFacts();
+}
+// A copy that could not be taken: the refusal belongs to this call (the base may
+// be free on the next one), so the session-level engineError keeps its previous
+// value and the copy stays owed.
+function recordCopyRefusal(before) {
+  const refusal = engineError;
+  engineError = before;
+  state.profile.copyPendingError = pendingCopy === null ? null : refusal;
+  state.profile.pendingCopy = pendingCopy;
+  return refusal;
+}
+// --- cold-surface start (2.21.0) ---------------------------------------------
+// The invariant: no configuration may leave the client with a tool list it cannot
+// act on. While a copy is deferred, tools/list is answered from the cache; on a
+// machine that has never cached this exact surface (a new install, a plugin
+// release before 2.21.0, a changed pin or group switch) there is nothing to serve,
+// and the three meta-tools start no browser — so the copy that would create the
+// cache could never be taken and the session stayed dead until a restart.
+// When that is the case the copy is taken and the backend started before the list
+// is answered. It costs one copy and one spawn per new surface; after that the
+// cache exists and every later start stays lazy again.
+function coldCopyStartNeeded() {
+  if (pendingCopy === null || state.child !== null) {
+    return false;
+  }
+  return ensureHeldToolList().source === 'none';
+}
+
+function takeColdCopyNow() {
+  if (pendingCopy === null) {
+    return false;
+  }
+  const before = engineError;
+  if (!takePendingCopyNow()) {
+    recordCopyRefusal(before);
+    log(
+      'cold start: this configuration has no cached tool list and the session copy could not be taken, so the ' +
+        'broker meta-tools answer tools/list until the copy succeeds',
+    );
+    return false;
+  }
+  adoptTakenCopy();
+  log(
+    'cold start: no cached tool list exists for this configuration, so the session copy is taken now and the ' +
+      'backend starts before the client asks for its tool list',
+  );
+  return true;
+}
+
 // The copy this session owes is taken at the first browser action. The backend is
 // spawned with the copy's directory in its environment, so the copy is on disk
 // before the spawn; a re-copy after the browser closed reuses this session's path
@@ -1311,22 +1430,17 @@ function ensureBrowserSessionCopy(rawLine) {
   }
   const before = engineError;
   if (!takePendingCopyNow()) {
-    // A per-call refusal, not a dead session: the base may be busy now and free
-    // on the next call, so the state keeps its previous refusal (null on a clean
-    // start) and the copy stays owed.
-    const refusal = engineError;
-    engineError = before;
-    state.profile.copyPendingError = refusal;
-    state.profile.pendingCopy = pendingCopy;
-    return { ok: false, error: refusal ?? 'the session copy could not be taken' };
+    const refusal = recordCopyRefusal(before);
+    return {
+      ok: false,
+      // 2.21.0: the copy was refused because no browser seat is free, which is the
+      // 2.16.0 hold — the caller answers with the hold sentence, not with a copy
+      // error.
+      held: holdState.active,
+      error: refusal ?? 'the session copy could not be taken',
+    };
   }
-  state.profile.copy = copySession;
-  state.profile.dir = copySession.sessionDir;
-  state.profile.pendingCopy = null;
-  state.profile.copyPendingError = null;
-  // The copy directory is now known, so the identity facts (and the sentence the
-  // handshake carries) describe the profile this session actually uses.
-  state.identity = identityFacts();
+  adoptTakenCopy();
   if (state.child === null) {
     if (outputDirUnresolved()) {
       // The artifact directory still needs the client's roots (bounded 2 s). The
@@ -2657,7 +2771,7 @@ const state = {
     lifetimeSource: profileLifetimeResolution.source,
     pendingCopy,
     copyContents,
-    copyContentsSource: copyContentsResolution.source,
+    copyContentsSource,
     copyContentsIgnoredNote,
     seatLimit: seatLimitResolution.mode,
     seatLimitSource: seatLimitResolution.source,
@@ -2753,6 +2867,8 @@ const state = {
   hiddenByCollision: new Set(),
   hiddenByProfile: new Set(),
 };
+// From here on the copy helpers may correct the live state (2.21.0).
+stateRef = state;
 
 function supportFor(toolName) {
   if (state.native) {
@@ -2854,29 +2970,53 @@ function backendDescription() {
 // list is authoritative again. Every write here is local to the plugin data
 // directory; nothing touches the busy profile.
 
-// Everything that shapes the backend's tool list, folded into the cache key: the
-// seven group switches, the MCP package pin and the broker version.
-function toolCacheCaps() {
+// Everything that actually determines the backend's tool list, folded into the
+// cache key (2.21.0): the engine id, the tool profile, the seven group switches,
+// the MCP package pin and the manifest fields that shape the surface
+// (`toolSupport`, `toolAliases`, `nativePrefix`, `contract`, the default profile).
+// The broker version is deliberately NOT part of it: it never shaped a backend
+// list, and keying on it made every release start with no cache at all — the
+// 2026-10-28 meta-only deadlock, where a copy-mode session had no list to act on.
+function toolGroupFacts() {
   const group = (name) => {
     const value = process.env[name];
     return typeof value === 'string' ? value.trim().toLowerCase() === 'true' : null;
   };
   return {
-    groups: {
-      vision: group('CLOAK_TOOL_GROUP_VISION'),
-      pdf: group('CLOAK_TOOL_GROUP_PDF'),
-      devtools: group('CLOAK_TOOL_GROUP_DEVTOOLS'),
-      storage: group('CLOAK_TOOL_GROUP_STORAGE'),
-      network: group('CLOAK_TOOL_GROUP_NETWORK'),
-      testing: group('CLOAK_TOOL_GROUP_TESTING'),
-      config: group('CLOAK_TOOL_GROUP_CONFIG'),
-    },
-    packagePin:
-      typeof process.env.CLOAK_PLAYWRIGHT_MCP_PACKAGE === 'string'
-        ? process.env.CLOAK_PLAYWRIGHT_MCP_PACKAGE
-        : null,
-    brokerVersion: BROKER_VERSION,
+    vision: group('CLOAK_TOOL_GROUP_VISION'),
+    pdf: group('CLOAK_TOOL_GROUP_PDF'),
+    devtools: group('CLOAK_TOOL_GROUP_DEVTOOLS'),
+    storage: group('CLOAK_TOOL_GROUP_STORAGE'),
+    network: group('CLOAK_TOOL_GROUP_NETWORK'),
+    testing: group('CLOAK_TOOL_GROUP_TESTING'),
+    config: group('CLOAK_TOOL_GROUP_CONFIG'),
   };
+}
+
+function toolCacheCaps() {
+  const groups = toolGroupFacts();
+  const packagePin =
+    typeof process.env.CLOAK_PLAYWRIGHT_MCP_PACKAGE === 'string'
+      ? process.env.CLOAK_PLAYWRIGHT_MCP_PACKAGE
+      : null;
+  const manifest = state.engine !== null && typeof state.engine === 'object' ? state.engine : {};
+  const surface = createHash('sha256')
+    .update(
+      JSON.stringify({
+        engineId: state.engineId,
+        toolProfile: state.toolProfile,
+        groups,
+        packagePin,
+        contract: manifest.contract ?? null,
+        toolSupport: manifest.toolSupport ?? null,
+        toolAliases: manifest.toolAliases ?? null,
+        nativePrefix: manifest.nativePrefix ?? null,
+        defaultToolProfile: manifest.defaultToolProfile ?? null,
+      }),
+    )
+    .digest('hex')
+    .slice(0, 16);
+  return { groups, packagePin, surface };
 }
 
 function toolCacheFile() {
@@ -2887,10 +3027,13 @@ function toolCacheFile() {
   );
 }
 
-// Write the backend's list after a successful tools/list. Only an engine that can
-// be held needs it, so every other engine writes nothing new.
+// Write the backend's list after a successful tools/list. Every engine writes it
+// (2.21.0): a cache is what a held start or a copy-mode start answers tools/list
+// from, and until 2.21.0 only a single-seat engine ever wrote one, so every other
+// engine was meta-only every time it owed a copy. A native contract engine is
+// still skipped: its surface is built from the manifest, not from the backend list.
 function saveToolCache() {
-  if (!singleSeat || state.native) {
+  if (state.native) {
     return;
   }
   const result = writeToolCache(toolCacheFile(), {
@@ -2916,15 +3059,15 @@ function ensureHeldToolList() {
   if (read.tools === null) {
     state.hold.cache = { source: 'none', path: file, savedAt: null, error: read.error };
     log(
-      `on_locked hold: no cached tool list (${read.error}); the broker meta-tools answer until the ` +
-        'profile is free and a tool call recovers the backend',
+      `no cached tool list exists for this configuration (${read.error}); the broker meta-tools answer ` +
+        'tools/list until a backend has served one',
     );
     return state.hold.cache;
   }
   state.backendTools = read.tools;
   state.toolsListed = true;
   state.hold.cache = { source: 'cache', path: file, savedAt: read.savedAt, error: null };
-  log(`on_locked hold: serving ${read.tools.length} cached backend tools from ${file}`);
+  log(`serving ${read.tools.length} cached backend tools from ${file}`);
   return state.hold.cache;
 }
 
@@ -3588,10 +3731,17 @@ function startBackendIfNeeded() {
   }
   // profile_lifetime "browser" (2.20.0): the backend is spawned with the session
   // copy's directory in its environment, so it cannot start before that copy
-  // exists. The first browser action takes the copy and starts it.
+  // exists. The first browser action takes the copy and starts it — unless no
+  // cached tool list exists for this configuration (2.21.0), in which case the
+  // copy is taken here so the client's list is one it can act on.
   if (state.profile.pendingCopy !== null && state.child === null) {
-    log('backend start deferred until the first browser action: this session runs on a session copy');
-    return;
+    if (coldCopyStartNeeded()) {
+      takeColdCopyNow();
+    }
+    if (state.profile.pendingCopy !== null) {
+      log('backend start deferred until the first browser action: this session runs on a session copy');
+      return;
+    }
   }
   if (state.child === null) {
     startBackend();
@@ -3884,6 +4034,18 @@ function seatFields() {
     ...(facts.seatVendor === null ? {} : { seatVendor: facts.seatVendor }),
     ...(state.seatDenied === null ? {} : { seatDenied: state.seatDenied }),
   };
+}
+
+// The launcher-side settings block (2.21.0): what the launcher for this engine
+// resolves from this process's environment, and which source won. Null (no key)
+// for an engine whose manifest names no launcher this module knows, so such a
+// payload stays byte-identical.
+function launcherSettingsFields() {
+  if (state.engine === null) {
+    return {};
+  }
+  const report = launcherSettingsReport(process.env, resolveLauncherName(state.engine));
+  return report === null ? {} : { launcherSettings: report };
 }
 
 // What a copy would hold (copy_contents, 2.20.0): the effective tier, where the
@@ -4184,6 +4346,12 @@ function capabilitiesPayload(clientRoots) {
     launch: resolveLauncherName(state.engine),
     requirements: manifestStringList('requirements'),
     ignoredSettings: manifestStringList('ignoredSettings'),
+    // Launcher-side settings (2.21.0), additive and only for a launcher that
+    // resolves any: each one's effective value and where it came from, plus the
+    // one-line reason when the supplied value was not usable. The resolution is
+    // the same function the launcher itself runs on the same environment, so the
+    // report can never disagree with the child the engine actually got.
+    ...launcherSettingsFields(),
     ...(systemDeps.length === 0 ? {} : { systemDependencies: systemDeps }),
     ...nativeCapabilitiesExtras(),
     // Per-account profile facts, additive. The proxy URL itself is never
@@ -5253,7 +5421,9 @@ function handleClientRequest(message, rawLine) {
         return;
       }
       if (!sessionCopy.ok) {
-        sendToolError(id, pendingCopyToolError(name));
+        // A copy refused because no browser seat is free is the 2.16.0 hold, and
+        // it answers with the hold sentence that names the owner and the retry.
+        sendToolError(id, sessionCopy.held === true ? holdToolError(name) : pendingCopyToolError(name));
         return;
       }
     }
@@ -5297,19 +5467,40 @@ function handleClientRequest(message, rawLine) {
       return;
     }
     if (method === 'tools/list') {
-      if (state.hold.active || state.profile.pendingCopy !== null) {
+      if (state.hold.active) {
         sendHeldToolList(id, message.params?.cursor);
         return;
       }
-      sendMetaOnlyList(id, message.params?.cursor);
-      return;
-    }
-    if (method === 'ping') {
+      if (state.profile.pendingCopy !== null) {
+        if (!coldCopyStartNeeded()) {
+          // A cache for this surface exists: serve it, exactly as 2.20.0 did.
+          sendHeldToolList(id, message.params?.cursor);
+          return;
+        }
+        // 2.21.0: there is no cached list for this configuration, so answering
+        // with the meta-tools would leave the client with no browser tool to act
+        // on — and no way to take the copy that would create the cache. The copy
+        // is taken and the backend started here, and the backend answers this
+        // list below.
+        const sessionCopy = ensureBrowserSessionCopy(rawLine);
+        if (sessionCopy.queued === true) {
+          return;
+        }
+        if (!sessionCopy.ok) {
+          sendHeldToolList(id, message.params?.cursor);
+          return;
+        }
+      } else {
+        sendMetaOnlyList(id, message.params?.cursor);
+        return;
+      }
+    } else if (method === 'ping') {
       sendResult(id, {});
       return;
+    } else {
+      sendError(id, -32603, `Cannot handle "${String(method)}": ${backendDescription()}.`);
+      return;
     }
-    sendError(id, -32603, `Cannot handle "${String(method)}": ${backendDescription()}.`);
-    return;
   }
 
   if (isRequest && state.native && method === 'tools/call' && typeof name === 'string') {
@@ -5767,15 +5958,29 @@ if (state.engineError !== null) {
 // is exactly the previous path.
 // A single-seat hold never starts a backend while the profile is busy: the
 // session waits, serves its cached list and retries on the next tool call.
-if (state.hold.active) {
-  log('backend start held until the profile is free; this session retries on its next tool call');
-} else if (state.profile.pendingCopy !== null) {
-  log(
-    'backend start deferred until the first browser action: profile_lifetime "browser" takes the session ' +
-      'copy (and, in a copy mode, the base lock) then',
-  );
-} else if (outputDirUnresolved() && state.engineError === null) {
-  log('backend start deferred until initialize: the artifact directory depends on the client roots');
-} else {
+// A copy-mode or on_locked=copy start is lazy only while it has a cached list to
+// serve (2.21.0): on a surface this machine has never cached, the copy is taken
+// now, because a client whose list is the three meta-tools can never take it.
+function startBackendAtStartup() {
+  if (state.hold.active) {
+    log('backend start held until the profile is free; this session retries on its next tool call');
+    return;
+  }
+  if (state.profile.pendingCopy !== null && coldCopyStartNeeded()) {
+    takeColdCopyNow();
+  }
+  if (state.profile.pendingCopy !== null) {
+    log(
+      'backend start deferred until the first browser action: profile_lifetime "browser" takes the session ' +
+        'copy (and, in a copy mode, the base lock) then',
+    );
+    return;
+  }
+  if (outputDirUnresolved() && state.engineError === null) {
+    log('backend start deferred until initialize: the artifact directory depends on the client roots');
+    return;
+  }
   startBackend();
 }
+
+startBackendAtStartup();

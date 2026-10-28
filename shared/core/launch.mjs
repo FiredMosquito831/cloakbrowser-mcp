@@ -4,6 +4,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { applyLauncherSettings } from './lib/launcher-settings.mjs';
 import { ensureNpmRuntime, resolveNpmPackage } from './lib/provision.mjs';
 
 const EMPTY_OPTIONAL_VARS = [
@@ -56,7 +57,18 @@ export function buildChildEnv(source) {
     }
   }
   applyUnrestrictedFileAccess(env);
+  // Launcher-side safe branches (2.21.0): headless, humanize, human_preset,
+  // release_channel and the optional values are resolved here, so a missing value,
+  // an empty one, an unsubstituted ${user_config.*} placeholder or an unrecognised
+  // value can neither flip a stealth setting nor crash the bridge (its
+  // human_preset/release_channel parsers throw). Each unusable value writes one
+  // stderr line; a value the engine accepts is passed through unchanged.
+  applyLauncherSettings(env, 'launch.mjs', logLine);
   return env;
+}
+
+function logLine(message) {
+  process.stderr.write(`[cloakbrowser] ${message}\n`);
 }
 
 function resolvePackage(source) {

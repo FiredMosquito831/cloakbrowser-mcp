@@ -614,7 +614,10 @@ describe('F2 — a restart never runs where it must not', () => {
   });
 
   it('never restarts while a single-seat hold is active, and keeps the hold path', async () => {
-    const { session, counter } = harness('dead-held-start-', { preseedLockPid: process.pid });
+    const { session, counter } = harness('dead-held-start-', {
+      onLocked: 'fallback',
+      preseedLockPid: process.pid,
+    });
     await initialize(session);
     const call = await session.request('tools/call', { name: 'browser_navigate', arguments: {} });
     expect(call.result?.isError).toBe(true);

@@ -111,7 +111,11 @@ export const ON_LOCKED_BLOCK = 'block';
 export const ON_LOCKED_FALLBACK = 'fallback';
 export const ON_LOCKED_ISOLATED = 'isolated';
 export const ON_LOCKED_COPY = 'copy';
-export const DEFAULT_ON_LOCKED = ON_LOCKED_FALLBACK;
+// 2.21.0: the default is "copy". A busy profile is no longer answered with a
+// numbered empty sibling: the session runs on a temporary copy of the profile it
+// resolved, so it keeps its cookies, logins and fingerprint seed and the base's
+// owner is never disturbed. "fallback" survives as an explicit opt-in.
+export const DEFAULT_ON_LOCKED = ON_LOCKED_COPY;
 // The profile settings that an isolated start reports as ignored. The names are
 // the settings a user can see and change; `value` carries what was supplied so
 // the report never claims a setting was ignored when it was empty.
@@ -383,7 +387,9 @@ export function resolveProfileIsolation(value) {
 }
 
 // Resolve the on_locked setting (2.16.0). Unset, empty, an unsubstituted
-// ${user_config.*} placeholder and an unknown value all mean "fallback"; the
+// ${user_config.*} placeholder and an unknown value all mean the documented safe
+// branch: "copy" since 2.21.0 (it was "fallback"), because a numbered sibling is
+// a different identity and the incident it caused is why this setting exists. The
 // extra fields let the broker log a value it ignored once at startup. The
 // placeholder is reported separately because it is a missing substitution, not a
 // setting the user typed.
@@ -406,12 +412,19 @@ export function resolveOnLocked(value) {
 // only the identity core the engine's manifest lists under identityCopy.keep
 // (cookies, saved logins, the key that decrypts them, the fingerprint seed and,
 // per the user's decision, installed add-ons) and drops history, IndexedDB blobs
-// and the rest of the bulk. Only an explicit value selects the tier, so an unset,
-// empty or placeholder value copies exactly what it copied before.
+// and the rest of the bulk. Since 2.21.0 the default is "identity": a copy that is
+// thrown away when the session ends does not need the bulk, and the smaller copy
+// is what makes the eager first start cheap. A copy that can BECOME a base (the
+// copy-keep session copy, swapped into the base path on a clean close) is always
+// "full", whatever this says — see COPY_CONTENTS_SOURCE_CLAMPED.
 export const COPY_CONTENTS_VALUES = Object.freeze(['full', 'identity']);
 export const COPY_CONTENTS_FULL = 'full';
 export const COPY_CONTENTS_IDENTITY = 'identity';
-export const DEFAULT_COPY_CONTENTS = COPY_CONTENTS_FULL;
+export const DEFAULT_COPY_CONTENTS = COPY_CONTENTS_IDENTITY;
+// The third source a report can carry: the requested tier exists but this session
+// may not use it. A setting may never silently destroy data, so the value is
+// replaced with "full" in code and every payload says it was clamped and why.
+export const COPY_CONTENTS_SOURCE_CLAMPED = 'clamped';
 export function resolveCopyContents(value) {
   const raw = typeof value === 'string' ? value.trim().toLowerCase() : '';
   if (raw === '') {
@@ -525,6 +538,20 @@ export function profileCopyKeepNote(baseDir, sessionDir) {
   return (
     `Profile isolation is "copy-keep": this session runs on a temporary copy of ${base} at ${session}, ` +
     'and changes are kept: the base is replaced on a clean close and the previous tree is retained beside it.'
+  );
+}
+
+// The one sentence every surface shares when a copy that can become a base is
+// clamped to the full tree (2.21.0). The setting may never silently destroy data:
+// a copy-keep session swaps its tree into the base path on a clean close, so a
+// thin identity copy would replace the base's IndexedDB, OPFS and caches with a
+// fragment. The copy is made full, and this sentence says why.
+export function copyContentsClampedNote(mode) {
+  const label = nonEmptyString(mode) ? mode : PROFILE_ISOLATION_COPY_KEEP;
+  return (
+    `copy_contents is not applied to profile_isolation "${label}": that session copy replaces the base ` +
+    'profile on a clean close, so it always keeps the full tree (copy_contents "full") and no data is ' +
+    'replaced by a partial copy.'
   );
 }
 
