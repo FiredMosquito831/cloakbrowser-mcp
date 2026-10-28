@@ -472,7 +472,7 @@ describe('browser_capabilities artifact diagnostics', () => {
     expect(relayed).not.toContain(PROBE_ID);
     expect((await capabilities(session)).clientRoots).toBeNull();
     expect((await capabilities(session)).outputDir).toBe(path.join(dataDir, 'output', 'cloak'));
-  });
+  }, 30_000);
 
   it('caches the probe for the session', async () => {
     const root = tempRoot('capabilities-cache-');

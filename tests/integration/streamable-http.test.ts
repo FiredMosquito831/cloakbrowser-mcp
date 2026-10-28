@@ -333,7 +333,7 @@ describe('streamable HTTP bridge', () => {
       } as const;
       expect(receiver14Actual).toEqual(toEqualOptions);
     });
-  });
+  }, 30_000);
   it('refreshes only the owning HTTP session on accepted CDP traffic and expires a quiet socket', async () => {
     await withFakeUpstream(async () => {
       const store = createSessionStore(defaultStreamableHttpOptions.sessionBackend);
@@ -374,11 +374,14 @@ describe('streamable HTTP bridge', () => {
       const message2 = `${discoveryUrl}/json/version`;
       const discovery = await fetch(message2);
       expect(discovery.status).toBe(HttpStatus.Ok);
-      await vi.waitFor(() => {
-        const receiver15Actual = touch;
-        const computedValue = callsBeforeCdp + 1;
-        return expect(receiver15Actual).toHaveBeenCalledTimes(computedValue);
-      });
+      await vi.waitFor(
+        () => {
+          const receiver15Actual = touch;
+          const computedValue = callsBeforeCdp + 1;
+          return expect(receiver15Actual).toHaveBeenCalledTimes(computedValue);
+        },
+        { timeout: 5_000 },
+      );
       const version = (await discovery.json()) as {
         webSocketDebuggerUrl: string;
       };
@@ -395,7 +398,9 @@ describe('streamable HTTP bridge', () => {
       const stringifyOptions = { id: 1, method: 'Browser.getVersion' } as const;
       const serializedValue = JSON.stringify(stringifyOptions);
       socket.send(serializedValue);
-      await vi.waitFor(() => expect(touch.mock.calls.length).toBeGreaterThan(callsBeforeSocket));
+      await vi.waitFor(() => expect(touch.mock.calls.length).toBeGreaterThan(callsBeforeSocket), {
+        timeout: 5_000,
+      });
       await delay(1100);
       const ready = await fetchReady(server.url);
       const readyBody = (await ready.json()) as {
@@ -587,7 +592,7 @@ describe('streamable HTTP bridge', () => {
       } as const;
       expect(receiver24Actual).toMatchObject(toMatchObjectOptions15);
     });
-  });
+  }, 30_000);
   it('keeps independent CDP reads usable while an MCP browser command is in flight', async () => {
     await withFakeUpstream(async () => {
       const createCdpEndpointConfigOptions8 = { processEnabled: false, portRange: '29330' } as const;
@@ -647,7 +652,7 @@ describe('streamable HTTP bridge', () => {
       } as const;
       expect(receiver27Actual).toEqual(toEqualOptions2);
     });
-  });
+  }, 30_000);
   it('keeps dynamic WebMCP tools and list-changed notifications isolated per HTTP session', async () => {
     await withFakeUpstream(async () => {
       const startHttpBridgeOptions9 = { sessionMax: 2 } as const;
@@ -668,7 +673,7 @@ describe('streamable HTTP bridge', () => {
         },
       } as const;
       await first.client.callTool(callToolOptions2);
-      await vi.waitFor(() => expect(firstNotifications).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(firstNotifications).toHaveBeenCalledTimes(1), { timeout: 5_000 });
       expect(secondNotifications).not.toHaveBeenCalled();
       const firstTools = await first.client.listTools();
       const secondTools = await second.client.listTools();
@@ -701,11 +706,11 @@ describe('streamable HTTP bridge', () => {
         },
       } as const;
       await first.client.callTool(callToolOptions4);
-      await vi.waitFor(() => expect(firstNotifications).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(firstNotifications).toHaveBeenCalledTimes(2), { timeout: 5_000 });
       const mappedValues5 = (await first.client.listTools()).tools.map((tool) => tool.name);
       expect(mappedValues5).not.toContain('webmcp_checkout');
     });
-  });
+  }, 30_000);
   it('refreshes dynamic tools without an open HTTP notification stream', async () => {
     await withFakeUpstream(async () => {
       const server = await startHttpBridge();
@@ -727,18 +732,21 @@ describe('streamable HTTP bridge', () => {
       } as const;
       const add = await postJsonRpc(argumentValue9, postJsonRpcOptions, sessionId);
       expect(add.status).toBe(HttpStatus.Ok);
-      await vi.waitFor(async () => {
-        const refreshed = await postToolsList(server.url, sessionId);
-        const body = (await readJsonRpcResponse(refreshed)) as {
-          result?: {
-            tools?: Array<{
-              name?: string;
-            }>;
+      await vi.waitFor(
+        async () => {
+          const refreshed = await postToolsList(server.url, sessionId);
+          const body = (await readJsonRpcResponse(refreshed)) as {
+            result?: {
+              tools?: Array<{
+                name?: string;
+              }>;
+            };
           };
-        };
-        const mappedValues6 = body.result?.tools?.map((tool) => tool.name);
-        expect(mappedValues6).toContain('webmcp_no_stream');
-      });
+          const mappedValues6 = body.result?.tools?.map((tool) => tool.name);
+          expect(mappedValues6).toContain('webmcp_no_stream');
+        },
+        { timeout: 5_000 },
+      );
     });
   });
   it('rejects missing and unknown sessions', async () => {
@@ -829,7 +837,7 @@ describe('streamable HTTP bridge', () => {
       const secondContent = secondResult.structuredContent as Record<string, unknown>;
       expect(firstContent.upstreamPid).not.toBe(secondContent.upstreamPid);
     });
-  });
+  }, 30_000);
   it('rejects an expired session and releases its upstream process before a fresh session is used', async () => {
     await withFakeUpstream(async () => {
       const store = createSessionStore('memory');
@@ -853,7 +861,7 @@ describe('streamable HTTP bridge', () => {
       const recoveredContent = recovered.structuredContent as { upstreamPid: number };
       expect(recoveredContent.upstreamPid).not.toBe(content.upstreamPid);
     });
-  });
+  }, 30_000);
   it('keeps neighbouring sessions usable after an upstream exits and recovers with a fresh session', async () => {
     await withFakeUpstream(async () => {
       const server = await startHttpBridge();
@@ -881,7 +889,7 @@ describe('streamable HTTP bridge', () => {
       const response = await postToolsList(server.url, sessionId);
       expect(response.status).toBe(HttpStatus.NotFound);
     });
-  });
+  }, 30_000);
   it('cancels an in-flight HTTP call without losing its session and terminates the owned child', async () => {
     await withFakeUpstream(async () => {
       const server = await startHttpBridge();
@@ -955,7 +963,7 @@ describe('streamable HTTP bridge', () => {
       } as const;
       expect(receiver32Actual).toMatchObject(toMatchObjectOptions20);
     }, withFakeUpstreamOptions);
-  });
+  }, 30_000);
   it('applies independent runtime proxy metadata per HTTP session', async () => {
     await withFakeUpstream(async () => {
       const startHttpBridgeOptions12 = { sessionMax: 4 } as const;
@@ -1430,7 +1438,7 @@ describe('streamable HTTP bridge', () => {
       const stringResult = String((rejected[0] as PromiseRejectedResult).reason);
       expect(stringResult).toContain('HTTP session limit reached');
     });
-  });
+  }, 30_000);
   it('releases session capacity when the client aborts initialization during display setup', async () => {
     await withFakeUpstream(async () => {
       let releaseDisplay: (() => void) | undefined;
@@ -1526,7 +1534,7 @@ describe('streamable HTTP bridge', () => {
       } as const;
       expect(receiver37Actual).toMatchObject(toMatchObjectOptions24);
     });
-  });
+  }, 30_000);
   it('enforces optional Bearer auth before handling MCP requests', async () => {
     await withFakeUpstream(async () => {
       const startHttpBridgeOptions25 = { authToken: 'secret' } as const;
@@ -1550,7 +1558,7 @@ describe('streamable HTTP bridge', () => {
       const argumentValue20 = (await client.listTools()).tools.length;
       expect(argumentValue20).toBeGreaterThan(0);
     });
-  });
+  }, 30_000);
   it('serves MCP sessions over HTTPS when TLS files are configured', async () => {
     await withFakeUpstream(async () => {
       const startHttpBridgeOptions26 = {

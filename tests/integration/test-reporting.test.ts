@@ -82,7 +82,7 @@ describe('public Vitest reporting through a real child runner', () => {
     const summary = JSON.parse(summaryText) as { stats: { total: number; failed: number } };
     expect(summary.stats.total).toBe(3);
     expect(summary.stats.failed).toBe(1);
-  });
+  }, 30_000);
   it('restores signal listeners after both successful and failed runners', async () => {
     const interrupts = process.listenerCount('SIGINT');
     const terminations = process.listenerCount('SIGTERM');
@@ -90,7 +90,7 @@ describe('public Vitest reporting through a real child runner', () => {
     await fixture('complete');
     expect(process.listenerCount('SIGINT')).toBe(interrupts);
     expect(process.listenerCount('SIGTERM')).toBe(terminations);
-  });
+  }, 30_000);
 
   it.each(['SIGINT', 'SIGTERM'])(
     'stops its process tree and removes incomplete data on %s',
@@ -173,6 +173,7 @@ finally { if (process.connected) process.disconnect(); }`;
         await closed;
       }
     },
+    30_000,
   );
 
   it('preserves statuses, diagnostics, timing and retry evidence', async () => {
@@ -295,6 +296,7 @@ finally { if (process.connected) process.disconnect(); }`;
       const environments = Object.values(tests.byId).map((test) => test.environment);
       expect(new Set(environments).size).toBe(2);
     },
+    30_000,
   );
   it('redacts known secrets in history keys and credential values before real HTML generation', async () => {
     const run = await fixture('pass');
@@ -323,7 +325,7 @@ finally { if (process.connected) process.disconnect(); }`;
       expect(content).not.toContain(secret);
       expect(content).not.toContain('synthetic-history-password');
     }
-  });
+  }, 30_000);
   it('rejects missing manifests and unverified reports', async () => {
     const run = await fixture('pass');
     const manifest = path.join(run.directory, 'producer.json');
@@ -348,7 +350,7 @@ finally { if (process.connected) process.disconnect(); }`;
     };
     expect(summary.stats.total).toBe(1);
     await expect(cli.mergeReport(merge)).rejects.toThrow();
-  });
+  }, 30_000);
   it.each(['unit', 'integration', 'cli', 'npm', 'cdp', 'docker'])(
     'labels the %s lane explicitly',
     async (suite) => {

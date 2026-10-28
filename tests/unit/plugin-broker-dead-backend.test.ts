@@ -297,7 +297,7 @@ function startBroker(dataDir: string, counter: string, log: string, options: Har
     }
   });
   let nextId = 1;
-  const request = (method: string, params?: Record<string, unknown>, timeoutMs = 15000) => {
+  const request = (method: string, params?: Record<string, unknown>, timeoutMs = 10000) => {
     const id = nextId++;
     const key = String(id);
     clientRoots.add(key);

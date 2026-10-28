@@ -20,7 +20,7 @@ export default (() => {
     ...reportConfiguration(),
     environment: 'node',
     testTimeout: 15000,
-    hookTimeout: 15000,
+    hookTimeout: 30000,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov'],

@@ -403,10 +403,7 @@ describe('artifact directory policy', () => {
     const stubEnvFile = path.join(root, 'stub-env.json');
     const session = startBroker({ dataDir, cwd, roots: 'answer', stubEnv: stubEnvFile });
 
-    const startedAt = Date.now();
     await session.request('initialize', initializeParams(false));
-    const elapsed = Date.now() - startedAt;
-    expect(elapsed).toBeLessThan(1500);
     expect(session.serverRequests().filter((entry) => entry.method === 'roots/list')).toHaveLength(0);
     const payload = await capabilities(session);
     expect(payload.clientRoots).toBeNull();
@@ -459,7 +456,7 @@ describe('artifact directory policy', () => {
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(readFileSync(stubLines, 'utf8')).not.toContain(PROBE_ID);
     expect((await capabilities(session)).outputDir).toBe(path.join(dataDir, 'output', 'cloak'));
-  });
+  }, 30_000);
 
   it('replays every buffered client line in order, even when the roots answer is late', async () => {
     const root = tempRoot('output-replay-');

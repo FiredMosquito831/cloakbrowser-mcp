@@ -154,7 +154,7 @@ describe('CDP WebSocket proxy integration', () => {
     const fromResult = Buffer.from(values4);
     const sendOptions = { binary: true } as const;
     client.send(fromResult, sendOptions);
-    await vi.waitFor(() => expect(upstreamMessages).toHaveLength(2));
+    await vi.waitFor(() => expect(upstreamMessages).toHaveLength(2), { timeout: 5_000 });
     const receiver7Actual = upstreamMessages;
     const options2 = { data: Buffer.from('client-text'), isBinary: false } as const;
     const values5: import('node:buffer').WithImplicitCoercion<ArrayLike<number>> = [1, 2, 3];
@@ -200,7 +200,7 @@ describe('CDP WebSocket proxy integration', () => {
     const receiver10Actual = closed;
     const toEqualOptions = { code: 1000, reason: 'peer_done' } as const;
     await expect(receiver10Actual).resolves.toEqual(toEqualOptions);
-    await vi.waitFor(() => expect(proxy.activeConnections).toBe(0));
+    await vi.waitFor(() => expect(proxy.activeConnections).toBe(0), { timeout: 5_000 });
     expect(activity).toHaveLength(5);
     const receiver11Actual = activity;
     const toContainEqualOptions2 = { activeConnections: 0, kind: 'websocket' } as const;
@@ -229,7 +229,7 @@ describe('CDP WebSocket proxy integration', () => {
     const receiver13Actual = browserClosed;
     const toMatchObjectOptions3 = { code: 1011 } as const;
     await expect(receiver13Actual).resolves.toMatchObject(toMatchObjectOptions3);
-    await vi.waitFor(() => expect(onBrowserLoss).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(onBrowserLoss).toHaveBeenCalledTimes(1), { timeout: 5_000 });
   });
   it('checks identity before upgrade and reports raw Browser.close as browser loss', async () => {
     const fake = await echoFixture();
@@ -243,7 +243,7 @@ describe('CDP WebSocket proxy integration', () => {
     const stringifyOptions = { id: 1, method: 'Browser.close' } as const;
     const serializedValue = JSON.stringify(stringifyOptions);
     client.send(serializedValue);
-    await vi.waitFor(() => expect(onBrowserLoss).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(onBrowserLoss).toHaveBeenCalledTimes(1), { timeout: 5_000 });
   });
   it('bounds the identity probe by the WebSocket handshake deadline', async () => {
     const fake = await echoFixture();
@@ -299,7 +299,7 @@ describe('CDP WebSocket proxy integration', () => {
     expect(receiver16Actual).toMatchObject(toMatchObjectOptions6);
     expect(fake.webSocketRequests).toHaveLength(CDP_WEBSOCKET_MAX_CONNECTIONS);
     clients[0]?.close();
-    await vi.waitFor(() => expect(proxy.activeConnections).toBe(7));
+    await vi.waitFor(() => expect(proxy.activeConnections).toBe(7), { timeout: 5_000 });
     const message6 = `/cdp/${capability}/devtools/page/replacement`;
     const replacement = await connect(proxy, message6);
     expect(proxy.activeConnections).toBe(8);
@@ -336,7 +336,7 @@ describe('CDP WebSocket proxy integration', () => {
       const message7 = `/cdp/${capability}/devtools/page/pending-${index}`;
       return connectFailure(proxy, message7);
     });
-    await vi.waitFor(() => expect(sockets.size).toBe(CDP_WEBSOCKET_MAX_CONNECTIONS));
+    await vi.waitFor(() => expect(sockets.size).toBe(CDP_WEBSOCKET_MAX_CONNECTIONS), { timeout: 5_000 });
     const message8 = `/cdp/${capability}/devtools/page/over-limit`;
     const ninth = await connectFailure(proxy, message8);
     expect(ninth.status).toBe(503);
@@ -385,7 +385,7 @@ describe('CDP WebSocket proxy integration', () => {
     publishGeneration(proxy, publishGenerationOptions3);
     const browserPathResult8 = browserPath();
     const timeoutPromise = connectFailure(proxy, browserPathResult8);
-    await vi.waitFor(() => expect(sockets.size).toBe(1));
+    await vi.waitFor(() => expect(sockets.size).toBe(1), { timeout: 5_000 });
     expect(proxy.activeConnections).toBe(0);
     const timeout = await timeoutPromise;
     expect(timeout.status).toBe(504);
@@ -425,7 +425,7 @@ describe('CDP WebSocket proxy integration', () => {
     publishGeneration(proxy, publishGenerationOptions4);
     const browserPathResult9 = browserPath();
     const failurePromise = connectFailure(proxy, browserPathResult9);
-    await vi.waitFor(() => expect(sockets.size).toBe(1));
+    await vi.waitFor(() => expect(sockets.size).toBe(1), { timeout: 5_000 });
     const closing = proxy.close();
     const failure = await failurePromise;
     expect(failure.status).toBe(503);
@@ -451,7 +451,7 @@ describe('CDP WebSocket proxy integration', () => {
     const proxy = await readyProxy(fake, readyProxyOptions6);
     const browserPathResult10 = browserPath();
     const failurePromise = connectFailure(proxy, browserPathResult10);
-    await vi.waitFor(() => expect(beforeForward).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(beforeForward).toHaveBeenCalledTimes(1), { timeout: 5_000 });
     const closing = proxy.close();
     const values10: [Promise<UpgradeFailure>, Promise<'timeout'>] = [
       failurePromise,

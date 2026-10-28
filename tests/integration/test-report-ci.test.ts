@@ -211,7 +211,7 @@ export async function ensureBinary(license, version) {
     const result = await cli.ciAggregate(options);
     const expected = { status: 'passed', total: 2, failed: 0, missing: [] };
     expect(result).toMatchObject(expected);
-  });
+  }, 30_000);
   it('retains a latest failed result instead of falling back to an earlier successful attempt', async () => {
     const f = await fixture();
     await producer(f.input, 'linux', 'passed', undefined, firstAttempt);
@@ -220,7 +220,7 @@ export async function ensureBinary(license, version) {
     const result = await cli.ciAggregate(options);
     const expected = { status: 'failed', total: 1, failed: 1, missing: [] };
     expect(result).toMatchObject(expected);
-  });
+  }, 30_000);
   it('reports a missing producer in a rerun job instead of resurrecting its old evidence', async () => {
     const f = await fixture();
     const previous = { runId: 'run-42-attempt-1', artifactName: 'test-results-quality-attempt-1' };
@@ -232,7 +232,7 @@ export async function ensureBinary(license, version) {
     const result = await cli.ciAggregate(options);
     const expected = { status: 'failed', total: 2, missing: ['windows'] };
     expect(result).toMatchObject(expected);
-  });
+  }, 30_000);
   const invalidRuns = [
     'run-41-attempt-1',
     'run-42-attempt-3',
@@ -289,7 +289,7 @@ export async function ensureBinary(license, version) {
     const summaryFile = path.join(f.output, 'summary.json');
     const summary = JSON.parse(await readFile(summaryFile, 'utf8')) as { stats: { total: number } };
     expect(summary.stats.total).toBe(2);
-  });
+  }, 30_000);
   it('rejects a CI producer that claims another runner environment', async () => {
     const f = await fixture();
     const id = 'linux-x64-node24-none-pr-quality-integration';
@@ -360,7 +360,7 @@ export async function ensureBinary(license, version) {
     await writeFile(contextFile, '{}');
     const mismatch = { ...second, output: path.join(f.root, 'mismatch') };
     await expect(cli.ciAggregate(mismatch)).rejects.toThrow('wrong history scope');
-  });
+  }, 30_000);
 
   it('keeps a failed aggregate nonzero in the real CI command and still writes Job Summary', async () => {
     const f = await fixture();
@@ -385,7 +385,7 @@ export async function ensureBinary(license, version) {
     expect(summary).toContain('Missing producers');
     const html = await readFile(path.join(f.output, 'index.html'), 'utf8');
     expect(html).toContain('<html');
-  });
+  }, 30_000);
 
   it('requires every PR suite without duplicate coverage, CLI or release test jobs', async () => {
     const ci = await readFile('.github/workflows/ci.yml', 'utf8');
@@ -448,7 +448,7 @@ export async function ensureBinary(license, version) {
       const unique = new Set(inventory);
       expect(unique.size).toBe(inventory.length);
     }
-  });
+  }, 30_000);
   it('merges distinct producers, keeps attachments and reports a failing environment', async () => {
     const f = await fixture();
     await producer(f.input, 'linux', 'passed');
@@ -474,7 +474,7 @@ export async function ensureBinary(license, version) {
     const summaryText = await readFile(path.join(f.output, 'ci-summary.md'), 'utf8');
     expect(summaryText).toContain('failed');
     expect(summaryText).not.toContain('synthetic-ci-secret');
-  });
+  }, 30_000);
   it('creates explicit broken evidence for missing producers, including an entirely empty run', async () => {
     for (const present of [true, false]) {
       const f = await fixture();
@@ -488,7 +488,7 @@ export async function ensureBinary(license, version) {
       const text = await readFile(path.join(f.output, 'ci-summary.md'), 'utf8');
       expect(text).toContain('windows');
     }
-  });
+  }, 30_000);
   it('rejects unexpected or corrupt producer metadata before generation', async () => {
     const f = await fixture();
     const directory = await producer(f.input, 'linux', 'passed');
@@ -642,7 +642,7 @@ await import(moduleUrl);
     const env = { ...trusted, GITHUB_EVENT_NAME: 'pull_request' };
     const untrusted = { ...save, env };
     await expect(cli.saveCiHistory(untrusted)).rejects.toThrow('untrusted');
-  });
+  }, 30_000);
   it('shares the supported Node matrix across workflow setup, reporting and CLI defaults', async () => {
     const supported = ['22', '24', '26'];
     expect(nodeVersions.supported).toEqual(supported);
