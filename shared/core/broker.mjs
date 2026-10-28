@@ -26,6 +26,7 @@ import {
   manifestExtensionPaths,
   manifestIdentityCopy,
   manifestProfileApplies,
+  manifestProvisioningRecord,
   manifestSingleSeat,
   manifestSupport,
   portableToolNames,
@@ -52,6 +53,7 @@ import {
 import { isRealDirectory, overlayPolicyPath, overlayRoot } from './lib/camoufox-overlay.mjs';
 import { launcherSettingsReport } from './lib/launcher-settings.mjs';
 import { PING_TIMEOUT_ENGINE_ID, pingTimeoutProblemNote, resolvePingTimeout } from './lib/ping-timeout.mjs';
+import { readProvisioningRecord } from './lib/provision.mjs';
 import { readToolCache, toolCacheKey, toolCachePath, writeToolCache } from './lib/tool-cache.mjs';
 import {
   accountNameError,
@@ -2524,6 +2526,58 @@ function searchEnginesReport() {
   return facts === null ? {} : facts;
 }
 
+// --- provisioning state (2.22.0) -------------------------------------------
+// The Python engines' launchers provision a runtime generation on every start and
+// write what happened to <plugin data>/config/provisioning/<name>.json. The broker
+// never provisions anything itself: it reports that record, so a refusal ("a live
+// session owns the runtime this start needed, nothing was changed") is visible in
+// browser_capabilities and browser_engine_status instead of only as a truncated
+// stderr line. An engine whose manifest declares no `provisioning.record` gains no
+// key, so every non-Python payload stays byte-identical.
+const PROVISIONING_STATES = new Set(['reused', 'built', 'refused-held', 'failed']);
+const PROVISIONING_HOLDER_SOURCES = new Set(['lease', 'unknown']);
+
+function provisioningHolder(holder) {
+  if (holder === null || typeof holder !== 'object') {
+    return null;
+  }
+  const file = typeof holder.path === 'string' && holder.path.trim() !== '' ? holder.path : null;
+  const pid = Number.isInteger(holder.pid) && holder.pid > 0 ? holder.pid : null;
+  const source = PROVISIONING_HOLDER_SOURCES.has(holder.source) ? holder.source : 'unknown';
+  return file === null && pid === null ? null : { path: file, pid, source };
+}
+
+function provisioningFacts() {
+  const recordName = manifestProvisioningRecord(state.engine);
+  if (recordName === null) {
+    return null;
+  }
+  const record = readProvisioningRecord(PLUGIN_DATA_DIR, recordName);
+  if (record === null || !PROVISIONING_STATES.has(record.state)) {
+    return null;
+  }
+  const kept = Array.isArray(record.keptGenerations)
+    ? record.keptGenerations.filter((entry) => typeof entry === 'string' && entry.trim() !== '').sort()
+    : [];
+  const text = (value) => (typeof value === 'string' && value.trim() !== '' ? value : null);
+  return {
+    venv: typeof record.venv === 'string' && isPathInsideRoot(record.venv, PLUGIN_DATA_DIR) ? record.venv : null,
+    generation: typeof record.generation === 'string' ? record.generation : null,
+    state: record.state,
+    holderProbe: record.holderProbe === 'cannot-tell' ? 'cannot-tell' : 'windows',
+    holder: provisioningHolder(record.holder),
+    keptGenerations: kept,
+    reason: text(record.reason),
+    remedy: text(record.remedy),
+    ...(text(record.fallback) === null ? {} : { fallbackPath: text(record.fallback) }),
+  };
+}
+
+function provisioningReport() {
+  const facts = provisioningFacts();
+  return facts === null ? {} : { provisioning: facts };
+}
+
 // Artifact directory policy (2.10.1). Upstream's file-access allowlist is
 // [output directory, workspace root], and through the Cloak bridge the client's
 // roots never reach the backend, so both values fall back to the MCP server's
@@ -4452,6 +4506,12 @@ function capabilitiesPayload(clientRoots) {
     // seeded default, the overlay policy path, and one honest note (blocked
     // overlay or the one-time profile migration). Other engines add no key.
     ...searchEnginesReport(),
+    // Provisioning state (2.22.0), additive and for the Python engines only: what
+    // the last start did with the runtime generation (reused, built, refused
+    // because a live session owned it, or failed), the probe's answer, the
+    // generations kept on disk and the remedy. Read from the launcher's record;
+    // an engine that provisions nothing gains no key.
+    ...provisioningReport(),
     // Unpacked extensions (2.18.0), additive and only when extension_paths names
     // something: whether the engine can load them, the count and source, the
     // canonical directories this start will load, and a note when a configured
@@ -4624,6 +4684,10 @@ function statusPayload() {
     // Search engines (2.17.0), the same additive camoufox-only group
     // browser_capabilities reports.
     ...searchEnginesReport(),
+    // Provisioning state (2.22.0), the same additive group browser_capabilities
+    // reports, so a status read alone shows whether the runtime was reused, built
+    // or refused because another session owned it.
+    ...provisioningReport(),
     // Unpacked extensions (2.18.0), the same additive group browser_capabilities
     // reports, so a status read alone shows whether this start loads them.
     ...extensionReport(),
