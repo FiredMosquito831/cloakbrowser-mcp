@@ -675,6 +675,7 @@ describe('CDP HTTP proxy integration', () => {
     const errorCodeResult25 = errorCode(response);
     expect(errorCodeResult25).toBe('gateway_timeout');
     const computedValue4 = Date.now() - startedAt;
+    // budget: the proxy's upstream deadline is 25 ms; 500 ms proves the 504 came from it, not from a socket error
     expect(computedValue4).toBeLessThan(500);
     expect(fake.requests).toHaveLength(0);
   });

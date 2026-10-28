@@ -692,6 +692,7 @@ async function waitForHolder(file: string): Promise<void> {
     try {
       const handle = openSync(file, 'r+');
       closeSync(handle);
+      // budget: 25 ms poll interval under the 15 s waitForHolder deadline above
       await new Promise((resolve) => setTimeout(resolve, 25));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EBUSY') {

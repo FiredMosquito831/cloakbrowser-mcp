@@ -303,6 +303,7 @@ describe('broker status after a rejected initialize that still answers', () => {
       arguments: {},
     });
     expect(call.result?.isError).toBe(false);
+    // budget: 150 ms of real time after the tool call; a waitMs that restarted would have moved by the next read
     await new Promise((resolve) => setTimeout(resolve, 150));
     const afterCall = await callStatus(session);
     expect(afterCall.backendState).toBe('running');
@@ -383,6 +384,7 @@ describe('normal backend status stays byte-identical', () => {
       arguments: { url: 'data:text/html,ok' },
     });
     expect(call.result?.isError).toBe(false);
+    // budget: 150 ms of real time after the tool call; a restarted waitMs would have advanced by here
     await new Promise((resolve) => setTimeout(resolve, 150));
     const after = await callStatus(session);
     expect(after.backendState).toBe('running');
@@ -496,10 +498,13 @@ describe('a backend that never answers keeps the growth behaviour', () => {
     const first = await callStatus(session);
     expect(first.backendState).toBe('starting');
     expect(typeof first.waitMs).toBe('number');
+    // budget: waitMs is elapsed ms since the broker started, so the only contract is a non-negative number
     expect(Number(first.waitMs)).toBeGreaterThanOrEqual(0);
+    // budget: 150 ms of real time between the two status reads; the monotonicity claim needs the clock to move
     await new Promise((resolve) => setTimeout(resolve, 150));
     const second = await callStatus(session);
     expect(typeof second.waitMs).toBe('number');
+    // budget: relies on the 150 ms sleep above for separation; both sides are the product's own elapsed value
     expect(Number(second.waitMs)).toBeGreaterThan(Number(first.waitMs));
     expect(Object.hasOwn(second, 'initializeRejected')).toBe(false);
   });

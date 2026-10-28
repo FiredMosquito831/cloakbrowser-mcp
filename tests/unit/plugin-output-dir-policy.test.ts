@@ -264,6 +264,7 @@ async function waitForFile(file: string, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (existsSync(file)) return true;
+    // budget: 25 ms poll interval under the caller's waitForFile deadline (5 s at the call site)
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   return existsSync(file);
@@ -273,6 +274,7 @@ async function waitForText(file: string, needle: string, timeoutMs: number): Pro
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (existsSync(file) && readFileSync(file, 'utf8').includes(needle)) return true;
+    // budget: 25 ms poll interval under the caller's waitForText deadline
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   return existsSync(file) && readFileSync(file, 'utf8').includes(needle);
@@ -440,7 +442,9 @@ describe('artifact directory policy', () => {
     const initialized = await session.request('initialize', initializeParams(true));
     const elapsed = Date.now() - startedAt;
     expect(initialized.error).toBeUndefined();
+    // budget: the broker's silent-client bound is 2 s, so 1.9 s is the least that proves it waited for the probe
     expect(elapsed).toBeGreaterThanOrEqual(1900);
+    // budget: upper half of the same band; 8 s is the loosest bound the 15 s test timeout allows
     expect(elapsed).toBeLessThan(8000);
     expect(session.serverRequests().filter((entry) => entry.method === 'roots/list')).toHaveLength(1);
 
@@ -453,6 +457,7 @@ describe('artifact directory policy', () => {
 
     // A late answer is neither cached nor relayed to the engine.
     session.sendRaw({ jsonrpc: '2.0', id: PROBE_ID, result: { roots: [{ uri: pathToFileURL(cwd).href }] } });
+    // budget: 300 ms gives the broker time to receive and drop the late probe answer; the product's bound is 2 s
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(readFileSync(stubLines, 'utf8')).not.toContain(PROBE_ID);
     expect((await capabilities(session)).outputDir).toBe(path.join(dataDir, 'output', 'cloak'));

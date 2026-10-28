@@ -451,6 +451,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<bool
     if (predicate()) {
       return true;
     }
+    // budget: 25 ms poll interval under the caller's 5 s waitFor deadline
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   return predicate();

@@ -136,6 +136,7 @@ finally { if (process.connected) process.disconnect(); }`;
             const content = await readFile(pidFile, 'utf8');
             children = JSON.parse(content) as typeof children;
           } catch {
+            // budget: 25 ms poll interval for the child's pid file under the 5 s deadline above
             await new Promise((resolve) => setTimeout(resolve, 25));
           }
         }

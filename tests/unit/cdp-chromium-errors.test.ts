@@ -137,6 +137,7 @@ describe('Chromium CDP discovery failures', () => {
     const result = client.discover(controller.signal);
     await expect(result).rejects.toBe(reason);
     expect(fake.requests).toHaveLength(2);
+    // budget: longer than the client's 25 ms retry delay, so a retry that survived cancellation lands before this
     await new Promise<void>((resolve) => setTimeout(resolve, 50));
     expect(fake.requests).toHaveLength(2);
   });

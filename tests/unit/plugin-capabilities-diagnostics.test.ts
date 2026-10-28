@@ -403,6 +403,7 @@ describe('browser_capabilities artifact diagnostics', () => {
     expect(payload.clientRootsError).toBe('the client did not advertise the roots capability');
     expect(payload.outputDir).toBe(path.join(dataDir, 'output', 'cloak'));
     expect(session.serverRequests().filter((request) => request.method === 'roots/list')).toHaveLength(0);
+    // budget: no roots probe is sent, so this is one meta-tool round trip; 1 s is far above an in-process answer
     expect(elapsed).toBeLessThan(1000);
   });
 
@@ -435,7 +436,9 @@ describe('browser_capabilities artifact diagnostics', () => {
     const initialized = await initialize(session, true);
     const initializeMs = Date.now() - initializeStartedAt;
     expect(initialized.error).toBeUndefined();
+    // budget: the broker's silent-client bound is 2 s, so 1.9 s is the least that proves it waited for the probe
     expect(initializeMs).toBeGreaterThanOrEqual(1900);
+    // budget: upper half of the same band; 8 s is the loosest bound the 15 s test timeout allows
     expect(initializeMs).toBeLessThan(8000);
     expect(session.serverRequests().filter((request) => request.method === 'roots/list')).toHaveLength(1);
 
@@ -450,7 +453,9 @@ describe('browser_capabilities artifact diagnostics', () => {
     expect(payload.clientRoots).toBeNull();
     expect(payload.clientRootsError).toBe('no answer within 2000 ms');
     expect(payload.outputDir).toBe(path.join(dataDir, 'output', 'cloak'));
+    // budget: the probe is cached by now, so this is one round trip; 1 s is only reached by a second 2 s wait
     expect(elapsed).toBeLessThan(1000);
+    // budget: tools/list after the bound is one round trip; 8 s only guards against a re-probe
     expect(listMs).toBeLessThan(8000);
 
     // After the bound, the session is still healthy: tools/list and a tool call
@@ -459,6 +464,7 @@ describe('browser_capabilities artifact diagnostics', () => {
     // lines the client itself sent can be in the stub log).
     const laterListStartedAt = Date.now();
     await session.request('tools/list', {});
+    // budget: a later tools/list must not re-send the probe; 8 s only proves no second 2 s wait happened
     expect(Date.now() - laterListStartedAt).toBeLessThan(8000);
     const call = await session.request('tools/call', {
       name: 'browser_snapshot',
@@ -467,6 +473,7 @@ describe('browser_capabilities artifact diagnostics', () => {
     expect(call.result?.isError).toBe(false);
 
     session.sendRaw({ jsonrpc: '2.0', id: PROBE_ID, result: { roots: ROOTS } });
+    // budget: 300 ms gives the broker time to receive and drop the late probe answer; the product's bound is 2 s
     await new Promise((resolve) => setTimeout(resolve, 300));
     const relayed = readFileSync(stubLines, 'utf8');
     expect(relayed).not.toContain(PROBE_ID);
@@ -487,6 +494,7 @@ describe('browser_capabilities artifact diagnostics', () => {
     const startedAt = Date.now();
     expect((await capabilities(session)).clientRoots).toEqual(ROOTS);
     expect((await capabilities(session)).outputDir).toBe(path.join(firstRoot, '.playwright-mcp'));
+    // budget: two cached meta-tool calls are two round trips; 1.5 s is far above an in-process answer
     expect(Date.now() - startedAt).toBeLessThan(1500);
     expect(session.serverRequests().filter((request) => request.method === 'roots/list')).toHaveLength(1);
   });

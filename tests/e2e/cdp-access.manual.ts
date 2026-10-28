@@ -1134,6 +1134,7 @@ async function waitForChildLine(
         const message14 = `HTTP bridge exited with ${String(child.exitCode)}`;
         return new Error(message14);
       })();
+    // budget: 25 ms poll interval inside the caller's timeoutMs deadline; a live child is checked before each sleep
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   const message15 = `Timed out waiting for child output matching ${String(pattern)}`;

@@ -593,6 +593,7 @@ describe('npm package distribution E2E', () => {
       const immediateSnapshot = await call('browser_snapshot');
       expect(immediateSnapshot).toContain(fixture.url);
       expect(immediateSnapshot).toContain('Release marker');
+      // budget: 500 ms of settle time before the second snapshot; nothing changes state, so more proves nothing more
       await setTimeout(500);
       const delayedSnapshot = await call('browser_snapshot');
       expect(delayedSnapshot).toContain(fixture.url);
@@ -1036,6 +1037,7 @@ describe('npm package distribution E2E', () => {
       await client.connect(transport);
       const callOptions28 = { url: fixture.url } as const;
       await call('browser_navigate', callOptions28);
+      // budget: 500 ms for the navigation to settle before the run_code snapshot reads the release marker
       await setTimeout(500);
       const callOptions29 = {} as const;
       const callResult14 = await call('browser_snapshot', callOptions29);

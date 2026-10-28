@@ -167,6 +167,7 @@ describe('managed CDP generation coordinator', () => {
     const startManagedCdpSessionResult3 = startManagedCdpSession(harness.dependencies);
     await expect(startManagedCdpSessionResult3).rejects.toThrow('timed out');
     const computedValue = Date.now() - startedAt;
+    // budget: the harness's initial timeout is 20 ms; 500 ms proves the absolute deadline fired, not a slow start
     expect(computedValue).toBeLessThan(500);
     expect(harness.events).toContain('proxy-close');
     expect(harness.events).toContain('upstream-dispose');
@@ -566,6 +567,7 @@ describe('managed CDP generation coordinator', () => {
     const startedAt = Date.now();
     await session.dispose();
     const computedValue2 = Date.now() - startedAt;
+    // budget: dispose() is in-process and must not wait on the hung bootstrap; 1 s only absorbs a scheduling pause
     expect(computedValue2).toBeLessThan(1000);
     await expect(browserCall).rejects.toThrow('Managed CDP browser replacement failed');
     expect(harness.events).not.toContain('publish:capability-2');
@@ -646,6 +648,7 @@ describe('managed CDP generation coordinator', () => {
     const startManagedCdpSessionResult8 = startManagedCdpSession(harness.dependencies);
     await expect(startManagedCdpSessionResult8).rejects.toThrow('timed out');
     const computedValue3 = Date.now() - startedAt;
+    // budget: the harness's admission deadline is 10 ms; 500 ms proves that deadline fired, not the socket teardown
     expect(computedValue3).toBeLessThan(500);
     await vi.waitFor(
       () => {
