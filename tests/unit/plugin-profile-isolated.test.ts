@@ -339,7 +339,7 @@ describe('isolated as a profile_isolation value', () => {
       ) as { userConfig: { profile_isolation: { options: string[]; description: string } } };
       const setting = manifest.userConfig.profile_isolation;
       expect(setting.options).toEqual(['shared', 'workspace', 'isolated', 'copy', 'copy-keep']);
-      expect(setting.description).toContain('isolated uses no browser profile at all');
+      expect(setting.description).toContain('no browser profile at all');
       expect(setting.description).toContain('nothing persists');
       expect(setting.description.toLowerCase()).not.toContain('in memory');
     }

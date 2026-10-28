@@ -1,7 +1,7 @@
 {
   "name": "cloakbrowser",
   "displayName": "CloakBrowser",
-  "version": "2.21.1",
+  "version": "2.21.2",
   "description": "CloakBrowser stealth Chromium through the Playwright MCP tool contract, via cloakbrowser-mcp. Its camoufox engine runs through a plugin-owned overlay that restores the stock search engines (Google by default).",
   "author": {
     "name": "FiredMosquito831"
@@ -13,228 +13,228 @@
     "headless": {
       "type": "boolean",
       "title": "Headless",
-      "description": "Run the browser without a window. Headed mode is measurably less detectable, so leave this off unless you need a server with no display. The launchers write the effective value explicitly: a missing or unsubstituted value means headed (false), never the engine's own headless default, and browser_capabilities reports the branch it took under launcherSettings.",
+      "description": "Run the browser without a window.\n\nDefault: false\n\nNotes:\n  - Headed mode is measurably less detectable, so leave this off unless you need a\n    server with no display.\n  - The launchers write the effective value explicitly: a missing or unsubstituted\n    value means headed (false), never the engine's own headless default, and\n    browser_capabilities reports the branch it took under launcherSettings.",
       "default": false
     },
     "browser_engine": {
       "type": "string",
       "title": "Browser engine",
-      "description": "cloak uses the patched CloakBrowser Chromium. playwright uses the stock Playwright Chromium and gives up the stealth patches. camoufox uses the Camoufox stealth Firefox and needs Python 3.12+ with uv installed. camoufox-native uses the user-installed mcp-camoufox package (its own 27-tool contract, portable by default; install it yourself, the plugin does not bundle it). kameleo attaches to a running Kameleo Chroma profile over CDP and needs the Kameleo app with an active licence and a profile ID; Junglefox profiles cannot be attached, and stealth over attach is unverified. The engine is read when the MCP server starts; changing it restarts the server and reloads the tool list.",
+      "description": "Which browser engine the plugin starts.\n\nOptions:\n  - cloak — the patched CloakBrowser Chromium, with the stealth patches.\n  - playwright — the stock Playwright Chromium; gives up the stealth patches.\n  - camoufox — the Camoufox stealth Firefox; needs Python 3.12+ with uv installed.\n  - camoufox-native — the user-installed mcp-camoufox package, with its own 27-tool\n    contract and portable by default; install it yourself, the plugin does not bundle\n    it.\n  - kameleo — attaches to a running Kameleo Chroma profile over CDP; needs the Kameleo\n    app with an active licence and a profile ID.\n\nDefault: cloak\n\nNotes:\n  - Junglefox profiles cannot be attached, and stealth over attach is unverified.\n  - The engine is read when the MCP server starts; changing it restarts the server and\n    reloads the tool list.\n\nRestart Claude Code after changing it.",
       "options": ["camoufox-native", "camoufox", "cloak", "kameleo", "playwright"],
       "default": "cloak"
     },
     "tool_profile": {
       "type": "string",
       "title": "Tool profile",
-      "description": "Which tools the selected engine exposes. default follows the engine manifest: full for cloak and playwright (the current 77-tool surface); portable for camoufox, camoufox-native and kameleo (a shared 24-tool core). portable hides engine-specific and extra tools; full exposes everything the engine supports. The seven tool groups and disabled_tools still apply. Restart Claude Code after changing it.",
+      "description": "Which tools the selected engine exposes.\n\nOptions:\n  - default — follows the engine manifest: full for cloak and playwright (the\n    current 77-tool surface); portable for camoufox, camoufox-native and kameleo (a\n    shared 24-tool core).\n  - portable — the shared 24-tool core; hides engine-specific and extra tools.\n  - full — everything the engine supports.\n\nDefault: default\n\nNotes:\n  - The seven tool groups and disabled_tools still apply.\n\nRestart Claude Code after changing it.",
       "options": ["default", "portable", "full"],
       "default": "default"
     },
     "camoufox_profile": {
       "type": "string",
       "title": "Camoufox native profile",
-      "description": "Profile name for the camoufox-native engine. One name per account. Letters, digits, '.', '_' and '-' only, starting with a letter or digit, up to 64 characters. Cookies and logins are kept under this name; a second Claude Code session using the same name is refused by the engine.",
+      "description": "Profile name for the camoufox-native engine; one name per account.\nCookies and logins are kept under this name.\n\nDefault: default\n\nNotes:\n  - Letters, digits, '.', '_' and '-' only, starting with a letter or\n    digit, up to 64 characters.\n  - A second Claude Code session using the same name is refused by the\n    engine.",
       "default": "default"
     },
     "camoufox_data_dir": {
       "type": "string",
       "title": "Camoufox native data directory",
-      "description": "Where the camoufox-native engine keeps its profiles and logs. Leave empty for Claude Code's plugin data directory (profiles/camoufox-native). Each profile is a 'profiles/<name>' folder inside it. Use one directory per set of accounts.",
+      "description": "Where the camoufox-native engine keeps its profiles and logs.\n\nDefault: empty\n\nNotes:\n  - Leave empty for Claude Code's plugin data directory\n    (profiles/camoufox-native).\n  - Each profile is a 'profiles/<name>' folder inside it.\n  - Use one directory per set of accounts.",
       "default": ""
     },
     "kameleo_profile_id": {
       "type": "string",
       "title": "Kameleo profile ID",
-      "description": "Profile ID to attach to. Required when the browser engine is kameleo. Open Kameleo, create or start the profile, and copy its ID from the profile row. The plugin never starts the Kameleo app; it connects to Kameleo's local API, which starts the profile. Chromium (Chroma) profiles only: a Junglefox profile cannot be attached over CDP.",
+      "description": "Profile ID to attach to. Required when the browser engine is kameleo.\n\nDefault: empty\n\nNotes:\n  - Open Kameleo, create or start the profile, and copy its ID from the\n    profile row.\n  - The plugin never starts the Kameleo app; it connects to Kameleo's\n    local API, which starts the profile.\n  - Chromium (Chroma) profiles only: a Junglefox profile cannot be\n    attached over CDP.",
       "default": ""
     },
     "kameleo_endpoint": {
       "type": "string",
       "title": "Kameleo CDP endpoint (optional)",
-      "description": "Full WebSocket CDP endpoint for the Kameleo profile. Leave empty to use ws://127.0.0.1:5050/playwright/<profile ID>. Only ws:// or wss:// on a loopback host is accepted; a non-loopback endpoint is rejected.",
+      "description": "Full WebSocket CDP endpoint for the Kameleo profile.\n\nDefault: empty\n\nNotes:\n  - Leave empty to use ws://127.0.0.1:5050/playwright/<profile ID>.\n  - Only ws:// or wss:// on a loopback host is accepted; a non-loopback\n    endpoint is rejected.",
       "default": ""
     },
     "tools_vision": {
       "type": "boolean",
       "title": "Mouse primitives (vision)",
-      "description": "Six coordinate mouse tools: click, move, drag, down, up and wheel. Off removes them.",
+      "description": "Six coordinate mouse tools: click, move, drag, down, up and wheel.\n\nDefault: true\n\nNotes:\n  - Off removes all six of them.",
       "default": true
     },
     "tools_pdf": {
       "type": "boolean",
       "title": "PDF export",
-      "description": "browser_pdf_save. Off removes PDF export.",
+      "description": "PDF export through browser_pdf_save.\n\nDefault: true\n\nNotes:\n  - Off removes PDF export.",
       "default": true
     },
     "tools_devtools": {
       "type": "boolean",
       "title": "Tracing, video and highlights",
-      "description": "Thirteen devtools tools: tracing, video, recording, annotations and element highlights. Off removes them.",
+      "description": "Thirteen devtools tools: tracing, video, recording, annotations and element\nhighlights.\n\nDefault: true\n\nNotes:\n  - Off removes all thirteen of them.",
       "default": true
     },
     "tools_storage": {
       "type": "boolean",
       "title": "Cookies and web storage",
-      "description": "Seventeen storage tools: cookies, localStorage, sessionStorage and storage state. Off removes them.",
+      "description": "Seventeen storage tools: cookies, localStorage, sessionStorage and storage\nstate.\n\nDefault: true\n\nNotes:\n  - Off removes all seventeen of them.",
       "default": true
     },
     "tools_network": {
       "type": "boolean",
       "title": "Network routing",
-      "description": "Four network tools: route, unroute, route list and network state. Off removes request interception.",
+      "description": "Four network tools: route, unroute, route list and network state.\n\nDefault: true\n\nNotes:\n  - Off removes request interception.",
       "default": true
     },
     "tools_testing": {
       "type": "boolean",
       "title": "Assertions and locator generation",
-      "description": "Five testing tools: generate_locator and the four verify_* assertions. Off removes them.",
+      "description": "Five testing tools: generate_locator and the four verify_* assertions.\n\nDefault: true\n\nNotes:\n  - Off removes all five of them.",
       "default": true
     },
     "tools_config": {
       "type": "boolean",
       "title": "Configuration read",
-      "description": "browser_get_config. Off removes the configuration introspection tool.",
+      "description": "Configuration introspection through browser_get_config.\n\nDefault: true\n\nNotes:\n  - Off removes that tool.",
       "default": true
     },
     "disabled_tools": {
       "type": "string",
       "title": "Disabled tools",
-      "description": "Comma-separated tool names to hide from the agent and reject when called, for example browser_pdf_save,browser_start_video. Leave empty to expose the selected profile unchanged.",
+      "description": "Comma-separated tool names to hide from the agent and reject when called.\n\nDefault: empty\n\nNotes:\n  - For example browser_pdf_save,browser_start_video.\n  - Leave empty to expose the selected profile unchanged.",
       "default": ""
     },
     "humanize": {
       "type": "boolean",
       "title": "Humanised input",
-      "description": "Human-like mouse paths, keystroke timing and scrolling instead of instant synthetic events.",
+      "description": "Human-like mouse paths, keystroke timing and scrolling instead of\ninstant synthetic events.\n\nDefault: true",
       "default": true
     },
     "human_preset": {
       "type": "string",
       "title": "Humanised input preset",
-      "description": "default is the normal humanised behaviour. careful is slower and more deliberate.",
+      "description": "How deliberate the humanised input is.\n\nOptions:\n  - default — the normal humanised behaviour.\n  - careful — slower and more deliberate.\n\nDefault: default",
       "options": ["default", "careful"],
       "default": "default"
     },
     "release_channel": {
       "type": "string",
       "title": "Engine release channel",
-      "description": "stable is the free channel. preview requires a CloakBrowser Pro licence.",
+      "description": "Which CloakBrowser release channel the engine uses.\n\nOptions:\n  - stable — the free channel.\n  - preview — requires a CloakBrowser Pro licence.\n\nDefault: stable",
       "options": ["stable", "preview"],
       "default": "stable"
     },
     "geoip_proxy_match": {
       "type": "boolean",
       "title": "Match timezone and locale to the proxy",
-      "description": "Resolve the proxy exit location and align the browser timezone and locale to it. Enable this together with a proxy server.",
+      "description": "Resolve the proxy exit location and align the browser timezone and locale\nto it.\n\nDefault: false\n\nNotes:\n  - Enable this together with a proxy server.",
       "default": false
     },
     "profile_isolation": {
       "type": "string",
       "title": "Profile isolation",
-      "description": "Session safety for the browser profile. shared keeps one profile per account for every Claude Code window, exactly as before. workspace gives each project folder its own profile (profiles/<engine>/ws-<hash>) so two projects do not collide; that profile starts with a fresh login state, and if it is already in use the plugin uses a numbered sibling (ws-<hash>-2 to -5) and reports the switch. isolated uses no browser profile at all: no profile directory is created or locked, cookies, logins and storage are not saved, and nothing persists after the session; Profile directory, Account profile and the default-profile pointer are ignored and reported for that start, and several sessions can run at once. copy runs the session on a temporary copy of the profile that Profile directory, Account profile, the default-profile pointer or the engine default resolves: the base profile is locked for the session and never written, the browser starts on the copy, and the copy is discarded when the session ends cleanly; a crashed session leaves it under profiles/<engine>/.sessions, where browser_profiles list shows it and scripts/profile-copy.mjs --prune removes it. copy-keep does the same and keeps the changes: when the session ends cleanly the base profile is replaced by the session copy and the old base is retained beside it as <name>.previous-<timestamp>; those retained trees are never deleted automatically and accumulate until you remove them. A crash or a hard kill performs no swap: the base stays untouched and the session copy is kept. copy-keep is refused when the base is outside the plugin data directory. copy does not combine with workspace in this version, and neither does copy-keep. In shared, workspace, copy and copy-keep, Profile directory and Account profile win over the mode. The free CloakBrowser tier still allows one browser at a time. Restart Claude Code after changing it.",
+      "description": "Session safety for the browser profile: which profile a session uses and what it\nleaves behind.\n\nOptions:\n  - shared — one profile per account for every Claude Code window, exactly as\n    before.\n  - workspace — each project folder gets its own profile (profiles/<engine>/ws-<hash>),\n    so two projects do not collide.\n    That profile starts with a fresh login state, and if it is already in use the\n    plugin uses a numbered sibling (ws-<hash>-2 to -5) and reports the switch.\n  - isolated — no browser profile at all: no profile directory is created or\n    locked, cookies, logins and storage are not saved, and nothing persists after\n    the session.\n    Profile directory, Account profile and the default-profile pointer are ignored\n    and reported for that start, and several sessions can run at once.\n  - copy — the session runs on a temporary copy of the profile that Profile\n    directory, Account profile, the default-profile pointer or the engine default\n    resolves.\n    The base profile is locked for the session and never written, the browser\n    starts on the copy, and the copy is discarded when the session ends cleanly.\n    A crashed session leaves it under profiles/<engine>/.sessions, where\n    browser_profiles list shows it and scripts/profile-copy.mjs --prune removes it.\n  - copy-keep — the same temporary copy, and the changes are kept: when the session\n    ends cleanly the base profile is replaced by the session copy and the old base\n    is retained beside it as <name>.previous-<timestamp>.\n    Those retained trees are never deleted automatically and accumulate until you\n    remove them.\n    A crash or a hard kill performs no swap: the base stays untouched and the\n    session copy is kept.\n\nDefault: shared\n\nNotes:\n  - copy-keep is refused when the base is outside the plugin data directory.\n  - copy does not combine with workspace in this version, and neither does copy-keep.\n  - In shared, workspace, copy and copy-keep, Profile directory and Account profile\n    win over the mode.\n  - Only profiles the plugin manages are copied, given siblings or made isolated.\n  - An explicit Profile directory keeps the block behaviour.\n  - The free CloakBrowser tier still allows one browser at a time.\n\nRestart Claude Code after changing it.",
       "options": ["shared", "workspace", "isolated", "copy", "copy-keep"],
       "default": "shared"
     },
     "on_locked": {
       "type": "string",
       "title": "When the profile is in use",
-      "description": "What this session does when the browser profile it resolved is already in use by another process. copy, the default, runs this session on a temporary copy of the busy profile: the base keeps its owner and is never written, the copy takes no lock of its own, and it is deleted when your browser closes (profile_lifetime browser) or when the session ends. It carries that profile's cookies and saved logins as of the moment it is taken, and copy_contents decides how much of the rest travels with it. On an engine with a seat limit (the free CloakBrowser tier) a copy is still one browser at a time: the seat is checked again when the copy is actually taken, and when no seat is free this session holds and retries instead of starting a second browser. Under profile_isolation copy and copy-keep the value means wait for the base, then take the copy, because a copy is never taken of a copy; those modes never fall back to a numbered sibling. fallback starts on the first free numbered sibling of the profile (profiles/.../<name>-2 to -5) and reports the switch everywhere: that profile is NOT the profile you configured, it has separate cookies, logins and fingerprint seed, a sibling that did not exist is created empty and said to be empty, and when -2 to -5 are all in use no backend starts and the message names the owner. isolated starts with no profile at all: nothing is saved and nothing persists. block stops the backend and exposes only the broker meta-tools until Claude Code restarts the MCP server. Only profiles the plugin manages are copied, given siblings or made isolated; an explicit Profile directory keeps the block behaviour. It has no effect on camoufox-native or kameleo, which manage their own profiles. Restart Claude Code after changing it.",
+      "description": "What this session does when the browser profile it resolved is already in use by\nanother process.\n\nOptions:\n  - copy — this session runs on a temporary copy of the busy profile: the base keeps\n    its owner and is never written, the copy takes no lock of its own, and it is\n    deleted when your browser closes (profile_lifetime browser) or when the session\n    ends.\n    It carries that profile's cookies and saved logins as of the moment it is taken,\n    and copy_contents decides how much of the rest travels with it.\n    On an engine with a seat limit (the free CloakBrowser tier) a copy is still one\n    browser at a time: the seat is checked again when the copy is actually taken, and\n    when no seat is free this session holds and retries instead of starting a second\n    browser.\n  - fallback — starts on the first free numbered sibling of the profile\n    (profiles/.../<name>-2 to -5) and reports the switch everywhere: that profile is\n    NOT the profile you configured, it has separate cookies, logins and fingerprint seed,\n    a sibling that did not exist is created empty and said to be empty, and when -2 to\n    -5 are all in use no backend starts and the message names the owner.\n  - isolated — starts with no profile at all: nothing is saved and nothing persists.\n  - block — stops the backend and exposes only the broker meta-tools until Claude Code\n    restarts the MCP server.\n\nDefault: copy\n\nNotes:\n  - Under profile_isolation copy and copy-keep the value means wait for the base, then\n    take the copy, because a copy is never taken of a copy; those modes never fall back\n    to a numbered sibling.\n  - Only profiles the plugin manages are copied, given siblings or made isolated.\n  - An explicit Profile directory keeps the block behaviour.\n  - It has no effect on camoufox-native or kameleo, which manage their own profiles.\n\nRestart Claude Code after changing it.",
       "options": ["block", "fallback", "isolated", "copy"],
       "default": "copy"
     },
     "copy_contents": {
       "type": "string",
       "title": "Copy contents",
-      "description": "What a session copy of a browser profile holds. It governs profile_isolation copy, on_locked copy and scripts/profile-copy.mjs alike, so the CLI and a session can never disagree. identity, the default, copies only the engine's identity core, as its manifest lists it: cookies, saved logins and the key that decrypts them, certificates, permissions and preferences, history and autofill, localStorage tokens, and the installed add-ons (their files travel together, never one without the others). Sites whose login lives in IndexedDB (WhatsApp Web, Google Drive, OneDrive, Notion and many PWAs) may ask you to sign in again with identity; a login kept in a cookie or in localStorage stays signed in. full copies the whole profile plan: exactly the files and bytes 2.19.0 copied, including history, IndexedDB and caches. Measured on this machine: Firefox about 69 MB without add-ons and about 105 MB with them, Chromium about 28 MB, against 881 MB and 594 MB for full. profile_isolation copy-keep is always full whatever this says, because that session copy replaces the base profile on a clean close and a thinner tree would destroy the base's data; browser_capabilities reports copyContentsSource \"clamped\" with the reason. A copy taken while another browser writes the profile can be a few seconds stale. An engine whose manifest declares no identity list copies the full tree and says so. Restart Claude Code after changing it.",
+      "description": "What a session copy of a browser profile holds.\n\nOptions:\n  - identity — copies only the engine's identity core, as its manifest lists it:\n    cookies, saved logins and the key that decrypts them, certificates, permissions\n    and preferences, history and autofill, localStorage tokens, and the installed\n    add-ons (their files travel together, never one without the others).\n  - full — copies the whole profile plan: exactly the files and bytes 2.19.0 copied,\n    including history, IndexedDB and caches.\n    Measured on this machine: Firefox about 69 MB without add-ons and about 105 MB\n    with them, Chromium about 28 MB, against 881 MB and 594 MB for full.\n\nDefault: identity\n\nNotes:\n  - It governs profile_isolation copy, on_locked copy and scripts/profile-copy.mjs\n    alike, so the CLI and a session can never disagree.\n  - Sites whose login lives in IndexedDB (WhatsApp Web, Google Drive, OneDrive, Notion\n    and many PWAs) may ask you to sign in again with identity; a login kept in a cookie\n    or in localStorage stays signed in.\n  - profile_isolation copy-keep is always full whatever this says, because that session\n    copy replaces the base profile on a clean close and a thinner tree would destroy\n    the base's data; browser_capabilities reports copyContentsSource \"clamped\" with\n    the reason.\n  - A copy taken while another browser writes the profile can be a few seconds stale.\n  - An engine whose manifest declares no identity list copies the full tree and says so.\n\nRestart Claude Code after changing it.",
       "options": ["full", "identity"],
       "default": "identity"
     },
     "profile_lifetime": {
       "type": "string",
       "title": "Profile lifetime",
-      "description": "How long this session keeps the profile facts it owns. browser, the default, takes the plugin's own lock on the base profile (profile_isolation copy and copy-keep) at the first browser action, releases it when the browser closes, and takes it again on the next browser action, so an idle Claude session locks and copies nothing and another session can take the profile as soon as your browser closes. One exception keeps the tool list usable: when this machine has no cached tool list yet for the engine, tool profile and tool groups in use, the copy (and the backend) is taken before the client asks for its tools, so the very first start of a new configuration locks and copies at start and every later session is lazy again. A session copy taken for on_locked copy lives exactly as long: it is deleted when the browser closes (six bounded attempts over about 5 seconds), and a copy that still cannot be deleted is kept and reported as a leftover, never silently lost. server keeps the 2.19.0 behaviour: the lock and the copy last until the MCP server stops. It never changes the browser's own lock, which is always browser-scoped, or the bridge's lock, which stays server-scoped until an upstream release; browser_capabilities and browser_profiles report each lock's real lifetime and why. copy-keep always keeps its copy until the session ends, because that copy carries your changes. Restart Claude Code after changing it.",
+      "description": "How long this session keeps the profile facts it owns.\n\nOptions:\n  - browser — takes the plugin's own lock on the base profile (profile_isolation copy\n    and copy-keep) at the first browser action, releases it when the browser closes,\n    and takes it again on the next browser action, so an idle Claude session locks and\n    copies nothing and another session can take the profile as soon as your browser\n    closes.\n    A session copy taken for on_locked copy lives exactly as long: it is deleted when\n    the browser closes (six bounded attempts over about 5 seconds), and a copy that\n    still cannot be deleted is kept and reported as a leftover, never silently lost.\n  - server — keeps the 2.19.0 behaviour: the lock and the copy last until the MCP\n    server stops.\n\nDefault: browser\n\nNotes:\n  - One exception keeps the tool list usable: when this machine has no cached tool list\n    yet for the engine, tool profile and tool groups in use, the copy (and the backend)\n    is taken before the client asks for its tools, so the very first start of a new\n    configuration locks and copies at start and every later session is lazy again.\n  - It never changes the browser's own lock, which is always browser-scoped, or the\n    bridge's lock, which stays server-scoped until an upstream release;\n    browser_capabilities and browser_profiles report each lock's real lifetime and why.\n  - copy-keep always keeps its copy until the session ends, because that copy carries\n    your changes.\n\nRestart Claude Code after changing it.",
       "options": ["browser", "server"],
       "default": "browser"
     },
     "seat_limit": {
       "type": "string",
       "title": "CloakBrowser seat limit",
-      "description": "How many CloakBrowser browsers this machine may run at once, which decides whether on_locked copy may start a browser on a copy while another session holds the profile. engine-default, the default, is the engine's own rule: one concurrent browser on the free tier, exactly 2.19.0's behaviour. unlimited declares that your licence has no practical cap (Pro 200/2000+, or an older build that needs no key). vendor-license asks the vendor's licence API for the seats your key holds and uses its limit; that is a live network call to cloakbrowser.dev (10 second timeout) made only when a licence key is configured, and any failure falls back to the engine default and says so in browser_capabilities. Whatever the setting, the plugin always counts the live browser locks it can see in its own profile folders, and a launch the engine refuses with licence exit code 76 to 79 is never retried in a loop. When no seat is free, on_locked copy holds and retries instead of starting a second browser. Only the cloakbrowser plugin declares this setting, because the camoufox plugin has no seat-limited engine. Restart Claude Code after changing it.",
+      "description": "How many CloakBrowser browsers this machine may run at once, which decides whether\non_locked copy may start a browser on a copy while another session holds the profile.\n\nOptions:\n  - engine-default — the engine's own rule: one concurrent browser on the free tier,\n    exactly 2.19.0's behaviour.\n  - unlimited — declares that your licence has no practical cap (Pro 200/2000+, or an\n    older build that needs no key).\n  - vendor-license — asks the vendor's licence API for the seats your key holds and\n    uses its limit.\n    That is a live network call to cloakbrowser.dev (10 second timeout) made only when\n    a licence key is configured, and any failure falls back to the engine default and\n    says so in browser_capabilities.\n\nDefault: engine-default\n\nNotes:\n  - Whatever the setting, the plugin always counts the live browser locks it can see in\n    its own profile folders, and a launch the engine refuses with licence exit code 76\n    to 79 is never retried in a loop.\n  - When no seat is free, on_locked copy holds and retries instead of starting a second\n    browser.\n  - Only the cloakbrowser plugin declares this setting, because the camoufox plugin has\n    no seat-limited engine.\n\nRestart Claude Code after changing it.",
       "options": ["engine-default", "vendor-license", "unlimited"],
       "default": "engine-default"
     },
     "identity_mode": {
       "type": "string",
       "title": "Device identity (Camoufox)",
-      "description": "How the Camoufox engine presents its device identity. profile gives each persistent Camoufox profile one generated identity: the first launch draws a fingerprint for this computer's operating system, stores it in <profile>/.camoufox-identity.json and reuses it on every later launch, so a site that keeps cookies also sees the same device (Camoufox otherwise draws a new one on every launch). Delete that file to draw a new identity on the next start; a copied profile carries it, so delete it inside the copy to give the copy a different device. random restores the per-launch draw. An isolated start has no profile to store anything in, so it always draws a new identity. This setting is inert for the other engines: cloak pins its own Chromium seed, playwright and camoufox-native have no fingerprint input, and Kameleo manages its own profiles; browser_capabilities says so and reports the active source, the identity file and when it was created.",
+      "description": "How the Camoufox engine presents its device identity.\n\nOptions:\n  - profile — gives each persistent Camoufox profile one generated identity: the\n    first launch draws a fingerprint for this computer's operating system, stores it\n    in <profile>/.camoufox-identity.json and reuses it on every later launch, so a\n    site that keeps cookies also sees the same device (Camoufox otherwise draws a\n    new one on every launch).\n  - random — restores the per-launch draw.\n\nDefault: profile\n\nNotes:\n  - Delete that file to draw a new identity on the next start; a copied profile\n    carries it, so delete it inside the copy to give the copy a different device.\n  - An isolated start has no profile to store anything in, so it always draws a new\n    identity.\n  - This setting is inert for the other engines: cloak pins its own Chromium seed,\n    playwright and camoufox-native have no fingerprint input, and Kameleo manages\n    its own profiles; browser_capabilities says so and reports the active source,\n    the identity file and when it was created.",
       "options": ["profile", "random"],
       "default": "profile"
     },
     "ping_timeout_ms": {
       "type": "number",
       "title": "Server heartbeat timeout (Camoufox)",
-      "description": "Applies to the camoufox engine only: how long its backend waits for an answer to its own heartbeat ping before it closes the browser and ends the session, in milliseconds. 0 is the default and disables the wrapper's heartbeat entirely. The backend pings every 3 s and closes the browser when an answer is more than 5 s late; one late answer (a stalled Claude Code event loop, a busy machine, sleep or resume) was enough to lose the browser, and a dead client is still detected through the MCP pipe itself. A positive value re-enables the heartbeat with that deadline, so a client that does not answer within it still loses the browser and the session. A non-negative integer; anything else is ignored with one log line and the heartbeat stays disabled. The other engines send no server heartbeat and ignore this setting, and browser_capabilities and browser_engine_status say so. An explicit PLAYWRIGHT_MCP_PING_TIMEOUT_MS in the environment wins over this setting.",
+      "description": "How long the camoufox engine's backend waits for an answer to its own heartbeat\nping before it closes the browser and ends the session, in milliseconds.\n\nDefault: 0\n\nNotes:\n  - 0 disables the wrapper's heartbeat entirely.\n  - The backend pings every 3 s and closes the browser when an answer is more than\n    5 s late; one late answer (a stalled Claude Code event loop, a busy machine,\n    sleep or resume) was enough to lose the browser, and a dead client is still\n    detected through the MCP pipe itself.\n  - A positive value re-enables the heartbeat with that deadline, so a client that\n    does not answer within it still loses the browser and the session.\n  - A non-negative integer; anything else is ignored with one log line and the\n    heartbeat stays disabled.\n  - The other engines send no server heartbeat and ignore this setting, and\n    browser_capabilities and browser_engine_status say so.\n  - An explicit PLAYWRIGHT_MCP_PING_TIMEOUT_MS in the environment wins over this\n    setting.",
       "default": 0
     },
     "password_manager": {
       "type": "boolean",
       "title": "Saved logins and autofill (Camoufox)",
-      "description": "Off by default. When on, Camoufox's Firefox password manager is enabled for this profile: saved logins in the profile's logins.db can be autofilled into matching login forms, and Firefox will offer to save new logins. This is a deliberate security trade-off. Autofilled credentials can be read by the page's own scripts, by the model through browser_snapshot or browser_evaluate, and by a prompt-injected page that steers the model to a login form; the plugin cannot tell a legitimate login page from a phishing one. The store is encrypted with the profile's key4.db, which sits in the same profile and is not bound to your Windows account (no primary password is set by default): anyone who obtains the profile (a copy, a backup, profile_isolation=copy or copy-keep, or scripts/profile-copy.mjs) can decrypt the saved passwords. Autofill on plain HTTP stays off, and address/credit-card autofill and form history stay off. The pinned Camoufox build disables the manager by enterprise policy (PasswordManagerEnabled: false, OfferToSaveLogins: false), and launch prefs alone lose to that lock. The camoufox engine always runs on a plugin-owned overlay of that build inside the plugin data directory (hardlinks and junctions to the build; only distribution/policies.json is replaced, every other policy preserved; about 0 bytes on a normal install, about 310 MB only when the build cache is on another volume). The overlay restores the stock search engines with Google as the default on every start; turning this setting on adds the two password policies and the three signon prefs to that same overlay, and turning it off removes only those. It is verified once with a short headless start, and browser_capabilities reports the overlay directory, its mode and the policy path. If the overlay cannot be created or verified, the stock build runs normally and browser_capabilities reports blocked-by-overlay with the reason; a directory this plugin did not write is never touched and reports blocked-by-existing-overlay. Inert for cloak, playwright and kameleo; camoufox-native has no prefs input and reports native-unavailable. The plugin never reads, logs or transmits logins.db or key4.db, and this setting never authorizes typing, submitting, recovering or handling 2FA or CAPTCHA on a credential form.",
+      "description": "Off by default. When on, Camoufox's Firefox password manager is enabled for this\nprofile: saved logins in the profile's logins.db can be autofilled into matching\nlogin forms, and Firefox will offer to save new logins.\n\nNotes:\n  - This is a deliberate security trade-off. Autofilled credentials can be read by\n    the page's own scripts, by the model through browser_snapshot or\n    browser_evaluate, and by a prompt-injected page that steers the model to a login\n    form; the plugin cannot tell a legitimate login page from a phishing one.\n  - The store is encrypted with the profile's key4.db, which sits in the same profile\n    and is not bound to your Windows account (no primary password is set by default):\n    anyone who obtains the profile (a copy, a backup, profile_isolation=copy or\n    copy-keep, or scripts/profile-copy.mjs) can decrypt the saved passwords.\n  - Autofill on plain HTTP stays off, and address/credit-card autofill and form\n    history stay off.\n  - The pinned Camoufox build disables the manager by enterprise policy\n    (PasswordManagerEnabled: false, OfferToSaveLogins: false), and launch prefs alone\n    lose to that lock.\n  - The camoufox engine always runs on a plugin-owned overlay of that build inside\n    the plugin data directory (hardlinks and junctions to the build; only\n    distribution/policies.json is replaced, every other policy preserved; about 0\n    bytes on a normal install, about 310 MB only when the build cache is on another\n    volume).\n  - The overlay restores the stock search engines with Google as the default on\n    every start; turning this setting on adds the two password policies and the\n    three signon prefs to that same overlay, and turning it off removes only those.\n  - It is verified once with a short headless start, and browser_capabilities\n    reports the overlay directory, its mode and the policy path.\n  - If the overlay cannot be created or verified, the stock build runs normally and\n    browser_capabilities reports blocked-by-overlay with the reason; a directory\n    this plugin did not write is never touched and reports blocked-by-existing-overlay.\n  - Inert for cloak, playwright and kameleo; camoufox-native has no prefs input and\n    reports native-unavailable.\n  - The plugin never reads, logs or transmits logins.db or key4.db, and this setting\n    never authorizes typing, submitting, recovering or handling 2FA or CAPTCHA on a\n    credential form.",
       "default": false
     },
     "account": {
       "type": "string",
       "title": "Account profile",
-      "description": "Browser profile name for one account. Each name keeps its own cookies, logins and fingerprint seed under Claude Code's plugin data directory (profiles/<engine>/<name>). Leave empty to use the plugin's default profile (profiles/default). Letters, digits, '.', '_' and '-' only, starting with a letter or digit, up to 64 characters, no trailing dot or space. Ignored when Persistent profile directory is set. Changing it takes effect when the Claude Code MCP server restarts; sign in to each account manually in the headed window.",
+      "description": "Browser profile name for one account. Each name keeps its own cookies, logins and\nfingerprint seed under Claude Code's plugin data directory (profiles/<engine>/<name>).\n\nDefault: empty\n\nNotes:\n  - Letters, digits, '.', '_' and '-' only, starting with a letter or digit, up to\n    64 characters, no trailing dot or space.\n  - Leave empty to use the plugin's default profile (profiles/default).\n  - Ignored when Persistent profile directory is set.\n  - Changing it takes effect when the Claude Code MCP server restarts; sign in to\n    each account manually in the headed window.",
       "default": ""
     },
     "profile_dir": {
       "type": "string",
       "title": "Persistent profile directory",
-      "description": "Directory that keeps cookies, logins and the fingerprint seed. It is created if it does not exist. Leave empty to use the plugin's own persistent profile in Claude Code's plugin data directory (profiles/default). Use one directory per account.",
+      "description": "Directory that keeps cookies, logins and the fingerprint seed. It is created if it\ndoes not exist.\n\nDefault: empty\n\nNotes:\n  - Leave empty to use the plugin's own persistent profile in Claude Code's plugin\n    data directory (profiles/default).\n  - Use one directory per account.",
       "default": ""
     },
     "proxy_server": {
       "type": "string",
       "title": "Proxy server",
-      "description": "Sticky proxy URL, for example http://user:pass@host:port. Leave empty for a direct connection.",
+      "description": "Sticky proxy URL, for example http://user:pass@host:port.\n\nDefault: empty\n\nNotes:\n  - Leave empty for a direct connection.",
       "default": ""
     },
     "proxy_bypass": {
       "type": "string",
       "title": "Proxy bypass list",
-      "description": "Comma-separated hosts that should not use the proxy. Leave empty to proxy everything.",
+      "description": "Comma-separated hosts that should not use the proxy.\n\nDefault: empty\n\nNotes:\n  - Leave empty to proxy everything.",
       "default": ""
     },
     "licence_key": {
       "type": "string",
       "title": "CloakBrowser licence key",
-      "description": "CloakBrowser Pro key. The free tier works without it and allows one concurrent session. Stored in the operating system credential store.",
+      "description": "CloakBrowser Pro licence key, held in the operating system credential\nstore.\n\nDefault: empty\n\nNotes:\n  - The free tier works without it and allows one concurrent session.",
       "sensitive": true,
       "default": ""
     },
     "engine_version": {
       "type": "string",
       "title": "Engine version pin",
-      "description": "Pin a specific CloakBrowser Chromium build. Leave empty to use the stable channel and let the binary update itself.",
+      "description": "Pin a specific CloakBrowser Chromium build.\n\nDefault: empty\n\nNotes:\n  - Leave empty to use the stable channel and let the binary update itself.",
       "default": ""
     },
     "output_dir": {
       "type": "string",
       "title": "Artifacts directory",
-      "description": "Where Playwright MCP writes screenshots, traces and session files. It is created if it does not exist. Leave empty to write them to .playwright-mcp in the folder the client opened (its first file root), or, when the client advertises no usable file root, to the plugin data folder under output/<engine>.",
+      "description": "Where Playwright MCP writes screenshots, traces and session files. It is created if it\ndoes not exist.\n\nDefault: empty\n\nNotes:\n  - Leave empty to write them to .playwright-mcp in the folder the client opened (its\n    first file root), or, when the client advertises no usable file root, to the\n    plugin data folder under output/<engine>.",
       "default": ""
     },
     "allow_unrestricted_file_access": {
       "type": "boolean",
       "title": "Unrestricted file access",
-      "description": "Remove Playwright's file-access allowlist for tool-chosen paths and unblock file:// navigation, so the model can read and write any file your operating-system user can, not only the Artifacts directory and the workspace root. A deliberate security trade-off: a prompt-injected page could make the model read or overwrite private files. Leave this off unless you need a path outside those roots. Applies to the cloak, playwright, camoufox and kameleo engines; the camoufox-native engine has no file-path tools and ignores it.",
+      "description": "Remove Playwright's file-access allowlist for tool-chosen paths and unblock file://\nnavigation, so the model can read and write any file your operating-system user can,\nnot only the Artifacts directory and the workspace root.\n\nDefault: false\n\nNotes:\n  - A deliberate security trade-off: a prompt-injected page could make the model\n    read or overwrite private files.\n  - Leave this off unless you need a path outside those roots.\n  - Applies to the cloak, playwright, camoufox and kameleo engines; the\n    camoufox-native engine has no file-path tools and ignores it.",
       "default": false
     },
     "extension_paths": {
       "type": "string",
       "title": "Unpacked extensions",
-      "description": "Absolute directories of unpacked Chromium extensions to load in every start, as a JSON string array or a comma-separated list. Unpacked directories only: the Chrome Web Store is not available in this Chromium, and a directory cannot contain a comma. Any and all extensions you list are allowed. An extension is privileged code that runs with the browser's privileges on every page and is outside the MCP tool filters: it bypasses disabled_tools, can read page content, cookies and storage, and can send that anywhere your network allows, so only load directories you trust. There is no signature check at load and no automatic update. Its stored data lives in the browser profile and therefore travels with profile copies, retained previous trees and backups. Applies to the cloak engine only, which must run on a persistent profile: with profile_isolation isolated (or on_locked isolated) the server refuses to start until the extension list is cleared or a persistent profile mode is chosen. While the list is set, only these directories are enabled, and any extension you installed by hand in the profile stays disabled for that start. In shared, workspace and account profiles the extension state persists; profile_isolation copy discards a session's extension changes when it ends cleanly, and copy-keep keeps them by swapping the session copy into the base. The other engines ignore the setting and say so in browser_capabilities. An explicit CLOAK_PLAYWRIGHT_MCP_EXTENSION_PATHS in the environment wins over this setting.",
+      "description": "Absolute directories of unpacked Chromium extensions to load in every start.\n\nDefault: empty\n\nNotes:\n  - Format: a JSON string array or a comma-separated list of absolute paths. Unpacked\n    directories only: the Chrome Web Store is not available in this Chromium, and a\n    directory cannot contain a comma.\n  - Any and all extensions you list are allowed. An extension is privileged code that\n    runs with the browser's privileges on every page and is outside the MCP tool\n    filters: it bypasses disabled_tools, can read page content, cookies and storage,\n    and can send that anywhere your network allows, so only load directories you\n    trust.\n  - There is no signature check at load and no automatic update.\n  - Its stored data lives in the browser profile and therefore travels with profile copies,\n    retained previous trees and backups.\n  - Applies to the cloak engine only, which must run on a persistent profile: with\n    profile_isolation isolated (or on_locked isolated) the server refuses to start\n    until the extension list is cleared or a persistent profile mode is chosen.\n  - While the list is set, only these directories are enabled, and any extension you\n    installed by hand in the profile stays disabled for that start.\n  - In shared, workspace and account profiles the extension state persists;\n    profile_isolation copy discards a session's extension changes when it ends cleanly,\n    and copy-keep keeps them by swapping the session copy into the base.\n  - The other engines ignore the setting and say so in browser_capabilities.\n  - An explicit CLOAK_PLAYWRIGHT_MCP_EXTENSION_PATHS in the environment wins over this\n    setting.",
       "default": ""
     }
   }

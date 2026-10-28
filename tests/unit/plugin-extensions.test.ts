@@ -715,7 +715,7 @@ describe('documentation and manifests', () => {
       version: string;
       userConfig: Record<string, { type?: string; default?: unknown; description?: string }>;
     };
-    expect(universal.version).toBe('2.21.1');
+    expect(universal.version).toBe('2.21.2');
     const setting = universal.userConfig.extension_paths;
     expect(setting).toBeDefined();
     expect(setting.type).toBe('string');
@@ -739,7 +739,7 @@ describe('documentation and manifests', () => {
     const camoufoxPlugin = JSON.parse(
       readFileSync(path.join(repoRoot, 'plugins', 'camoufox', '.claude-plugin', 'plugin.json'), 'utf8'),
     ) as { version: string; userConfig: Record<string, unknown> };
-    expect(camoufoxPlugin.version).toBe('2.21.1');
+    expect(camoufoxPlugin.version).toBe('2.21.2');
     expect(Object.hasOwn(camoufoxPlugin.userConfig, 'extension_paths')).toBe(false);
   });
 

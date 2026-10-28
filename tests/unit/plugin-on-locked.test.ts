@@ -517,7 +517,7 @@ describe('on_locked setting values', () => {
       expect(setting.options).toEqual(['block', 'fallback', 'isolated', 'copy']);
       expect(setting.default).toBe('copy');
       expect(setting.description).toContain('separate cookies, logins and fingerprint seed');
-      expect(setting.description).toContain('an explicit Profile directory keeps the block behaviour');
+      expect(setting.description).toContain('An explicit Profile directory keeps the block behaviour');
       expect(setting.description).toContain('nothing is saved and nothing persists');
       expect(setting.description).toContain('a copy is never taken of a copy');
       const mcp = JSON.parse(
