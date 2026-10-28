@@ -2385,14 +2385,20 @@ function deadBackendToolError(name) {
   if (state.hold.active) {
     return holdToolError(name);
   }
+  if (state.engineError !== null) {
+    // A start that was refused before any backend existed keeps its exact
+    // previous message: no restart is possible, and the cause is already in it.
+    return `Cannot call "${String(name)}": ${backendDescription()}.`;
+  }
+  const description = backendDescription();
   const why =
     state.restart.refusedReason === null
       ? ''
       : ` No automatic restart ran: ${state.restart.refusedReason}.`;
   return (
-    `Cannot call "${String(name)}": ${backendDescription()}.${why} ` +
-    'The call was not sent. Fix the cause named in browser_engine_status.lastError and call again ' +
-    '(at most one automatic restart runs every 5 minutes), or restart Claude Code.'
+    `Cannot call "${String(name)}": ${description.endsWith('.') ? description.slice(0, -1) : description}.${why} ` +
+    'The call was not sent. Fix the cause named in browser_engine_status.lastError and call again, or ' +
+    'restart Claude Code; at most one automatic restart runs every 5 minutes.'
   );
 }
 
@@ -2440,6 +2446,9 @@ function attemptDeadBackendRestart(reason) {
     `dead-backend recovery: ${reason}; restarting the backend once ` +
       `(attempt ${state.restart.window} since the last successful tool call)`,
   );
+  // The new backend has answered nothing yet, so startupMs must measure it, not
+  // the dead one (a kept timestamp would make startupMs negative).
+  state.initializeAnsweredAt = null;
   startBackend();
   if (state.child === null) {
     state.restart.outcome = 'failed';

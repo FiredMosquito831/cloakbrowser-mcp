@@ -449,7 +449,7 @@ describe('password_manager in the shipped manifests', () => {
       version: string;
       userConfig: Record<string, { type?: string; default?: unknown; description?: string }>;
     };
-    expect(plugin.version).toBe('2.18.0');
+    expect(plugin.version).toBe('2.19.0');
     const setting = plugin.userConfig.password_manager;
     expect(setting, `${name} declares password_manager`).toBeDefined();
     expect(setting.type).toBe('boolean');
@@ -521,7 +521,7 @@ describe('password_manager in the shipped manifests', () => {
       expect(readme).toContain('search.json.mozlz4');
     }
     expect(readFileSync(path.join(universalDir, 'README.md'), 'utf8')).toContain('native-unavailable');
-    expect(readFileSync(path.join(camoufoxDir, 'README.md'), 'utf8')).toContain('2.18.0');
+    expect(readFileSync(path.join(camoufoxDir, 'README.md'), 'utf8')).toContain('**2.19.0**');
   });
 });
 

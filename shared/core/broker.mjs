@@ -2385,6 +2385,11 @@ function deadBackendToolError(name) {
   if (state.hold.active) {
     return holdToolError(name);
   }
+  if (state.engineError !== null) {
+    // A start that was refused before any backend existed keeps its exact
+    // previous message: no restart is possible, and the cause is already in it.
+    return `Cannot call "${String(name)}": ${backendDescription()}.`;
+  }
   const description = backendDescription();
   const why =
     state.restart.refusedReason === null
@@ -2441,6 +2446,9 @@ function attemptDeadBackendRestart(reason) {
     `dead-backend recovery: ${reason}; restarting the backend once ` +
       `(attempt ${state.restart.window} since the last successful tool call)`,
   );
+  // The new backend has answered nothing yet, so startupMs must measure it, not
+  // the dead one (a kept timestamp would make startupMs negative).
+  state.initializeAnsweredAt = null;
   startBackend();
   if (state.child === null) {
     state.restart.outcome = 'failed';
