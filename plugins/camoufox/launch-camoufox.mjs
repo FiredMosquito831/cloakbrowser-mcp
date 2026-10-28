@@ -12,15 +12,14 @@
 // prerequisites are named in one actionable line and exit 1 so the broker's
 // meta-only recovery path can answer the client instead of hanging the handshake.
 import { spawn, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { applyLauncherSettings } from './lib/launcher-settings.mjs';
 import { applyPingTimeout, pingTimeoutProblemNote } from './lib/ping-timeout.mjs';
 import { applyCamoufoxOverlay } from './lib/password-manager.mjs';
-import { ensurePython, ensureUv, ensureVenv } from './lib/provision.mjs';
+import { ensurePython, ensureUv, ensureVenv, writeRuntimeLease } from './lib/provision.mjs';
 
 const PLUGIN_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PACKAGE_PIN = 'camoufox-playwright-mcp==0.1.5';
@@ -161,24 +160,21 @@ function applyDefaultProfile(env) {
   env.PLAYWRIGHT_MCP_USER_DATA_DIR = profile;
 }
 
-// A change to the manifest, the wrapper pin or the build pin must rebuild the
-// venv, so all three feed the marker hash.
-function contractHash(spec, build) {
-  const manifest = readFileSync(path.join(PLUGIN_ROOT, 'engines', 'camoufox.json'), 'utf8');
-  return createHash('sha256')
-    .update(manifest)
-    .update('\n')
-    .update(spec)
-    .update('\n')
-    .update(build)
-    .digest('hex');
-}
-
 // The venv package list: the wrapper pin (or the CAMOUFOX_MCP_PACKAGE override)
-// followed by the pinned MCP stack. Both feed the venv marker, so a change to
-// either rebuilds an existing venv on the next start.
+// followed by the pinned MCP stack. Both feed the venv generation key, so a change
+// to either builds a new generation on the next start.
 export function venvPackages(spec) {
   return [spec, ...PYTHON_STACK_PINS];
+}
+
+// Only runtime-determining values belong in `extra` (2.22.0): the marker hash
+// becomes the venv generation, so anything else — in particular the engine
+// manifest, whose descriptions change for documentation reasons — would rebuild a
+// several-hundred-megabyte runtime for no behavioural reason. That was 2.20.0's
+// regression, and `venvRequest` is its pin: a manifest hash re-added here changes
+// this object and fails `tests/unit/plugin-provision-safety.test.ts`.
+export function venvRequest(spec, build) {
+  return { name: 'camoufox', packages: venvPackages(spec), extra: { build } };
 }
 
 function ensureRuntime(env, spec, build) {
@@ -190,9 +186,7 @@ function ensureRuntime(env, spec, build) {
       dataDir: data,
       uv,
       python,
-      name: 'camoufox',
-      packages: venvPackages(spec),
-      extra: { build, manifest: contractHash(spec, build) },
+      ...venvRequest(spec, build),
       log,
     });
   });
@@ -241,6 +235,15 @@ async function main() {
   const build = resolveOverride(env, 'CAMOUFOX_BROWSER_BUILD', BUILD_PIN);
 
   const paths = await ensureRuntime(env, spec, build);
+  // A lease lets a later start name the process that holds this generation instead
+  // of saying only "in use". It lives inside the venv root, is written by the
+  // process that stays alive for the wrapper's lifetime, and its removal is
+  // best-effort: every reader ignores a lease whose pid is gone.
+  const releaseLease = writeRuntimeLease(paths.venv);
+  process.on('exit', releaseLease);
+  log(
+    `using the ${paths.state === 'built' ? 'new' : 'existing'} venv generation ${paths.generation} at ${paths.venv}`,
+  );
   ensureBuild(env, paths, build);
   const binary = resolveBinary(env, paths, build);
 

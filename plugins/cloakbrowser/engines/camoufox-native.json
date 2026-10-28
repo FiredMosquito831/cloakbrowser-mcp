@@ -8,11 +8,14 @@
   "launch": {
     "launcher": "launch-camoufox-native.mjs"
   },
+  "provisioning": {
+    "record": "camoufox-native"
+  },
   "contractSchemas": "contracts/playwright-canonical.json",
   "requirements": [
     "uv (pinned 0.13.5): an explicit UV/UV_BIN or a working uv on PATH is used, otherwise the pinned release is downloaded into the plugin data directory and SHA-256 verified",
     "Plugin-managed CPython 3.13.17 (installed by uv under the plugin data directory; UV_PYTHON or PYTHON override)",
-    "mcp-camoufox==0.4.5 fetched from PyPI into <plugin data>/venvs/camoufox-native on first start. The plugin never bundles or redistributes it; its licence is FSL-1.1-MIT. CAMOUFOX_NATIVE_COMMAND overrides the executable, and a usable mcp-camoufox on PATH (for example from uv tool install mcp-camoufox==0.4.5) is the fallback when provisioning fails",
+    "mcp-camoufox==0.4.5 fetched from PyPI into <plugin data>/venvs/camoufox-native-<8hex> on first start (one generation per pin set, built beside any older generation). The plugin never bundles or redistributes it; its licence is FSL-1.1-MIT. CAMOUFOX_NATIVE_COMMAND overrides the executable, and a usable mcp-camoufox on PATH (for example from uv tool install mcp-camoufox==0.4.5) is the fallback when provisioning fails",
     "Camoufox browser build 156.0.1-beta.39 (pinned; the app downloads it on the first tool call when it is absent, into Camoufox's machine-wide cache)"
   ],
   "ignoredSettings": [

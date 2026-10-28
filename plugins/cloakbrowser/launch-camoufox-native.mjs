@@ -16,16 +16,23 @@
 // meta-only recovery path can answer the client instead of hanging the
 // handshake.
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { applyLauncherSettings } from './lib/launcher-settings.mjs';
-import { ensurePython, ensureUv, ensureVenv, venvExecutablePath } from './lib/provision.mjs';
+import {
+  ensurePython,
+  ensureUv,
+  ensureVenv,
+  updateProvisioningRecord,
+  venvExecutablePath,
+  writeRuntimeLease,
+} from './lib/provision.mjs';
 
 const PACKAGE_PIN = 'mcp-camoufox==0.4.5';
 const BUILD_PIN = '156.0.1-beta.39';
+const VENV_NAME = 'camoufox-native';
 const LOG_PREFIX = '[camoufox-native]';
 const DEFAULT_PROFILE = 'default';
 const PLUGIN_ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -254,19 +261,19 @@ function explicitCommand(env) {
   return override;
 }
 
-function manifestHash() {
-  try {
-    return createHash('sha256')
-      .update(readFileSync(path.join(PLUGIN_ROOT, 'engines', 'camoufox-native.json'), 'utf8'))
-      .digest('hex');
-  } catch {
-    return null;
-  }
+// The complete venv provisioning request (2.22.0). `extra` carries runtime-
+// determining values only — never the engine manifest, whose descriptions change
+// for documentation reasons; the 2.20.0 regression was exactly that, and
+// `tests/unit/plugin-provision-safety.test.ts` pins this object.
+export function venvRequest(spec) {
+  return { name: VENV_NAME, packages: [spec], extra: { build: BUILD_PIN } };
 }
 
-// Fetch mcp-camoufox from PyPI into <plugin data>/venvs/camoufox-native with the
-// shared uv/Python/venv provisioner. The package is installed from the index,
-// never bundled with the plugin.
+// Fetch mcp-camoufox from PyPI into <plugin data>/venvs/camoufox-native-<8hex> with
+// the shared uv/Python/venv provisioner. The package is installed from the index,
+// never bundled with the plugin. The generation key carries the package pin and the
+// build only: since 2.22.0 the engine manifest is not a rebuild input, so editing a
+// description never rebuilds a runtime.
 async function provisionCommand(env, spec) {
   const data = pluginDataDir(env);
   const uv = await ensureUv({ env, dataDir: data, log });
@@ -276,9 +283,7 @@ async function provisionCommand(env, spec) {
     dataDir: data,
     uv,
     python,
-    name: 'camoufox-native',
-    packages: [spec],
-    extra: { build: BUILD_PIN, manifest: manifestHash() },
+    ...venvRequest(spec),
     log,
   });
   const command = venvExecutablePath(venv.venv, 'mcp-camoufox', process.platform);
@@ -289,7 +294,7 @@ async function provisionCommand(env, spec) {
     );
   }
   log(`provisioned ${spec} from PyPI into ${venv.venv}`);
-  return command;
+  return { command, venv };
 }
 
 function provisioningHelp(env, spec, error) {
@@ -307,18 +312,26 @@ async function main() {
   const spec = resolveOverride(env, 'CAMOUFOX_NATIVE_PACKAGE', PACKAGE_PIN);
 
   let command = explicitCommand(env);
+  let releaseLease = () => {};
   if (command === null) {
     try {
-      command = await provisionCommand(env, spec);
+      const provisioned = await provisionCommand(env, spec);
+      command = provisioned.command;
+      releaseLease = writeRuntimeLease(provisioned.venv.venv);
     } catch (error) {
       log(`could not provision ${spec}: ${error.message}`);
       command = locateOnPath(env);
       if (command === null) {
         fail(provisioningHelp(env, spec, error));
       }
+      // The PATH fallback is existing behaviour and stays; silence was the defect.
+      // The record keeps the provisioning state (refused-held when a running
+      // session owned the runtime) and now names the executable that ran instead.
+      updateProvisioningRecord(pluginDataDir(env), VENV_NAME, { fallback: command });
       log(`falling back to the user-installed ${command}`);
     }
   }
+  process.on('exit', releaseLease);
 
   const profile = env.CAMOUFOX_PROFILE ?? DEFAULT_PROFILE;
   log(

@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { applyLauncherSettings } from './lib/launcher-settings.mjs';
-import { ensureNpmRuntime, resolveNpmPackage } from './lib/provision.mjs';
+import { ensureNpmRuntime, resolveNpmPackage, writeRuntimeLease } from './lib/provision.mjs';
 
 const EMPTY_OPTIONAL_VARS = [
   'PLAYWRIGHT_MCP_USER_DATA_DIR',
@@ -238,6 +238,12 @@ function main() {
     process.stderr.write(`[cloakbrowser] ${error.message}\n`);
     process.exit(1);
   }
+
+  // The runtime lease is the only holder signal this tree has: Node releases an
+  // entry point after reading it, so a file probe cannot tell that a session is
+  // running. A later start refuses to swap the runtime out from under this pid.
+  const releaseLease = writeRuntimeLease(path.join(dataDir(env), 'runtime'));
+  process.on('exit', releaseLease);
 
   const child = spawn(process.execPath, [cli], {
     stdio: 'inherit',

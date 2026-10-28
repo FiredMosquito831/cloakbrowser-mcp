@@ -556,6 +556,42 @@ export function manifestSingleSeat(manifest) {
   return manifest?.singleSeat === true;
 }
 
+// Optional: the Python engines declare where their launcher reports provisioning
+// state, so the broker can answer `browser_capabilities`/`browser_engine_status`
+// with the additive `provisioning` block without naming an engine id (2.22.0).
+// `record` is the venv name the launcher provisions under, and therefore the name
+// of `<plugin data>/config/provisioning/<record>.json`. An engine that declares
+// nothing gains no key, so cloak/playwright/kameleo payloads are unchanged.
+const PROVISIONING_NAME_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+
+function validateProvisioning(manifest) {
+  if (manifest.provisioning === undefined) {
+    return null;
+  }
+  if (!isPlainObject(manifest.provisioning)) {
+    return 'provisioning must be an object';
+  }
+  for (const key of Object.keys(manifest.provisioning)) {
+    if (key !== 'record') {
+      return `provisioning has an unsupported field "${key}"`;
+    }
+  }
+  if (
+    typeof manifest.provisioning.record !== 'string' ||
+    !PROVISIONING_NAME_PATTERN.test(manifest.provisioning.record)
+  ) {
+    return 'provisioning.record must be 1-64 lowercase letters, digits, ".", "_" or "-"';
+  }
+  return null;
+}
+
+// The provisioning record name an engine declares, or null when it provisions
+// nothing the broker can report.
+export function manifestProvisioningRecord(manifest) {
+  const record = manifest?.provisioning?.record;
+  return typeof record === 'string' && PROVISIONING_NAME_PATTERN.test(record) ? record : null;
+}
+
 // Optional boolean: whether this engine can load unpacked Chromium extensions
 // from local directories (2.18.0). The cloak engine sets it: its bridge converts
 // the configured directories into --load-extension and
@@ -855,6 +891,7 @@ export function validateManifest(manifest, expectedId, profileNames, launcherDir
     validateCapabilities,
     validateProfileApplies,
     validateSingleSeat,
+    validateProvisioning,
     validateExtensionPaths,
     validateIdentityCopy,
     validateProfileLock,

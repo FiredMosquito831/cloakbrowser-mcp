@@ -228,7 +228,7 @@ describe('camoufox-native manifest', () => {
     expect(launcher).toContain('ensureUv');
     expect(launcher).toContain('ensurePython');
     expect(launcher).toContain('ensureVenv');
-    expect(launcher).toContain("name: 'camoufox-native'");
+    expect(launcher).toContain("const VENV_NAME = 'camoufox-native'");
     expect(launcher).toContain('CAMOUFOX_NATIVE_COMMAND');
     expect(launcher).toContain("env.CAMOUFOX_DAEMON = 'false'");
     expect(launcher).toContain('mcp-camoufox.exe');

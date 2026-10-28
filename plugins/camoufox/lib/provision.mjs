@@ -16,9 +16,11 @@ import { createHash } from 'node:crypto';
 import {
   accessSync,
   chmodSync,
+  closeSync,
   constants as fsConstants,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readdirSync,
   renameSync,
@@ -29,7 +31,15 @@ import {
 import path from 'node:path';
 import { gunzipSync, inflateRawSync } from 'node:zlib';
 
-export const PROVISION_SCHEMA_VERSION = 1;
+export const PROVISION_SCHEMA_VERSION = 2;
+// The install recipe itself: bump this whenever a change makes the bytes a build
+// produces different for the same pins (a new uv argument, a different site layout,
+// an extra install step). It is the only way a recipe change can reach an existing
+// install, because the marker deliberately hashes nothing else that is not a pin.
+export const RUNTIME_RECIPE_VERSION = 1;
+// Provisioning-state schema, reported by browser_capabilities and
+// browser_engine_status through <plugin data>/config/provisioning/<name>.json.
+export const PROVISIONING_RECORD_SCHEMA_VERSION = 1;
 export const UV_VERSION = '0.13.5';
 // The pinned release is also the floor for any uv the plugin did not download:
 // uv 0.11.x cannot install the managed CPython 3.13.17 ("No download found for
@@ -655,6 +665,212 @@ export function venvExecutablePath(venvDir, name, platform = process.platform) {
   return path.join(venvScriptsDir(venvDir, platform), `${name}${suffix}`);
 }
 
+// --- runtime generations, holder probes and leases (2.22.0) ----------------
+//
+// A venv is addressed by a generation derived from the pins that produced it, so
+// a start that needs a new one builds it beside the old one instead of emptying
+// the tree another session is running from. The probe below says whether a tree
+// is held; it never renames, empties or prunes one. See
+// .orchestration/specs/2026-10-28-inv-provision-safety.md.
+const GENERATION_PATTERN = /^[0-9a-f]{8}$/;
+const LEASE_PATTERN = /^\.lease-(\d+)\.json$/;
+const VENVS_DIRNAME = 'venvs';
+const PROVISIONING_DIRNAME = path.join('config', 'provisioning');
+const HOLDER_MESSAGE_LIMIT = 300;
+// The same codes lib/profile.mjs reads as a live holder: the file exists and the
+// OS refuses to open it for writing. A Windows image that is executing is opened
+// by the loader in a way that refuses every other open with write access
+// (measured EBUSY), while a plain read and statSync both succeed.
+const HOLDER_LIVE_CODES = new Set(['EBUSY', 'EACCES', 'EPERM', 'ETXTBSY']);
+
+// Open for writing and close at once, without writing anything: the only
+// reliable liveness probe on Windows. Never call this a "free" answer for a
+// missing file — a vanished file has nothing to hold.
+export function defaultOpenProbe(file) {
+  let handle;
+  try {
+    handle = openSync(file, 'r+');
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return { held: false };
+    }
+    if (HOLDER_LIVE_CODES.has(error?.code)) {
+      return { held: true, code: error.code };
+    }
+    return { held: false, error: error?.code ?? String(error?.message ?? 'unknown') };
+  }
+  try {
+    closeSync(handle);
+  } catch {
+    // The open already proved nobody holds the file.
+  }
+  return { held: false };
+}
+
+// Is anything running from this tree? Every `Scripts/*.exe` and every `*.dll` at
+// the venv root is probed, because the image a session executes is not always
+// python.exe: camoufox-native spawns Scripts/mcp-camoufox.exe. POSIX has no
+// mandatory locking, so the same open succeeds while a process runs: there the
+// answer is "cannot tell", never "free".
+export function probeVenvHolders(venvDir, options = {}) {
+  const { platform = process.platform, openProbe = defaultOpenProbe, readdir = readdirSyncSafe } = options;
+  if (platform !== 'win32') {
+    return { certain: false, held: false, path: null };
+  }
+  const targets = [];
+  const scripts = venvScriptsDir(venvDir, platform);
+  for (const entry of readdir(scripts)) {
+    if (entry.toLowerCase().endsWith('.exe')) {
+      targets.push(path.join(scripts, entry));
+    }
+  }
+  for (const entry of readdir(venvDir)) {
+    if (entry.toLowerCase().endsWith('.dll')) {
+      targets.push(path.join(venvDir, entry));
+    }
+  }
+  // Sorted so the refusal names the same file on every filesystem.
+  targets.sort();
+  for (const target of targets) {
+    const result = openProbe(target, 'r+');
+    if (result?.held === true) {
+      return { certain: true, held: true, path: target, code: result.code ?? null };
+    }
+  }
+  return { certain: true, held: false, path: null };
+}
+
+function livePid(pid) {
+  if (!Number.isInteger(pid) || pid < 1) {
+    return true;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code !== 'ESRCH';
+  }
+}
+
+// A lease is the only way a refusal can name a process: the file probe proves a
+// tree is held but cannot say by whom, and the plugin starts no shell to ask. A
+// live lease is reported; a lease whose process is gone is stale and ignored.
+// A lease nobody can read is treated as held, because the alternative is to
+// assume a session that is not there.
+export function runtimeLease(target, options = {}) {
+  const { pidAlive = livePid, readdir = readdirSyncSafe } = options;
+  for (const entry of readdir(target)) {
+    const match = LEASE_PATTERN.exec(entry);
+    if (match === null) {
+      continue;
+    }
+    const file = path.join(target, entry);
+    const record = readJson(file);
+    if (record === null) {
+      return { path: file, pid: null, source: 'unknown' };
+    }
+    const pid = Number.isInteger(record.pid) ? record.pid : Number(match[1]);
+    if (pidAlive(pid)) {
+      return { path: file, pid: Number.isInteger(pid) ? pid : null, source: 'lease' };
+    }
+  }
+  return null;
+}
+
+// Write this process's lease into a runtime tree and return the release. A lease
+// that cannot be written is not fatal: it only costs the refusal message its pid.
+export function writeRuntimeLease(target, options = {}) {
+  const { pid = process.pid } = options;
+  const file = path.join(target, `.lease-${pid}.json`);
+  try {
+    writeFileSync(file, `${JSON.stringify({ pid })}\n`);
+  } catch {
+    return () => {};
+  }
+  return () => {
+    try {
+      rmSync(file);
+    } catch {
+      // A leftover lease of a dead pid is ignored by every reader.
+    }
+  };
+}
+
+export function venvGenerationNames(dataDir, name, readdir = readdirSyncSafe) {
+  const found = [];
+  for (const entry of readdir(path.join(dataDir, VENVS_DIRNAME))) {
+    if (entry === name) {
+      found.push(entry);
+      continue;
+    }
+    if (entry.startsWith(`${name}-`) && GENERATION_PATTERN.test(entry.slice(name.length + 1))) {
+      found.push(entry);
+    }
+  }
+  return found.sort();
+}
+
+export function provisioningRecordPath(dataDir, name) {
+  return path.join(dataDir, PROVISIONING_DIRNAME, `${name}.json`);
+}
+
+export function readProvisioningRecord(dataDir, name) {
+  return readJson(provisioningRecordPath(dataDir, name));
+}
+
+// The record the broker reports as `provisioning`. Written by the provisioner, so
+// a failure is recorded before it is thrown, and rewritten on every start so it
+// always describes the latest one. A record that cannot be written is not fatal:
+// the start it describes is unaffected, and the broker simply reports nothing.
+export function writeProvisioningRecord(dataDir, name, record) {
+  const file = provisioningRecordPath(dataDir, name);
+  try {
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(
+      file,
+      `${JSON.stringify({ schemaVersion: PROVISIONING_RECORD_SCHEMA_VERSION, engine: name, ...record }, null, 2)}\n`,
+    );
+    return file;
+  } catch {
+    return null;
+  }
+}
+
+export function updateProvisioningRecord(dataDir, name, patch) {
+  const current = readProvisioningRecord(dataDir, name);
+  if (current === null) {
+    return null;
+  }
+  return writeProvisioningRecord(dataDir, name, { ...current, ...patch });
+}
+
+// One line, because the broker forwards only the launcher's last stderr line and
+// truncates it to 300 characters: the path, the pid when a lease names one, the
+// fix and the fact that nothing was changed all have to fit.
+function holderRefusalMessage(name, venvDir, probe, lease) {
+  const file = probe?.path === null || probe?.path === undefined ? '' : ` (${path.basename(probe.path)})`;
+  const leasePath = lease?.source === 'unknown' && lease?.path ? lease.path : null;
+  const who = lease?.pid === null || lease?.pid === undefined ? '' : ` by pid ${lease.pid}`;
+  const fix =
+    leasePath === null
+      ? '; close the Claude Code session using it and restart. Nothing was changed.'
+      : `; close the Claude Code session using it and restart, or delete ${path.basename(leasePath)} in it if nothing runs from it. Nothing was changed.`;
+  const full = `the ${name} runtime ${venvDir} is in use${who}${file}${fix}`;
+  if (full.length <= HOLDER_MESSAGE_LIMIT) {
+    return full;
+  }
+  const short = `the ${name} runtime ${path.basename(venvDir)} is in use${who}${file}${fix}`;
+  return short.length <= HOLDER_MESSAGE_LIMIT ? short : `${short.slice(0, HOLDER_MESSAGE_LIMIT - 3)}...`;
+}
+
+function holderRemedy(name, probe, lease) {
+  const who = lease?.pid === null || lease?.pid === undefined ? '' : ` (pid ${lease.pid})`;
+  return (
+    `Close the Claude Code session that is running the ${name} runtime${who}, then restart Claude Code. ` +
+    'The existing runtime was left untouched.'
+  );
+}
+
 export function normalizePackageName(name) {
   return name
     .trim()
@@ -735,9 +951,21 @@ function venvRebuildReason(binary, markerPath, expected, hash, packages, platfor
   return null;
 }
 
-// Create or refresh the named venv under <data>/venvs/<name>. The JSON marker
-// records the uv version, the Python version, the package pins and a hash over
-// all of them; a matching marker plus an intact package set means reuse.
+// Create or refresh a venv *generation* under <data>/venvs/<name>-<8hex>.
+//
+// The generation is derived from the runtime-determining inputs only: the package
+// pins (wrapper spec plus stack), the build, the uv version, the Python version
+// and RUNTIME_RECIPE_VERSION. Nothing else may feed it — a manifest description
+// edit must never rebuild a several-hundred-megabyte runtime, which is exactly the
+// regression 2.20.0 shipped. The marker records those same inputs and its hash is
+// the generation, so the directory name and the marker can never disagree.
+//
+// The order is what makes it safe: probe, build into a temporary tree beside the
+// target, write the marker last *inside* the new tree, then one rename. Nothing is
+// ever removed before its replacement exists and is marked, and a tree that is in
+// use is never renamed, emptied or pruned. A start that needs a different
+// generation leaves the running one alone; the previous generations are kept and
+// reported, never pruned (a later release adds --prune).
 export function ensureVenv(options = {}) {
   const {
     env = process.env,
@@ -750,6 +978,10 @@ export function ensureVenv(options = {}) {
     log = () => {},
     run = defaultRun,
     platform = process.platform,
+    rename = renameSync,
+    remove = rmSync,
+    openProbe = defaultOpenProbe,
+    pid = process.pid,
   } = options;
   if (nonEmpty(dataDir) === null) {
     throw new Error('ensureVenv needs the plugin data directory.');
@@ -762,11 +994,9 @@ export function ensureVenv(options = {}) {
   if (!Array.isArray(packages) || packages.length === 0) {
     throw new Error(`ensureVenv needs at least one pinned package for the "${name}" venv.`);
   }
-  const venvDir = path.join(dataDir, 'venvs', name);
-  const paths = venvPaths(venvDir, platform);
-  const markerPath = path.join(venvDir, '.provision.json');
   const expected = {
     schemaVersion: PROVISION_SCHEMA_VERSION,
+    recipe: RUNTIME_RECIPE_VERSION,
     name,
     uv: uv.version,
     python: python.version,
@@ -774,42 +1004,234 @@ export function ensureVenv(options = {}) {
     ...(extra === null ? {} : { extra }),
   };
   const hash = hashJson(expected);
-  const reason = venvRebuildReason(
-    paths.python,
-    markerPath,
-    { ...expected, venv: venvDir },
-    hash,
-    packages,
-    platform,
-  );
+  const generation = hash.slice(0, 8);
+  const venvsRoot = path.join(dataDir, VENVS_DIRNAME);
+  const venvDir = path.join(venvsRoot, `${name}-${generation}`);
+  const paths = venvPaths(venvDir, platform);
+  const markerPath = path.join(venvDir, '.provision.json');
+  const probeName = platform === 'win32' ? 'windows' : 'cannot-tell';
+  const keptGenerations = () =>
+    venvGenerationNames(dataDir, name).filter((entry) => entry !== `${name}-${generation}`);
+  const reusable = () =>
+    venvRebuildReason(paths.python, markerPath, { ...expected, venv: venvDir }, hash, packages, platform);
+
+  const record = (state, reason, remedy, holder) =>
+    writeProvisioningRecord(dataDir, name, {
+      state,
+      venv: venvDir,
+      generation,
+      holderProbe: probeName,
+      holder: holder ?? null,
+      keptGenerations: keptGenerations(),
+      reason,
+      remedy,
+    });
+
+  const reason = reusable();
   if (reason === null) {
     log(`reusing the plugin-managed venv ${venvDir} (the marker matches)`);
-    return { ...paths, marker: markerPath, packages: expected.packages, reused: true, hash };
+    record('reused', null, null, null);
+    return {
+      ...paths,
+      marker: markerPath,
+      packages: expected.packages,
+      reused: true,
+      hash,
+      generation,
+      keptGenerations: keptGenerations(),
+      state: 'reused',
+    };
   }
 
   log(`provisioning the plugin-managed venv ${venvDir} (${reason}; one-time)`);
+  mkdirSync(venvsRoot, { recursive: true });
+  const temporary = path.join(venvsRoot, `.t-${name}-${generation}-${pid}`);
+  const temporaryPaths = venvPaths(temporary, platform);
+  try {
+    remove(temporary, { recursive: true, force: true });
+  } catch {
+    // A leftover staging tree of this pid: uv --clear --force empties it anyway.
+  }
+
+  const finish = (state, adoptedReason, holder) => {
+    record(state, adoptedReason, null, holder ?? null);
+    return {
+      ...paths,
+      marker: markerPath,
+      packages: expected.packages,
+      reused: state !== 'built',
+      hash,
+      generation,
+      keptGenerations: keptGenerations(),
+      state,
+    };
+  };
+  const refuse = (probe) => {
+    const lease = runtimeLease(venvDir);
+    const message = holderRefusalMessage(name, venvDir, probe, lease);
+    record('refused-held', message, holderRemedy(name, probe, lease), {
+      path: probe.path,
+      pid: lease?.pid ?? null,
+      source: lease?.pid == null ? 'unknown' : 'lease',
+    });
+    return new Error(message);
+  };
+
+  // Everything below happens inside the staging tree. A failure removes the
+  // staging tree and leaves every existing generation exactly as it was.
+  const discardTemp = () => {
+    try {
+      remove(temporary, { recursive: true, force: true });
+    } catch {
+      // An unremovable staging tree is inert: it is adopted only when it carries a
+      // valid marker and its process is gone, which a failure here cannot fake.
+    }
+  };
+
+  // A crash between writing the marker and the rename leaves a complete staging
+  // tree whose process is gone. The marker is written last, so a marked staging
+  // tree is complete by construction: finish that rename instead of rebuilding.
+  for (const entry of readdirSyncSafe(venvsRoot)) {
+    const prefix = `.t-${name}-${generation}-`;
+    if (!entry.startsWith(prefix)) {
+      continue;
+    }
+    const stagingPid = Number(entry.slice(prefix.length));
+    if (!Number.isInteger(stagingPid) || stagingPid === pid || livePid(stagingPid)) {
+      continue;
+    }
+    const stagingDir = path.join(venvsRoot, entry);
+    const stagingReason = venvRebuildReason(
+      venvPaths(stagingDir, platform).python,
+      path.join(stagingDir, '.provision.json'),
+      { ...expected, venv: stagingDir },
+      hash,
+      packages,
+      platform,
+    );
+    if (stagingReason !== null) {
+      continue;
+    }
+    try {
+      rename(stagingDir, venvDir);
+      log(`completed an interrupted build of ${venvDir} from ${entry}`);
+      return finish('reused', 'completed an interrupted build', null);
+    } catch {
+      // Another start got there first, or the tree went away: build as usual.
+      break;
+    }
+  }
+
   const uvEnv = uvEnvironment(env, dataDir);
-  const venvArgs = ['venv', '--python', python.python, '--clear', '--force', venvDir];
+  const venvArgs = ['venv', '--python', python.python, '--clear', '--force', temporary];
   if (python.source === 'managed') {
     venvArgs.splice(3, 0, '--no-python-downloads');
   }
   const created = run(uv.command, venvArgs, { env: uvEnv });
   if (created === null || created.status !== 0) {
-    throw new Error(`uv venv failed for ${venvDir}: ${stderrTail(created?.stderr)}`);
+    discardTemp();
+    const message = `uv venv failed for ${venvDir}: ${stderrTail(created?.stderr)}`;
+    record('failed', message, 'Check the disk and the network, then restart Claude Code to retry.', null);
+    throw new Error(message);
   }
-  const install = run(uv.command, ['pip', 'install', '--python', paths.python, ...packages], { env: uvEnv });
+  const install = run(uv.command, ['pip', 'install', '--python', temporaryPaths.python, ...packages], {
+    env: uvEnv,
+  });
   if (install === null || install.status !== 0) {
-    throw new Error(`uv pip install failed for ${packages.join(', ')}: ${stderrTail(install?.stderr)}`);
+    discardTemp();
+    const message = `uv pip install failed for ${packages.join(', ')}: ${stderrTail(install?.stderr)}`;
+    record('failed', message, 'Check the network, then restart Claude Code to retry.', null);
+    throw new Error(message);
   }
-  const missing = missingPackages(venvDir, packages, platform);
+  const missing = missingPackages(temporary, packages, platform);
   if (missing.length > 0) {
-    throw new Error(
+    discardTemp();
+    const message =
       `the provisioned venv ${venvDir} does not contain ${missing.join(', ')}; ` +
-        'refusing to start a mismatched runtime.',
-    );
+      'refusing to start a mismatched runtime.';
+    record('failed', message, 'Restart Claude Code to rebuild the runtime.', null);
+    throw new Error(message);
   }
-  writeFileSync(markerPath, `${JSON.stringify({ ...expected, hash }, null, 2)}\n`);
-  return { ...paths, marker: markerPath, packages: expected.packages, reused: false, hash };
+  // The commit point of the build, and the last byte written into the new tree. It
+  // lives inside the tree it describes: a marker outside it could survive a crash
+  // and make venvRebuildReason trust bytes that are not there.
+  writeFileSync(
+    path.join(temporary, '.provision.json'),
+    `${JSON.stringify({ ...expected, hash }, null, 2)}\n`,
+  );
+
+  // The destination name is derived from the pins, so the only trees that can be
+  // there are one another start finished first or one a failed attempt left
+  // half-built. Both are handled here; neither is ever removed before the new tree
+  // is in place.
+  let aside = null;
+  if (existsSync(venvDir)) {
+    if (reusable() === null) {
+      log(`another start completed the ${name} generation ${generation} first; using it`);
+      discardTemp();
+      return finish('reused', 'another start completed this generation first', null);
+    }
+    const probe = probeVenvHolders(venvDir, { platform, openProbe });
+    if (!probe.certain) {
+      log(
+        `cannot tell whether ${venvDir} is in use: this platform has no mandatory file locking, ` +
+          'so the generation path is what protects a running session',
+      );
+    }
+    if (probe.held) {
+      discardTemp();
+      throw refuse(probe);
+    }
+    aside = `${venvDir}.bad-${pid}`;
+    try {
+      rename(venvDir, aside);
+    } catch (error) {
+      discardTemp();
+      const message =
+        `cannot move the unusable ${name} runtime ${venvDir} aside ` +
+        `(${error?.code ?? error?.message ?? 'unknown error'}); it is left in place. ` +
+        'Restart Claude Code to retry.';
+      record('failed', message, 'Restart Claude Code to retry.', null);
+      throw new Error(message);
+    }
+  }
+  try {
+    rename(temporary, venvDir);
+  } catch (error) {
+    let restored = true;
+    if (aside !== null) {
+      try {
+        rename(aside, venvDir);
+      } catch {
+        restored = false;
+      }
+    }
+    if (reusable() === null) {
+      discardTemp();
+      return finish('reused', 'another start completed this generation first', null);
+    }
+    discardTemp();
+    const kept =
+      aside !== null && !restored
+        ? `; the complete previous tree is at ${aside}`
+        : '; the previous generation was kept';
+    const message =
+      `cannot move the new ${name} runtime into ${venvDir} ` +
+      `(${error?.code ?? error?.message ?? 'unknown error'})${kept}. Restart Claude Code to retry.`;
+    record('failed', message, 'Restart Claude Code to retry.', null);
+    throw new Error(message);
+  }
+  if (aside !== null) {
+    try {
+      remove(aside, { recursive: true, force: true });
+    } catch (error) {
+      log(
+        `the unusable tree ${aside} could not be removed (${error?.code ?? error?.message}); it is left in place`,
+      );
+    }
+  }
+  log(`provisioned the plugin-managed venv ${venvDir}`);
+  return finish('built', null, null);
 }
 
 export function parsePackageSpec(spec) {
@@ -830,11 +1252,11 @@ export function resolveNpmPackage(env, fallback = DEFAULT_NPM_PACKAGE) {
   return nonEmpty(value) ?? fallback;
 }
 
-function npmRuntimeHealthy(dir, marker, desired, locate) {
-  const cli = locate(dir, parsePackageSpec(desired.package).name);
-  if (cli === null) {
-    return false;
-  }
+// The identity a runtime tree must carry: this plugin's marker for the pinned set
+// and the three driver packages actually present under those names. The caller's
+// own entry point is deliberately not part of it — that check stays with the
+// caller after the swap, with its own message.
+function npmIdentityHealthy(dir, marker, desired) {
   const current = readJson(marker);
   if (
     current === null ||
@@ -858,10 +1280,56 @@ function npmRuntimeHealthy(dir, marker, desired, locate) {
   );
 }
 
+function npmRuntimeHealthy(dir, marker, desired, locate) {
+  const cli = locate(dir, parsePackageSpec(desired.package).name);
+  if (cli === null) {
+    return false;
+  }
+  return npmIdentityHealthy(dir, marker, desired);
+}
+
+const NPM_LEFTOVER_PATTERN = /^\.(?:rt|old)-(\d+)$/;
+
+function npmRuntimeIsHealthy(dir, desired, locate) {
+  return npmRuntimeHealthy(dir, path.join(dir, '.installed.json'), desired, locate);
+}
+
+function npmLeftovers(dataDir, readdir = readdirSyncSafe) {
+  const found = [];
+  for (const entry of readdir(dataDir)) {
+    const match = NPM_LEFTOVER_PATTERN.exec(entry);
+    if (match !== null) {
+      found.push({ dir: path.join(dataDir, entry), pid: Number(match[1]), name: entry });
+    }
+  }
+  return found;
+}
+
+function npmHolderMessage(dir, lease) {
+  const who =
+    lease?.pid === null || lease?.pid === undefined
+      ? ''
+      : ` by another Claude Code session (pid ${lease.pid})`;
+  const fix =
+    lease?.source === 'unknown' && lease?.path
+      ? `; delete ${path.basename(lease.path)} in it if nothing runs from it, then restart Claude Code. The existing runtime was left untouched.`
+      : '; close that Claude Code session and restart. The existing runtime was left untouched.';
+  const message = `the plugin runtime ${dir} is in use${who}${fix}`;
+  return message.length <= HOLDER_MESSAGE_LIMIT
+    ? message
+    : `${message.slice(0, HOLDER_MESSAGE_LIMIT - 3)}...`;
+}
+
 // The npm runtime install shared by launch.mjs and launch-kameleo.mjs. Its
-// package identity, package.json bytes, npm arguments, clean-reinstall rule and
-// marker bytes are unchanged from the 1.x launcher; only the caller-provided
-// entry-point lookup differs between the two launchers.
+// package identity, package.json bytes, npm arguments and marker bytes are
+// unchanged from 1.x; only the caller-provided entry-point lookup differs.
+//
+// The shape is now the safe one: a session lease is the holder signal (a file
+// probe cannot see a running Node session, because Node releases an entry point
+// after reading it and the delete would silently succeed), the replacement is
+// built beside the runtime and verified there, and only then are two renames
+// performed with a restore on failure. A failed install — an offline update is
+// the routine case — leaves the previous runtime exactly as it was.
 export function ensureNpmRuntime(options = {}) {
   const {
     env = process.env,
@@ -870,6 +1338,10 @@ export function ensureNpmRuntime(options = {}) {
     locate,
     missingAfterInstallError = null,
     run = defaultRun,
+    rename = renameSync,
+    remove = rmSync,
+    pid = process.pid,
+    pidAlive = livePid,
   } = options;
   if (nonEmpty(dataDir) === null) {
     throw new Error('ensureNpmRuntime needs the plugin data directory.');
@@ -881,17 +1353,72 @@ export function ensureNpmRuntime(options = {}) {
   const dir = path.join(dataDir, 'runtime');
   const marker = path.join(dir, '.installed.json');
   const desired = { package: spec, engine: NPM_ENGINE_WRAPPER_PIN, driver: NPM_DRIVER_PIN };
-  if (npmRuntimeHealthy(dir, marker, desired, locate)) {
+
+  const pruneLeftovers = () => {
+    for (const leftover of npmLeftovers(dataDir)) {
+      if (pidAlive(leftover.pid) || runtimeLease(leftover.dir, { pidAlive }) !== null) {
+        continue;
+      }
+      try {
+        remove(leftover.dir, { recursive: true, force: true });
+      } catch {
+        // Left for a later start; a leftover tree is never adopted silently.
+      }
+    }
+  };
+
+  if (npmRuntimeIsHealthy(dir, desired, locate)) {
+    pruneLeftovers();
     return { dir, marker, cli: locate(dir, name), reinstalled: false };
   }
 
-  // A previous install may be a mixed tree (stock playwright-core with a nested
-  // patchright). npm will not fix that in place, so start clean.
-  rmSync(path.join(dir, 'node_modules'), { recursive: true, force: true });
-  rmSync(path.join(dir, 'package-lock.json'), { force: true });
-  mkdirSync(dir, { recursive: true });
+  // A crash between the two renames, or a swap whose restore failed, leaves the
+  // complete tree beside the runtime rather than at it. Adopt it before building:
+  // this is what keeps an offline machine working after an interrupted update.
+  if (!existsSync(dir)) {
+    const leftovers = npmLeftovers(dataDir);
+    const ordered = [
+      ...leftovers.filter((entry) => entry.name.startsWith('.rt-')),
+      ...leftovers.filter((entry) => entry.name.startsWith('.old-')),
+    ];
+    for (const candidate of ordered) {
+      // A leftover whose process is still alive may be the tree a live session is
+      // running from: move it back is a rename under a running process, and the
+      // lease inside it is the proof. Never adopt it.
+      if (pidAlive(candidate.pid) || runtimeLease(candidate.dir, { pidAlive }) !== null) {
+        continue;
+      }
+      if (!npmRuntimeIsHealthy(candidate.dir, desired, locate)) {
+        continue;
+      }
+      try {
+        rename(candidate.dir, dir);
+        return { dir, marker, cli: locate(dir, name), reinstalled: false, adopted: candidate.name };
+      } catch {
+        // Another start got there first; the health check below decides.
+        if (npmRuntimeIsHealthy(dir, desired, locate)) {
+          return { dir, marker, cli: locate(dir, name), reinstalled: false };
+        }
+      }
+    }
+  }
+
+  const holder = runtimeLease(dir, { pidAlive });
+  if (holder !== null) {
+    throw new Error(npmHolderMessage(dir, holder));
+  }
+
+  // Build the whole replacement beside the runtime. The name is short on purpose:
+  // every path inside node_modules gains its length, and this tree is deep.
+  const temporary = path.join(dataDir, `.rt-${pid}`);
+  try {
+    remove(temporary, { recursive: true, force: true });
+  } catch {
+    // A staging tree of this exact pid: the empty tree below replaces it anyway.
+  }
+  mkdirSync(temporary, { recursive: true });
   writeFileSync(
-    path.join(dir, 'package.json'),
+    path.join(temporary, 'package.json'),
     JSON.stringify(
       {
         private: true,
@@ -909,19 +1436,74 @@ export function ensureNpmRuntime(options = {}) {
 
   const isWindows = process.platform === 'win32';
   const install = run(isWindows ? 'npm.cmd' : 'npm', ['install', '--omit=dev', '--no-audit', '--no-fund'], {
-    cwd: dir,
+    cwd: temporary,
     stdio: ['ignore', 'ignore', 'inherit'],
     shell: isWindows,
     encoding: 'utf8',
     windowsHide: true,
   });
+  const discardTemporary = () => {
+    try {
+      remove(temporary, { recursive: true, force: true });
+    } catch {
+      // Never adopted unless it is fully marked and healthy; a later start prunes it.
+    }
+  };
   if (install === null || install.status !== 0) {
+    discardTemporary();
     throw new Error(
-      `npm install failed for ${spec} in ${dir} (exit ${install === null ? 'unknown' : install.status})`,
+      `npm install failed for ${spec} in ${dir} (exit ${install === null ? 'unknown' : install.status}). ` +
+        'The previous runtime was left in place.',
     );
   }
 
-  writeFileSync(marker, JSON.stringify(desired) + '\n');
+  // The marker is the last byte written into the new tree, and the identity check
+  // reads the tree it is about to replace the old one with.
+  writeFileSync(path.join(temporary, '.installed.json'), JSON.stringify(desired) + '\n');
+  if (!npmIdentityHealthy(temporary, path.join(temporary, '.installed.json'), desired)) {
+    discardTemporary();
+    throw new Error(
+      `the npm runtime built in ${temporary} is not the pinned set (${spec}, ${NPM_DRIVER_PIN}); ` +
+        'the previous runtime was left in place.',
+    );
+  }
+
+  let old = null;
+  if (existsSync(dir)) {
+    old = path.join(dataDir, `.old-${pid}`);
+    try {
+      remove(old, { recursive: true, force: true });
+      rename(dir, old);
+    } catch (error) {
+      discardTemporary();
+      throw new Error(
+        `cannot move the existing plugin runtime ${dir} aside (${error?.code ?? error?.message ?? 'unknown error'}); ` +
+          'it is left in place. Restart Claude Code to retry.',
+      );
+    }
+  }
+  try {
+    rename(temporary, dir);
+  } catch (error) {
+    if (old !== null) {
+      try {
+        rename(old, dir);
+      } catch {
+        // Both trees stay on disk; the message below names them.
+      }
+    }
+    if (npmRuntimeIsHealthy(dir, desired, locate)) {
+      discardTemporary();
+      return { dir, marker, cli: locate(dir, name), reinstalled: false };
+    }
+    discardTemporary();
+    throw new Error(
+      `cannot move the new plugin runtime into ${dir} (${error?.code ?? error?.message ?? 'unknown error'})` +
+        `${old === null ? '' : `; the complete trees are at ${dir} and ${old}`}. Restart Claude Code to retry.`,
+    );
+  }
+  // The old tree is deleted only on a later successful, unheld start, so an
+  // interrupted start always leaves a complete runtime somewhere.
   const cli = locate(dir, name);
   if (cli === null && missingAfterInstallError !== null) {
     throw new Error(missingAfterInstallError(dir, spec));
