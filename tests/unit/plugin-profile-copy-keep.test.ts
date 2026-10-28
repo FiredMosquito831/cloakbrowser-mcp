@@ -138,6 +138,7 @@ interface BrokerOptions {
   account?: string;
   profileDir?: string;
   engine?: string;
+  contents?: string;
 }
 
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
@@ -251,6 +252,7 @@ function startBroker(options: BrokerOptions): BrokerSession {
   for (const name of [
     'STEALTH_ACCOUNT',
     'STEALTH_PROFILE_ISOLATION',
+    'STEALTH_COPY_CONTENTS',
     'PLAYWRIGHT_MCP_USER_DATA_DIR',
     'PLAYWRIGHT_MCP_ISOLATED',
     'PLAYWRIGHT_MCP_PROXY_SERVER',
@@ -258,6 +260,7 @@ function startBroker(options: BrokerOptions): BrokerSession {
     delete childEnv[name];
   }
   if (options.account !== undefined) childEnv.STEALTH_ACCOUNT = options.account;
+  if (options.contents !== undefined) childEnv.STEALTH_COPY_CONTENTS = options.contents;
   if (options.isolation !== undefined) childEnv.STEALTH_PROFILE_ISOLATION = options.isolation;
   if (options.profileDir !== undefined) childEnv.PLAYWRIGHT_MCP_USER_DATA_DIR = options.profileDir;
   const child = spawn(process.execPath, [brokerPath], {
@@ -932,6 +935,63 @@ describe('broker copy-keep mode', () => {
     await lister.close();
     // The lister ran in copy mode: it never wrote the swapped base.
     expect(hashTree(base)).toBe(baseHashAfterSwap);
+  });
+
+  it('clamps copy_contents=identity to full, so the base it replaces keeps its data (2.21.0)', async () => {
+    const dataDir = tempRoot('keep-clamp-');
+    createRuntime(dataDir);
+    const base = seedBaseProfile(dataDir, 'cloak', 'keepbase');
+    // A class of file only the full tree carries: the identity tier drops IndexedDB.
+    writeFile(path.join(base, 'Default', 'IndexedDB', 'origin.indexeddb.leveldb', '000003.log'), 'IDB-BASE');
+
+    const session = startBroker({
+      dataDir,
+      isolation: 'copy-keep',
+      account: 'keepbase',
+      contents: 'identity',
+    });
+    await initialize(session);
+    const caps = await capabilities(session);
+    // The setting asks for identity; the session copies the full tree and says so,
+    // because this copy becomes the base on a clean close.
+    expect(caps.copyContents).toBe('full');
+    expect(caps.copyContentsSource).toBe('clamped');
+    expect(String(caps.copyContentsNote)).toContain('replaces the base profile');
+    const copy = caps.profileCopy as Record<string, unknown>;
+    expect(copy.scope).toBe('full');
+    const env = await effectiveEnvironment(session);
+    const sessionDir = path.resolve(String(env.profileDir));
+    // The session copy carries the bulk the identity tier would have dropped.
+    expect(
+      existsSync(path.join(sessionDir, 'Default', 'IndexedDB', 'origin.indexeddb.leveldb', '000003.log')),
+    ).toBe(true);
+
+    session.endInput();
+    expect(await session.exited).toBe(0);
+    expect(await waitFor(() => !existsSync(sessionDir))).toBe(true);
+
+    // After the swap the base is the session copy: still the full tree, with the
+    // IndexedDB file that a thin identity copy would have destroyed.
+    expect(
+      readFileSync(path.join(base, 'Default', 'IndexedDB', 'origin.indexeddb.leveldb', '000003.log'), 'utf8'),
+    ).toBe('IDB-BASE');
+    expect(readFileSync(path.join(base, 'Default', 'Network', 'Cookies'), 'utf8')).toBe('COOKIE-BASE');
+    const record = profile.readSwapRecord('cloak', dataDir);
+    expect(record).toMatchObject({ state: 'swapped', baseDir: base });
+    if (record === null) {
+      throw new Error('the clean close wrote no swap record');
+    }
+    expect(
+      existsSync(
+        path.join(
+          String(record.previousDir),
+          'Default',
+          'IndexedDB',
+          'origin.indexeddb.leveldb',
+          '000003.log',
+        ),
+      ),
+    ).toBe(true);
   });
 
   it('performs no swap on a hard kill: base identical, session tree retained', async () => {

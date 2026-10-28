@@ -26,6 +26,9 @@ interface CopySummary {
   to: string;
   sourceDir: string;
   targetDir: string;
+  // 2.21.0: the effective tier and where it came from (option, setting, default).
+  contents?: string;
+  contentsSource?: string;
   copied: { files: number; directories: number; bytes: number };
   excluded: {
     entries: number;

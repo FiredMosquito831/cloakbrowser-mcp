@@ -298,9 +298,9 @@ describe('cold surface under the default policy (2.21.0)', () => {
     expect(environment.profileDir).toBe(copy.sessionDir);
     // The base was read, never written; the copy carries its cookies.
     expect(readFileSync(path.join(base, 'Default', 'Cookies'), 'utf8')).toBe('cookie-bytes');
-    expect(
-      readFileSync(path.join(String(copy.sessionDir), 'Default', 'Cookies'), 'utf8'),
-    ).toBe('cookie-bytes');
+    expect(readFileSync(path.join(String(copy.sessionDir), 'Default', 'Cookies'), 'utf8')).toBe(
+      'cookie-bytes',
+    );
     // The surface is cached now, so the next start of this configuration is lazy.
     expect(existsSync(path.join(dataDir, 'cache', 'cloak'))).toBe(true);
     expect(session.stderr()).toContain('cold start: no cached tool list exists');

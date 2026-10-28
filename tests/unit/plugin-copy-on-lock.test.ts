@@ -731,6 +731,60 @@ describe('broker on_locked=copy', () => {
 });
 
 describe('broker seat gate and the copy modes', () => {
+  it('re-checks the seat when the copy is actually taken, and holds instead (2.21.0)', async () => {
+    // The preflight sees a free seat and plans the copy; the copy itself is taken
+    // at the first browser action. Another session can open its browser in that
+    // window, so the seat is read AGAIN before anything is copied: a lazy copy
+    // must never start a second CloakBrowser.
+    const root = tempRoot('seat-recheck-');
+    const dataDir = createRuntime(root, 'cloak');
+    const base = path.join(dataDir, 'profiles', 'default');
+    seedBase(base);
+    const plugin = createSeatPlugin(root);
+    // A warm cache: the copy stays deferred, so the take happens on a tool call.
+    const warm = startBroker({ dataDir, engine: 'cloak', pluginDir: plugin });
+    await initialize(warm);
+    await warm.request('tools/list', {});
+    await warm.close();
+    expect(existsSync(path.join(dataDir, 'cache', 'cloak'))).toBe(true);
+
+    writeJson(path.join(base, '.cloakbrowser-mcp-profile.lock'), {
+      pid: process.pid,
+      createdAt: '2026-10-28T09:00:00.000Z',
+      userDataDir: base,
+    });
+    const session = startBroker({
+      dataDir,
+      engine: 'cloak',
+      pluginDir: plugin,
+      onLocked: 'copy',
+      lifetime: 'browser',
+    });
+    await initialize(session);
+    // The cache answers tools/list; nothing is copied while the seat is free.
+    expect(await toolNames(session)).toEqual([...STUB_TOOLS, ...META_TOOLS]);
+    expect((await capabilities(session)).profileCopy).toBeUndefined();
+    expect(existsSync(path.join(dataDir, 'profiles', 'cloak', '.sessions'))).toBe(false);
+
+    // The other session opens its browser: the one seat is taken now.
+    const seatDir = path.join(dataDir, 'profiles', 'cloak', 'default-2');
+    mkdirSync(seatDir, { recursive: true });
+    writeFileSync(
+      path.join(seatDir, 'parent.lock'),
+      `${process.pid}
+`,
+    );
+
+    const call = await callTool(session, 'browser_navigate', { url: 'data:text/html,x' });
+    expect(call.result?.isError).toBe(true);
+    const caps = await capabilities(session);
+    expect(caps.hold).toMatchObject({ state: 'waiting', seat: { seatFree: false } });
+    expect(caps.profileCopy).toBeUndefined();
+    // Nothing was copied and no second browser was started.
+    expect(existsSync(path.join(dataDir, 'profiles', 'cloak', '.sessions'))).toBe(false);
+    expect(session.stderr()).toContain('seat limit for this licence is reached');
+  });
+
   it('holds instead of copying when the only seat is taken, and copies when it frees', async () => {
     const root = tempRoot('seat-gate-');
     const dataDir = createRuntime(root, 'cloak');

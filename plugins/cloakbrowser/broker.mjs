@@ -5423,10 +5423,7 @@ function handleClientRequest(message, rawLine) {
       if (!sessionCopy.ok) {
         // A copy refused because no browser seat is free is the 2.16.0 hold, and
         // it answers with the hold sentence that names the owner and the retry.
-        sendToolError(
-          id,
-          sessionCopy.held === true ? holdToolError(name) : pendingCopyToolError(name),
-        );
+        sendToolError(id, sessionCopy.held === true ? holdToolError(name) : pendingCopyToolError(name));
         return;
       }
     }
