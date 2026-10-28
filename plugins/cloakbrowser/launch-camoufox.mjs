@@ -167,11 +167,16 @@ export function venvPackages(spec) {
   return [spec, ...PYTHON_STACK_PINS];
 }
 
-// Only runtime-determining values belong here (2.22.0): the marker hash becomes
-// the venv generation, so anything else — in particular the engine manifest,
-// whose descriptions change for documentation reasons — would rebuild a
+// Only runtime-determining values belong in `extra` (2.22.0): the marker hash
+// becomes the venv generation, so anything else — in particular the engine
+// manifest, whose descriptions change for documentation reasons — would rebuild a
 // several-hundred-megabyte runtime for no behavioural reason. That was 2.20.0's
-// regression; `tests/unit/plugin-provision.test.ts` pins it.
+// regression, and `venvRequest` is its pin: a manifest hash re-added here changes
+// this object and fails `tests/unit/plugin-provision-safety.test.ts`.
+export function venvRequest(spec, build) {
+  return { name: 'camoufox', packages: venvPackages(spec), extra: { build } };
+}
+
 function ensureRuntime(env, spec, build) {
   const data = dataDir(env);
   return ensureUv({ env, dataDir: data, log }).then((uv) => {
@@ -181,9 +186,7 @@ function ensureRuntime(env, spec, build) {
       dataDir: data,
       uv,
       python,
-      name: 'camoufox',
-      packages: venvPackages(spec),
-      extra: { build },
+      ...venvRequest(spec, build),
       log,
     });
   });

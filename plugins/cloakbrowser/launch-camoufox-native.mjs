@@ -261,6 +261,14 @@ function explicitCommand(env) {
   return override;
 }
 
+// The complete venv provisioning request (2.22.0). `extra` carries runtime-
+// determining values only — never the engine manifest, whose descriptions change
+// for documentation reasons; the 2.20.0 regression was exactly that, and
+// `tests/unit/plugin-provision-safety.test.ts` pins this object.
+export function venvRequest(spec) {
+  return { name: VENV_NAME, packages: [spec], extra: { build: BUILD_PIN } };
+}
+
 // Fetch mcp-camoufox from PyPI into <plugin data>/venvs/camoufox-native-<8hex> with
 // the shared uv/Python/venv provisioner. The package is installed from the index,
 // never bundled with the plugin. The generation key carries the package pin and the
@@ -275,9 +283,7 @@ async function provisionCommand(env, spec) {
     dataDir: data,
     uv,
     python,
-    name: VENV_NAME,
-    packages: [spec],
-    extra: { build: BUILD_PIN },
+    ...venvRequest(spec),
     log,
   });
   const command = venvExecutablePath(venv.venv, 'mcp-camoufox', process.platform);

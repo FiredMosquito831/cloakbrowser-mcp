@@ -770,16 +770,23 @@ describe('ensureVenv marker reuse and rebuild', () => {
   const uv = { command: 'uv', version: '0.13.5', source: 'path' };
   const python = { python: 'python-managed', version: provision.PYTHON_VERSION, source: 'managed' };
 
-  function fakeRunner(venvDir: string) {
+  // The stub answers from the argv the provisioner actually passed, exactly as uv
+  // does: the venv is created where `uv venv` was told, and the pins are installed
+  // into the interpreter `uv pip install --python` named. Anything else would hide
+  // a change of the staging tree (2.22.0).
+  function fakeRunner() {
     const calls: RunCall[] = [];
     const run = (command: string, args: string[], options: RunCall['options']) => {
       calls.push({ command, args, options });
       if (args[0] === 'venv') {
-        createExecutable(path.join(venvDir, 'Scripts', 'python.exe'));
+        const dir = String(args[args.length - 1]);
+        createExecutable(path.join(dir, 'Scripts', 'python.exe'));
         return { status: 0, stdout: '', stderr: '' };
       }
       if (args[0] === 'pip') {
-        for (const spec of args.slice(4)) {
+        const pythonPath = String(args[args.indexOf('--python') + 1]);
+        const venvDir = path.dirname(path.dirname(pythonPath));
+        for (const spec of args.slice(args.indexOf('--python') + 2)) {
           const marker = spec.indexOf('==');
           const name = spec.slice(0, marker).replace(/[-_.]+/g, '_');
           const version = spec.slice(marker + 2);
@@ -795,12 +802,9 @@ describe('ensureVenv marker reuse and rebuild', () => {
   }
 
   function options(dataDir: string, packages: string[], overrides: Record<string, unknown> = {}) {
-    const venvDir = path.join(dataDir, 'venvs', 'camoufox');
-    const fake = fakeRunner(venvDir);
+    const fake = fakeRunner();
     return {
-      dataDir,
-      venvDir,
-      ...fake,
+      calls: fake.calls,
       options: {
         env: { PATH: '' },
         dataDir,
@@ -817,15 +821,18 @@ describe('ensureVenv marker reuse and rebuild', () => {
     };
   }
 
-  it('creates the venv, installs the pins and writes a marker', () => {
+  it('creates the venv generation, installs the pins and writes a marker', () => {
     const dataDir = tempDir();
     const { options: call } = options(dataDir, ['mcp-camoufox==0.4.5']);
     const resolution = provision.ensureVenv(call);
     expect(resolution.reused).toBe(false);
-    expect(resolution.marker).toBe(path.join(dataDir, 'venvs', 'camoufox', '.provision.json'));
+    expect(resolution.generation).toMatch(/^[0-9a-f]{8}$/);
+    expect(resolution.venv).toBe(path.join(dataDir, 'venvs', `camoufox-${resolution.generation}`));
+    expect(resolution.marker).toBe(path.join(resolution.venv, '.provision.json'));
     const marker = JSON.parse(readFileSync(resolution.marker, 'utf8')) as Record<string, unknown>;
     expect(marker).toMatchObject({
       schemaVersion: provision.PROVISION_SCHEMA_VERSION,
+      recipe: 1,
       name: 'camoufox',
       uv: '0.13.5',
       python: provision.PYTHON_VERSION,
@@ -833,12 +840,15 @@ describe('ensureVenv marker reuse and rebuild', () => {
       extra: { build: 'v1' },
     });
     expect(marker.hash).toMatch(/^[0-9a-f]{64}$/);
+    // The directory name is the marker hash: they can never disagree.
+    expect(String(marker.hash).startsWith(resolution.generation)).toBe(true);
   });
 
-  it('passes the managed-Python and install arguments exactly', () => {
+  it('passes the managed-Python and install arguments exactly, staging beside the target', () => {
     const dataDir = tempDir();
     const { options: call, calls } = options(dataDir, ['mcp-camoufox==0.4.5']);
-    provision.ensureVenv(call);
+    const resolution = provision.ensureVenv(call);
+    const staging = path.join(dataDir, 'venvs', `.t-camoufox-${resolution.generation}-${process.pid}`);
     const venv = calls.find((entry) => entry.args[0] === 'venv');
     expect(venv?.args).toEqual([
       'venv',
@@ -847,16 +857,17 @@ describe('ensureVenv marker reuse and rebuild', () => {
       '--no-python-downloads',
       '--clear',
       '--force',
-      path.join(dataDir, 'venvs', 'camoufox'),
+      staging,
     ]);
     const pip = calls.find((entry) => entry.args[0] === 'pip');
     expect(pip?.args.slice(0, 4)).toEqual([
       'pip',
       'install',
       '--python',
-      path.join(dataDir, 'venvs', 'camoufox', 'Scripts', 'python.exe'),
+      path.join(staging, 'Scripts', 'python.exe'),
     ]);
     expect(pip?.args.slice(4)).toEqual(['mcp-camoufox==0.4.5']);
+    expect(statExists(staging)).toBe(false);
   });
 
   it('reuses a matching marker without running uv', () => {
@@ -866,10 +877,11 @@ describe('ensureVenv marker reuse and rebuild', () => {
     const second = options(dataDir, ['mcp-camoufox==0.4.5']);
     const resolution = provision.ensureVenv(second.options);
     expect(resolution.reused).toBe(true);
+    expect(resolution.state).toBe('reused');
     expect(second.calls).toHaveLength(0);
   });
 
-  it('rebuilds when any marker input differs', () => {
+  it('builds a new generation when any marker input differs and keeps the old one', () => {
     const variants: ((dir: string) => ReturnType<typeof options>)[] = [
       (dir) => options(dir, ['mcp-camoufox==0.4.6']),
       (dir) => options(dir, ['mcp-camoufox==0.4.5'], { extra: { build: 'v2' } }),
@@ -883,15 +895,19 @@ describe('ensureVenv marker reuse and rebuild', () => {
     for (const makeOptions of variants) {
       const dataDir = tempDir();
       const first = options(dataDir, ['mcp-camoufox==0.4.5']);
-      provision.ensureVenv(first.options);
+      const original = provision.ensureVenv(first.options);
       const second = makeOptions(dataDir);
       const resolution = provision.ensureVenv(second.options);
       expect(resolution.reused).toBe(false);
+      expect(resolution.venv).not.toBe(original.venv);
       expect(second.calls.length).toBeGreaterThan(0);
+      // The previous generation is kept, listed, and still complete.
+      expect(resolution.keptGenerations).toContain(path.basename(original.venv));
+      expect(statExists(original.marker)).toBe(true);
     }
   });
 
-  it('rebuilds when a pinned package directory disappeared under a matching marker', () => {
+  it('rebuilds in place when a pinned package directory disappeared under a matching marker', () => {
     const dataDir = tempDir();
     const first = options(dataDir, ['mcp-camoufox==0.4.5']);
     const created = provision.ensureVenv(first.options);
@@ -902,7 +918,9 @@ describe('ensureVenv marker reuse and rebuild', () => {
     const second = options(dataDir, ['mcp-camoufox==0.4.5']);
     const resolution = provision.ensureVenv(second.options);
     expect(resolution.reused).toBe(false);
+    expect(resolution.venv).toBe(created.venv);
     expect(second.calls.some((entry) => entry.args[0] === 'pip')).toBe(true);
+    expect(statExists(created.marker)).toBe(true);
   });
 
   it('rebuilds when the marker is unreadable or differs', () => {
@@ -984,6 +1002,29 @@ describe('ensureNpmRuntime', () => {
     expect(calls).toHaveLength(0);
   });
 
+  // The stub installs into the directory npm was actually given (`options.cwd`),
+  // which since 2.22.0 is the staging tree beside the runtime, never the runtime.
+  function installIntoStaging(calls: RunCall[]) {
+    return (command: string, args: string[], options: RunCall['options']) => {
+      calls.push({ command, args, options });
+      const cwd = String(options.cwd);
+      mkdirSync(path.dirname(path.join(cwd, cliRelative)), { recursive: true });
+      writeFileSync(path.join(cwd, cliRelative), '// stub');
+      for (const [directory, name, version] of [
+        ['cloakbrowser', 'cloakbrowser', '0.6.3'],
+        ['playwright-core', 'patchright-core', '1.64.1'],
+        ['playwright', 'patchright', '1.64.1'],
+      ]) {
+        mkdirSync(path.join(cwd, 'node_modules', directory), { recursive: true });
+        writeFileSync(
+          path.join(cwd, 'node_modules', directory, 'package.json'),
+          JSON.stringify({ name, version }),
+        );
+      }
+      return { status: 0, stdout: '', stderr: '' };
+    };
+  }
+
   it('reinstalls cleanly with the unchanged pins, package.json and marker', () => {
     const dataDir = tempDir();
     const runtime = path.join(dataDir, 'runtime');
@@ -996,17 +1037,12 @@ describe('ensureNpmRuntime', () => {
         const candidate = path.join(dir, cliRelative);
         return name === 'cloakbrowser-mcp' && statExists(candidate) ? candidate : null;
       },
-      run: (command: string, args: string[], options: RunCall['options']) => {
-        calls.push({ command, args, options });
-        mkdirSync(path.dirname(path.join(runtime, cliRelative)), { recursive: true });
-        writeFileSync(path.join(runtime, cliRelative), '// stub');
-        return { status: 0, stdout: '', stderr: '' };
-      },
+      run: installIntoStaging(calls),
     });
     expect(resolution.reinstalled).toBe(true);
     expect(calls).toHaveLength(1);
     expect(calls[0].args).toEqual(['install', '--omit=dev', '--no-audit', '--no-fund']);
-    expect(calls[0].options.cwd).toBe(runtime);
+    expect(calls[0].options.cwd).toBe(path.join(dataDir, `.rt-${process.pid}`));
     const packageJson = JSON.parse(readFileSync(path.join(runtime, 'package.json'), 'utf8')) as {
       private: boolean;
       dependencies: Record<string, string>;
@@ -1049,7 +1085,7 @@ describe('ensureNpmRuntime', () => {
         spec,
         locate: () => null,
         missingAfterInstallError: (dir: string) => `custom missing entry point in ${dir}`,
-        run: () => ({ status: 0, stdout: '', stderr: '' }),
+        run: installIntoStaging([]),
       }),
     ).toThrow(/custom missing entry point/);
   });

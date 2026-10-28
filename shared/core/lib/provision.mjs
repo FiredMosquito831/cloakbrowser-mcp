@@ -733,6 +733,8 @@ export function probeVenvHolders(venvDir, options = {}) {
       targets.push(path.join(venvDir, entry));
     }
   }
+  // Sorted so the refusal names the same file on every filesystem.
+  targets.sort();
   for (const target of targets) {
     const result = openProbe(target, 'r+');
     if (result?.held === true) {
@@ -1085,9 +1087,44 @@ export function ensureVenv(options = {}) {
     try {
       remove(temporary, { recursive: true, force: true });
     } catch {
-      // A staging tree that cannot be removed is inert: it is never adopted.
+      // An unremovable staging tree is inert: it is adopted only when it carries a
+      // valid marker and its process is gone, which a failure here cannot fake.
     }
   };
+
+  // A crash between writing the marker and the rename leaves a complete staging
+  // tree whose process is gone. The marker is written last, so a marked staging
+  // tree is complete by construction: finish that rename instead of rebuilding.
+  for (const entry of readdirSyncSafe(venvsRoot)) {
+    const prefix = `.t-${name}-${generation}-`;
+    if (!entry.startsWith(prefix)) {
+      continue;
+    }
+    const stagingPid = Number(entry.slice(prefix.length));
+    if (!Number.isInteger(stagingPid) || stagingPid === pid || livePid(stagingPid)) {
+      continue;
+    }
+    const stagingDir = path.join(venvsRoot, entry);
+    const stagingReason = venvRebuildReason(
+      venvPaths(stagingDir, platform).python,
+      path.join(stagingDir, '.provision.json'),
+      { ...expected, venv: stagingDir },
+      hash,
+      packages,
+      platform,
+    );
+    if (stagingReason !== null) {
+      continue;
+    }
+    try {
+      rename(stagingDir, venvDir);
+      log(`completed an interrupted build of ${venvDir} from ${entry}`);
+      return finish('reused', 'completed an interrupted build', null);
+    } catch {
+      // Another start got there first, or the tree went away: build as usual.
+      break;
+    }
+  }
 
   const uvEnv = uvEnvironment(env, dataDir);
   const venvArgs = ['venv', '--python', python.python, '--clear', '--force', temporary];
@@ -1211,11 +1248,11 @@ export function resolveNpmPackage(env, fallback = DEFAULT_NPM_PACKAGE) {
   return nonEmpty(value) ?? fallback;
 }
 
-function npmRuntimeHealthy(dir, marker, desired, locate) {
-  const cli = locate(dir, parsePackageSpec(desired.package).name);
-  if (cli === null) {
-    return false;
-  }
+// The identity a runtime tree must carry: this plugin's marker for the pinned set
+// and the three driver packages actually present under those names. The caller's
+// own entry point is deliberately not part of it — that check stays with the
+// caller after the swap, with its own message.
+function npmIdentityHealthy(dir, marker, desired) {
   const current = readJson(marker);
   if (
     current === null ||
@@ -1237,6 +1274,14 @@ function npmRuntimeHealthy(dir, marker, desired, locate) {
     playwrightPackage?.name === 'patchright' &&
     engine?.version === NPM_ENGINE_WRAPPER_PIN
   );
+}
+
+function npmRuntimeHealthy(dir, marker, desired, locate) {
+  const cli = locate(dir, parsePackageSpec(desired.package).name);
+  if (cli === null) {
+    return false;
+  }
+  return npmIdentityHealthy(dir, marker, desired);
 }
 
 const NPM_LEFTOVER_PATTERN = /^\.(?:rt|old)-(\d+)$/;
@@ -1328,6 +1373,12 @@ export function ensureNpmRuntime(options = {}) {
       ...leftovers.filter((entry) => entry.name.startsWith('.old-')),
     ];
     for (const candidate of ordered) {
+      // A leftover whose process is still alive may be the tree a live session is
+      // running from: move it back is a rename under a running process, and the
+      // lease inside it is the proof. Never adopt it.
+      if (pidAlive(candidate.pid) || runtimeLease(candidate.dir, { pidAlive }) !== null) {
+        continue;
+      }
       if (!npmRuntimeIsHealthy(candidate.dir, desired, locate)) {
         continue;
       }
@@ -1397,10 +1448,10 @@ export function ensureNpmRuntime(options = {}) {
     );
   }
 
-  // The marker is the last byte written into the new tree, and the health check
+  // The marker is the last byte written into the new tree, and the identity check
   // reads the tree it is about to replace the old one with.
   writeFileSync(path.join(temporary, '.installed.json'), JSON.stringify(desired) + '\n');
-  if (!npmRuntimeIsHealthy(temporary, desired, locate)) {
+  if (!npmIdentityHealthy(temporary, path.join(temporary, '.installed.json'), desired)) {
     discardTemporary();
     throw new Error(
       `the npm runtime built in ${temporary} is not the pinned set (${spec}, ${NPM_DRIVER_PIN}); ` +

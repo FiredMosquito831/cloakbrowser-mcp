@@ -23,7 +23,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { buildEndpoint, validateEndpointSetting } from './lib/attach.mjs';
 import { applyLauncherSettings } from './lib/launcher-settings.mjs';
-import { ensureNpmRuntime, resolveNpmPackage } from './lib/provision.mjs';
+import { ensureNpmRuntime, resolveNpmPackage, writeRuntimeLease } from './lib/provision.mjs';
 
 const LOG_PREFIX = '[kameleo]';
 const PROFILE_ENV = 'KAMELEO_PROFILE_ID';
@@ -217,6 +217,10 @@ function main() {
   } catch (error) {
     fail(error.message);
   }
+  // Same holder signal as launch.mjs: this process stays alive for the runtime's
+  // lifetime, so a later start can see that the tree is in use and refuse.
+  const releaseLease = writeRuntimeLease(runtimeDir(env));
+  process.on('exit', releaseLease);
 
   log(
     `attaching to ${launch.endpoint} profile=${launch.profileId} source=${launch.source} ` +
