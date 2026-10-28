@@ -1725,6 +1725,14 @@ function artifactDirectorySentence() {
   );
 }
 
+// URL guidance (2.19.0, user decision Q5). The upstream turns a bare word into
+// https://<word> and the navigation then fails to resolve, which looks like a
+// broken browser; one sentence is all a model needs. No refusal is added on the
+// relay path, so the tool's own behaviour is unchanged.
+const NAVIGATE_URL_SENTENCE =
+  'browser_navigate takes a full URL: a bare word is sent to the browser as https://<word> and fails to ' +
+  'resolve, so pass the whole address (https://…), and use a search URL if you mean a search.';
+
 if (profileSelection.placeholder !== null) {
   log(`ignoring unsubstituted tool-profile placeholder: ${profileSelection.placeholder}`);
 }
@@ -1854,6 +1862,28 @@ const state = {
     exitCode: null,
     exitSignal: null,
   },
+  // Dead-backend recovery (2.19.0). backendSubstate is non-null only while the
+  // backend this session started is known to be unusable: "upstream-disconnected"
+  // means the bridge is alive but its own @playwright/mcp child is gone, which
+  // this broker used to report as "running". restart counts the automatic
+  // restarts; every key below is reported additively and only when it applies,
+  // so a healthy payload is byte-identical.
+  backendSubstate: null,
+  restart: {
+    // Automatic restarts since the last successful tool call: the 5-minute cap.
+    window: 0,
+    // Automatic restarts in this broker's life, for the status report.
+    total: 0,
+    lastAt: null,
+    reason: null,
+    outcome: null,
+    refusedReason: null,
+  },
+  // The client's own handshake lines, kept from the one message that carried
+  // them. The 2.16.0 hold replay consumes its copy in state.hold, and a
+  // dead-backend restart needs them again on every restart, so the source is
+  // kept here instead of the one-shot slot.
+  clientHandshake: { initializeLine: null, initializedLine: null },
   pendingRequests: new Map(),
   hiddenByManifest: new Set(),
   hiddenByCollision: new Set(),
@@ -1920,6 +1950,15 @@ function profileAllowsTool(toolName) {
 function backendAlive() {
   const child = state.child;
   return child !== null && child.exitCode === null && child.signalCode === null;
+}
+
+// A backend that answered with its upstream gone (2.19.0) is as unusable as an
+// exited one, so every routing decision treats it the same way: tools/list is
+// answered by the broker's meta-tools instead of a relayed failure, and a tool
+// call becomes the retry. On every healthy path backendSubstate is null and this
+// is exactly backendAlive().
+function backendUsable() {
+  return backendAlive() && state.backendSubstate === null;
 }
 
 function backendDescription() {
@@ -2039,10 +2078,13 @@ function sendHeldToolList(id, cursor) {
   sendResult(id, { tools });
 }
 
-// Re-read both locks for the held profile. The bridge remains the authority; this
-// only decides whether a recovery start is worth trying.
-function holdStillBlocked() {
-  const dir = state.hold.profileDir;
+// Re-read both locks for a profile directory. The bridge remains the authority;
+// this only decides whether a start is worth trying. The start-time preflight
+// runs the same two reads, once, before anything is spawned.
+function profileStillBlocked(dir) {
+  if (dir === null) {
+    return { blocked: false, lock: null, engineLock: null };
+  }
   const lock = readProfileLock(dir);
   if (lockBlocksStart(lock)) {
     return { blocked: true, lock, engineLock: null };
@@ -2054,6 +2096,11 @@ function holdStillBlocked() {
     }
   }
   return { blocked: false, lock, engineLock: null };
+}
+
+// Re-read both locks for the held profile.
+function holdStillBlocked() {
+  return profileStillBlocked(state.hold.profileDir);
 }
 
 // Give the recovered backend the handshake the broker answered on its behalf.
@@ -2211,6 +2258,236 @@ function holdInstructionText() {
       ? "The tool list you have comes from this session's cached copy and is filtered exactly like a live one."
       : 'No cached tool list exists yet, so only the broker meta-tools answer until then.';
   return `${state.hold.reason ?? holdReasonText(state.hold.profileDir, state.hold.owner)} ${list}`;
+}
+
+// --- dead-backend recovery: honest liveness and one restart (2.19.0) --------
+// The backend below launch.mjs can die in two ways, and until 2.19.0 the broker
+// understood neither.
+//   (c) launch.mjs (and with it the bridge) exits. backendAlive() is false, the
+//       state says failed/exited, every call is answered "backend is not
+//       running" and nothing ever restarts it.
+//   (d) only the bridge's own @playwright/mcp child exits. The bridge stays
+//       alive and answers every call and tools/list with the JSON-RPC error
+//       -32603 "Not connected": the exact text the pinned MCP SDK's
+//       StdioClientTransport throws once its process has gone
+//       (@modelcontextprotocol/sdk 1.32.2, dist/cjs/client/stdio.js, send()),
+//       re-thrown by the bridge's request handler and turned into InternalError
+//       with that same message by the SDK server (dist/cjs/shared/protocol.js).
+//       backendAlive() was true, so the broker reported backendState "running"
+//       while every call failed — a lie.
+// Both are now classified honestly, and one bounded restart is attempted: the
+// same call the client made is replayed into the new backend.
+
+const UPSTREAM_DISCONNECTED_CODE = -32603;
+const UPSTREAM_DISCONNECTED_MESSAGE = 'Not connected';
+// At most one automatic restart per window; a successful tool call resets it.
+const RESTART_WINDOW_MS = 5 * 60 * 1000;
+
+// The bridge's own answer that its upstream is gone. The code and the wording
+// are the pinned SDK's, not ours: verify both against the installed runtime
+// before changing them.
+function upstreamDisconnectedAnswer(message) {
+  const error = message === null || typeof message !== 'object' ? null : message.error;
+  return (
+    error !== null &&
+    typeof error === 'object' &&
+    error.code === UPSTREAM_DISCONNECTED_CODE &&
+    typeof error.message === 'string' &&
+    error.message.trim() === UPSTREAM_DISCONNECTED_MESSAGE
+  );
+}
+
+// Record the death the way the status has to show it: a degraded state, an
+// additive substate that says which half died, and the upstream's own text.
+function noteUpstreamDisconnected(message) {
+  const text =
+    typeof message.error?.message === 'string' && message.error.message.trim() !== ''
+      ? message.error.message
+      : UPSTREAM_DISCONNECTED_MESSAGE;
+  state.backend.state = 'failed';
+  state.backendSubstate = 'upstream-disconnected';
+  state.lastError = `Upstream disconnected: ${text}`;
+  log(`dead-backend recovery: ${state.lastError} (the bridge is alive, its @playwright/mcp child is gone)`);
+}
+
+// The profile this session actually uses: the broker-resolved account,
+// workspace, pointer, fallback or copy directory, and otherwise the engine
+// default. An isolated start has none, so no lock is read.
+function recoveryProfileDir() {
+  return state.profile.dir ?? effectiveProfileDir(profileResolution);
+}
+
+// Why no automatic restart may run now, or null when it may.
+function restartRefusal() {
+  if (state.shuttingDown) {
+    return 'the broker is shutting down';
+  }
+  if (state.engineError !== null) {
+    return `this start was refused: ${state.engineError}`;
+  }
+  if (state.hold.active) {
+    return 'the profile is held by another session';
+  }
+  if (
+    state.restart.window > 0 &&
+    state.restart.lastAt !== null &&
+    Date.now() - state.restart.lastAt < RESTART_WINDOW_MS
+  ) {
+    return 'one automatic restart already ran in the last 5 minutes';
+  }
+  return null;
+}
+
+// Stop this session's own backend after it has failed. Only the broker's direct
+// child and its tree are touched: no other session's process is ever signalled.
+// state.child is cleared first, so the exit of the backend being replaced cannot
+// overwrite the state of the one started after it.
+function stopDeadBackend() {
+  const child = state.child;
+  state.child = null;
+  if (child === null || child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
+  log(`dead-backend recovery: stopping this session's own backend tree pid=${child.pid}`);
+  killBackendTree(child);
+}
+
+// The restart facts, or null when none ever ran so every healthy payload stays
+// byte-identical.
+function restartReport() {
+  if (state.restart.total === 0) {
+    return null;
+  }
+  return {
+    count: state.restart.total,
+    lastAt: state.restart.lastAt === null ? null : new Date(state.restart.lastAt).toISOString(),
+    reason: state.restart.reason,
+    outcome: state.restart.outcome,
+    ...(state.restart.refusedReason === null ? {} : { refusedReason: state.restart.refusedReason }),
+  };
+}
+
+// A successful tool call is proof the backend and its upstream work again: the
+// reported substate goes away and the 5-minute window opens again.
+function noteBackendHealthy() {
+  state.backendSubstate = null;
+  state.restart.refusedReason = null;
+  if (state.restart.window === 0) {
+    return;
+  }
+  state.restart.window = 0;
+  log('dead-backend recovery: a tool call succeeded; the automatic restart window is open again');
+}
+
+// The isError a call gets when the backend is dead and no restart ran. It names
+// the state, why no restart happened and the fix — never a bare code.
+function deadBackendToolError(name) {
+  if (state.hold.active) {
+    return holdToolError(name);
+  }
+  const why =
+    state.restart.refusedReason === null
+      ? ''
+      : ` No automatic restart ran: ${state.restart.refusedReason}.`;
+  return (
+    `Cannot call "${String(name)}": ${backendDescription()}.${why} ` +
+    'The call was not sent. Fix the cause named in browser_engine_status.lastError and call again ' +
+    '(at most one automatic restart runs every 5 minutes), or restart Claude Code.'
+  );
+}
+
+// One automatic restart: the dead backend is stopped, both lock reads run again,
+// launch.mjs is spawned once, the client's handshake is replayed through the
+// 2.16.0 machinery and the client is told its tool list is authoritative again.
+// Returns true when the backend is running and the caller may send its one call,
+// false when the caller must answer with the honest error instead.
+function attemptDeadBackendRestart(reason) {
+  const refusal = restartRefusal();
+  if (refusal !== null) {
+    state.restart.refusedReason = refusal;
+    log(`dead-backend recovery: not restarting (${reason}): ${refusal}`);
+    return false;
+  }
+  // The dead backend is this session's own: the launcher exited, or the bridge
+  // outlived its upstream and can never serve again (the pinned bridge never
+  // respawns it). It is stopped before the preflight, so the profile lock it
+  // still holds is not read as another session's.
+  stopDeadBackend();
+  // The single-seat rule is absolute: never start a second CloakBrowser. Both
+  // start-time lock reads run again here, before anything is spawned.
+  const dir = recoveryProfileDir();
+  const blocked = profileStillBlocked(dir);
+  if (blocked.blocked) {
+    if (singleSeat) {
+      // A held profile goes down the existing 2.16.0 hold path, never a restart:
+      // the cached tool list stays, the call gets an isError naming the owner and
+      // the next call tries again.
+      beginHold(dir, blocked.lock, blocked.engineLock);
+      state.backend.state = 'waiting-for-profile';
+    }
+    state.restart.refusedReason = `the profile ${dir} is in use by another session`;
+    log(`dead-backend recovery: not restarting (${reason}): ${state.restart.refusedReason}`);
+    return false;
+  }
+  state.restart.window += 1;
+  state.restart.total += 1;
+  state.restart.lastAt = Date.now();
+  state.restart.reason = reason;
+  state.restart.outcome = 'starting';
+  state.restart.refusedReason = null;
+  state.backendSubstate = null;
+  log(
+    `dead-backend recovery: ${reason}; restarting the backend once ` +
+      `(attempt ${state.restart.window} since the last successful tool call)`,
+  );
+  startBackend();
+  if (state.child === null) {
+    state.restart.outcome = 'failed';
+    state.restart.refusedReason = 'the backend could not be started';
+    return false;
+  }
+  // The client's own handshake, replayed by the one replay function the hold
+  // path already uses; its answer is consumed, never relayed.
+  if (state.clientHandshake.initializeLine !== null) {
+    state.hold.initializeLine = state.clientHandshake.initializeLine;
+  }
+  if (state.clientHandshake.initializedLine !== null) {
+    state.hold.initializedLine = state.clientHandshake.initializedLine;
+  }
+  replayHeldHandshake();
+  notifyToolsListChanged();
+  state.restart.outcome = 'recovered';
+  return true;
+}
+
+// A relayed answer that says the bridge's upstream is gone. The death is always
+// recorded; what the client gets depends on what it asked for. Returns true when
+// this answer is fully handled here and must not be relayed.
+function handleUpstreamDisconnectedAnswer(pending, id, message) {
+  noteUpstreamDisconnected(message);
+  if (pending.method === 'tools/call') {
+    state.pendingRequests.delete(id);
+    if (typeof pending.rawLine === 'string' && attemptDeadBackendRestart('the upstream disconnected')) {
+      // Re-send exactly this one call, under the client's own id, into the
+      // restarted backend: its answer is relayed as if nothing had happened.
+      state.pendingRequests.set(id, { ...pending, sentAt: Date.now() });
+      if (!forwardToBackend(pending.rawLine)) {
+        state.pendingRequests.delete(id);
+        sendToolError(id, deadBackendToolError(pending.name));
+      }
+      return true;
+    }
+    sendToolError(id, deadBackendToolError(pending.name));
+    return true;
+  }
+  if (pending.method === 'tools/list') {
+    // F1: the failing list is never relayed; the meta-tools answer instead, and
+    // the next tool call is what restarts the backend.
+    state.pendingRequests.delete(id);
+    sendMetaOnlyList(id, pending.cursor);
+    return true;
+  }
+  return false;
 }
 
 function writeMessage(message) {
@@ -2803,6 +3080,7 @@ function capabilitiesPayload(clientRoots) {
   const sessionCopiesNow = sessionCopiesReport();
   const lastSwapNow = lastSwapReport();
   const holdNow = holdReport();
+  const restartNow = restartReport();
   const pointerNow =
     state.profile.appliesToEngine && state.engine !== null
       ? readProfileDefaultPointer(state.engineId, PLUGIN_DATA_DIR)
@@ -2902,6 +3180,12 @@ function capabilitiesPayload(clientRoots) {
     // happened: why this session waited, the owner, how many recovery attempts
     // its tool calls made, and where the cached tool list came from.
     ...(holdNow === null ? {} : { hold: holdNow }),
+    // Dead-backend recovery (2.19.0), additive and only on the degraded path or
+    // after an automatic restart: the substate names which half of the backend
+    // died while backendState says failed, and the restart facts say how many
+    // automatic restarts ran and how the last one ended.
+    ...(state.backendSubstate === null ? {} : { backendSubstate: state.backendSubstate }),
+    ...(restartNow === null ? {} : { backendRestart: restartNow }),
     profileLock: state.profile.lock,
     ...(state.profile.engineLock === null ? {} : { engineProfileLock: state.profile.engineLock }),
     // Copy start (2.12.0) and copy-keep (2.13.0), additive only in those modes.
@@ -3023,6 +3307,7 @@ function statusPayload() {
       ? null
       : Math.max(0, now - state.spawnedAt);
   const holdNow = holdReport();
+  const restartNow = restartReport();
   return {
     engine: state.engineId,
     label: state.engine?.label ?? null,
@@ -3069,6 +3354,12 @@ function statusPayload() {
     // happened: why this session waited, the owner, how many recovery attempts
     // its tool calls made, and where the cached tool list came from.
     ...(holdNow === null ? {} : { hold: holdNow }),
+    // Dead-backend recovery (2.19.0), additive and only on the degraded path or
+    // after an automatic restart: the substate names which half of the backend
+    // died while backendState says failed, and the restart facts say how many
+    // automatic restarts ran and how the last one ended.
+    ...(state.backendSubstate === null ? {} : { backendSubstate: state.backendSubstate }),
+    ...(restartNow === null ? {} : { backendRestart: restartNow }),
     profileLock: state.profile.lock,
     ...(state.profile.engineLock === null ? {} : { engineProfileLock: state.profile.engineLock }),
     // Copy start (2.12.0) and copy-keep (2.13.0), additive only in those modes,
@@ -3499,8 +3790,8 @@ function forwardToBackend(line) {
   }
 }
 
-function killBackendTree() {
-  const child = state.child;
+function killBackendTree(target = state.child) {
+  const child = target;
   if (child === null || child.pid === undefined) {
     return;
   }
@@ -3788,6 +4079,15 @@ function handleClientRequest(message, rawLine) {
   const isRequest = typeof method === 'string' && id !== undefined && id !== null;
   const name = message.params?.name;
 
+  // The client's handshake is the only thing a new backend cannot be given by
+  // the client again: keep the exact lines, so a hold recovery and a
+  // dead-backend restart (2.19.0) both replay them through replayHeldHandshake().
+  if (method === 'initialize') {
+    state.clientHandshake.initializeLine = rawLine;
+  } else if (method === 'notifications/initialized') {
+    state.clientHandshake.initializedLine = rawLine;
+  }
+
   if (method === 'tools/call' && isRequest) {
     if (META_TOOL_NAMES.has(name)) {
       if (!handleMetaCall(message)) {
@@ -3846,13 +4146,20 @@ function handleClientRequest(message, rawLine) {
         return;
       }
     }
-    if (!backendAlive()) {
-      sendToolError(id, `Cannot call "${String(name)}": ${backendDescription()}.`);
-      return;
+    if (!backendUsable()) {
+      // Dead-backend recovery (2.19.0): this call is the retry. One bounded
+      // restart runs, then the call is forwarded below as if nothing had
+      // happened; when no restart may run the call is answered with the honest
+      // error naming the state and the fix.
+      const reason = state.backendSubstate === null ? 'the backend exited' : 'the upstream disconnected';
+      if (!attemptDeadBackendRestart(reason)) {
+        sendToolError(id, deadBackendToolError(name));
+        return;
+      }
     }
   }
 
-  if (!backendAlive()) {
+  if (!backendUsable()) {
     if (!isRequest) {
       // The client's handshake notification is kept for the replay; every other
       // notification is dropped while there is no backend, as before.
@@ -3920,6 +4227,10 @@ function handleClientRequest(message, rawLine) {
       method,
       cursor: message.params?.cursor,
       sentAt: Date.now(),
+      // Dead-backend recovery (2.19.0) re-sends this exact line into a restarted
+      // backend, so the name and the line are kept with the pending request.
+      name: message.params?.name,
+      rawLine,
     });
     if (method === 'initialize') {
       noteInitializeRequest(message);
@@ -3985,6 +4296,13 @@ function handleBackendMessage(message, rawLine) {
     }
     return;
   }
+  // Dead-backend recovery (2.19.0): the bridge answered with its own upstream
+  // gone. The death is recorded here, before anything else looks at the answer.
+  if (isResponse && pending !== undefined && upstreamDisconnectedAnswer(message)) {
+    if (handleUpstreamDisconnectedAnswer(pending, id, message)) {
+      return;
+    }
+  }
   if (isResponse) {
     noteBackendAnswered(pending);
     state.pendingRequests.delete(id);
@@ -4016,6 +4334,9 @@ function handleBackendMessage(message, rawLine) {
       // is present; the dependency status returns to "unknown", never
       // "installed". Only engines that declare dependencies read this flag.
       state.systemDependencyMissing = false;
+      // It is also evidence the backend works again: the dead-backend substate
+      // goes away and the automatic restart window opens (2.19.0).
+      noteBackendHealthy();
     }
   }
 
@@ -4056,6 +4377,9 @@ function handleBackendMessage(message, rawLine) {
       identitySentence(),
       passwordManagerSentence(),
       artifactDirectorySentence(),
+      // URL guidance (2.19.0, Q5): one sentence on the healthy handshake only,
+      // where navigation is possible.
+      NAVIGATE_URL_SENTENCE,
     ];
     message.result = {
       ...result,
@@ -4207,6 +4531,15 @@ function startBackend() {
   });
 
   child.on('exit', (code, signal) => {
+    if (state.child !== child) {
+      // A backend this broker already replaced (dead-backend recovery, 2.19.0):
+      // its exit belongs to a process nobody waits for any more, so it must not
+      // touch the state, the error or the pending requests of the one now
+      // running, and it must never end the shutdown.
+      const detail = signal === null ? `code ${String(code)}` : `signal ${signal}`;
+      log(`replaced backend pid=${child.pid ?? 'unknown'} exited (${detail}); ignored`);
+      return;
+    }
     const wasStarting = state.backend.state === 'starting';
     state.child = null;
     state.backend.exitCode = code;
