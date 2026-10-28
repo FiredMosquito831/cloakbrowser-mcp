@@ -412,3 +412,16 @@ environment variables, not plugin settings.
 
 Do not edit `broker.mjs` to add an engine, and do not put a path or command in
 the engine setting: the value selects a manifest id only.
+
+## `identityCopy` — what a `copy_contents` "identity" copy keeps
+
+An engine that can run on a copy may declare which files carry its identity:
+
+```json
+"identityCopy": {
+  "keep": ["Local State", "Default/Network/Cookies", "Default/Login Data", "Default/Local Storage/**"],
+  "notes": "One honest paragraph: what is kept, what is left out, and what a user loses."
+}
+```
+
+Each entry is a `/`-separated pattern relative to the profile root, matched against the copy plan's relative path: `*` is exactly one segment, `**` is any depth, comparison is case-insensitive. The list is the **copy order** — put the small files that decrypt others first (`Local State`, `key4.db`) — and a kept database brings its `-wal` companion automatically. Caches, metrics, LevelDB `LOCK` files and the two `shm`/`LOCK` exclusion rules are applied before the filter, so the list never has to mention them. `notes` is reported by the meta-tools and never parsed. An engine without the descriptor keeps the full tree and `copy_contents=identity` is reported as not applicable for it. Add the field beside `profileLock`; both `broker.mjs` and `scripts/profile-copy.mjs` read it, so a session copy and a CLI copy cannot disagree.
