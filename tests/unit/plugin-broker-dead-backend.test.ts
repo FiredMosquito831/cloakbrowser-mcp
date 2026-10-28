@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -83,6 +91,11 @@ function note(entry) {
   fs.appendFileSync(LOG, JSON.stringify(Object.assign({ instance, dead }, entry)) + '\\n');
 }
 note({ event: 'start' });
+const PID_DIR = process.env.STUB_PID_DIR || '';
+if (PID_DIR) {
+  fs.mkdirSync(PID_DIR, { recursive: true });
+  fs.writeFileSync(require('node:path').join(PID_DIR, instance + '.pid'), String(process.pid));
+}
 function send(message) {
   process.stdout.write(JSON.stringify(message) + '\\n');
 }
@@ -191,7 +204,10 @@ function writeJson(file: string, value: unknown): void {
 function writeLock(profileDir: string, pid: number): string {
   mkdirSync(profileDir, { recursive: true });
   const file = path.join(profileDir, LOCK);
-  writeFileSync(file, `${JSON.stringify({ pid, createdAt: '2026-10-28T08:00:00.000Z', userDataDir: profileDir }, null, 2)}\n`);
+  writeFileSync(
+    file,
+    `${JSON.stringify({ pid, createdAt: '2026-10-28T08:00:00.000Z', userDataDir: profileDir }, null, 2)}\n`,
+  );
   return file;
 }
 
@@ -232,6 +248,7 @@ function startBroker(dataDir: string, counter: string, log: string, options: Har
     STUB_LOG: log,
     STUB_DEAD_STARTS: String(options.deadStarts ?? 0),
     STUB_EXIT_ON_CALL: options.exitOnCall ?? '',
+    STUB_PID_DIR: path.join(dataDir, 'stub-pids'),
   };
   for (const name of [
     'STEALTH_ACCOUNT',
@@ -309,7 +326,13 @@ function startBroker(dataDir: string, counter: string, log: string, options: Har
       child.kill();
     }
   };
-  const session: BrokerSession = { request, notify, notifications: () => [...notes], stderr: () => stderr, close };
+  const session: BrokerSession = {
+    request,
+    notify,
+    notifications: () => [...notes],
+    stderr: () => stderr,
+    close,
+  };
   sessions.push(session);
   return session;
 }
@@ -324,6 +347,20 @@ function harness(prefix: string, options: HarnessOptions = {}): Harness {
   }
   const session = startBroker(dataDir, counter, log, options);
   return { dataDir, counter, log, session };
+}
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function stubPid(dataDir: string, instance: number): number | null {
+  const file = path.join(dataDir, 'stub-pids', `${instance}.pid`);
+  return existsSync(file) ? Number(readFileSync(file, 'utf8')) : null;
 }
 
 function instances(counter: string): number {
@@ -376,8 +413,6 @@ function responseText(response: JsonRpcResponse): string {
   return response.result?.content?.[0]?.text ?? '';
 }
 
-const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
 describe('F1 — honest liveness when only the upstream is gone', () => {
   it('classifies -32603 "Not connected", reports it and answers tools/list meta-only', async () => {
     const { session, counter } = harness('dead-upstream-status-', { deadStarts: 1 });
@@ -422,12 +457,17 @@ describe('F1 — honest liveness when only the upstream is gone', () => {
 
 describe('F2 — one bounded restart and one replayed call', () => {
   it('restarts once, replays exactly that call and emits list_changed', async () => {
-    const { session, counter, log } = harness('dead-upstream-restart-', { deadStarts: 1 });
+    const { dataDir, session, counter, log } = harness('dead-upstream-restart-', { deadStarts: 1 });
     await initialize(session);
     // The list is classified first, so the surface is honest before the restart.
-    expect((await session.request('tools/list', {})).result?.tools?.map((tool) => tool.name)).toEqual(META_TOOLS);
+    expect((await session.request('tools/list', {})).result?.tools?.map((tool) => tool.name)).toEqual(
+      META_TOOLS,
+    );
 
-    const call = await session.request('tools/call', { name: 'browser_navigate', arguments: { url: 'https://x/' } });
+    const call = await session.request('tools/call', {
+      name: 'browser_navigate',
+      arguments: { url: 'https://x/' },
+    });
     expect(call.error).toBeUndefined();
     expect(call.result?.isError).toBe(false);
     // The answer comes from the second instance: the call was replayed, not
@@ -455,7 +495,19 @@ describe('F2 — one bounded restart and one replayed call', () => {
       reason: 'the upstream disconnected',
       outcome: 'recovered',
     });
-    expect(session.stderr()).toContain('restarting the backend once (attempt 1 since the last successful tool call)');
+    expect(session.stderr()).toContain(
+      'restarting the backend once (attempt 1 since the last successful tool call)',
+    );
+    // The bridge that answered "Not connected" was still running. Only this
+    // session's own tree may be stopped, and it must be: a second bridge would
+    // hold the profile lock and a browser seat.
+    expect(session.stderr()).toContain("stopping this session's own backend tree");
+    const firstPid = stubPid(dataDir, 1);
+    const secondPid = stubPid(dataDir, 2);
+    expect(firstPid).not.toBeNull();
+    expect(secondPid).not.toBeNull();
+    expect(alive(firstPid!)).toBe(false);
+    expect(alive(secondPid!)).toBe(true);
   });
 
   it('does not restart a second time inside the 5-minute window', async () => {
@@ -468,7 +520,9 @@ describe('F2 — one bounded restart and one replayed call', () => {
     expect(call.result?.isError).toBe(true);
     const text = responseText(call);
     expect(text).toContain(NOT_CONNECTED);
-    expect(text).toContain('No automatic restart ran: one automatic restart already ran in the last 5 minutes.');
+    expect(text).toContain(
+      'No automatic restart ran: one automatic restart already ran in the last 5 minutes.',
+    );
     expect(instances(counter)).toBe(2);
     const payload = await status(session);
     expect(payload.backendState).toBe('failed');
@@ -477,7 +531,9 @@ describe('F2 — one bounded restart and one replayed call', () => {
     expect(String((payload.backendRestart as Record<string, unknown>).refusedReason)).toContain(
       'one automatic restart already ran',
     );
-    expect(session.stderr()).toContain('not restarting (the upstream disconnected): one automatic restart already ran');
+    expect(session.stderr()).toContain(
+      'not restarting (the upstream disconnected): one automatic restart already ran',
+    );
   });
 
   it('reopens the window after a successful call', async () => {
@@ -527,7 +583,11 @@ describe('F2 — one bounded restart and one replayed call', () => {
     expect(session.notifications()).toContain('notifications/tools/list_changed');
     const payload = await status(session);
     expect(payload.backendState).toBe('running');
-    expect(payload.backendRestart).toMatchObject({ count: 1, reason: 'the backend exited', outcome: 'recovered' });
+    expect(payload.backendRestart).toMatchObject({
+      count: 1,
+      reason: 'the backend exited',
+      outcome: 'recovered',
+    });
   });
 });
 
@@ -583,7 +643,10 @@ describe('F2 — a restart never runs where it must not', () => {
     expect(instances(counter)).toBe(1);
     const payload = await status(session);
     expect(payload.backendState).toBe('waiting-for-profile');
-    expect(payload.hold).toMatchObject({ state: 'waiting', profileDir: path.join(dataDir, 'profiles', 'default') });
+    expect(payload.hold).toMatchObject({
+      state: 'waiting',
+      profileDir: path.join(dataDir, 'profiles', 'default'),
+    });
     expect(Object.hasOwn(payload, 'backendRestart')).toBe(false);
     expect(session.stderr()).toContain('not restarting (the backend exited): the profile');
   });

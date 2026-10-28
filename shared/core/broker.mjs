@@ -2392,9 +2392,7 @@ function deadBackendToolError(name) {
   }
   const description = backendDescription();
   const why =
-    state.restart.refusedReason === null
-      ? ''
-      : ` No automatic restart ran: ${state.restart.refusedReason}.`;
+    state.restart.refusedReason === null ? '' : ` No automatic restart ran: ${state.restart.refusedReason}.`;
   return (
     `Cannot call "${String(name)}": ${description.endsWith('.') ? description.slice(0, -1) : description}.${why} ` +
     'The call was not sent. Fix the cause named in browser_engine_status.lastError and call again, or ' +

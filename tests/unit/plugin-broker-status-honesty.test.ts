@@ -43,6 +43,7 @@ const STUB_TOOLS = ['browser_navigate', 'browser_snapshot', 'browser_evaluate'];
 const PROTOCOL_2026_MESSAGE =
   'connection is serving the 2026-07-28 protocol; the initialize handshake is not accepted';
 const GENERIC_MESSAGE = 'initialize refused by policy';
+const NOT_CONNECTED = 'Not connected';
 
 const STUB_SOURCE = `#!/usr/bin/env node
 // Deterministic stand-in for the cloakbrowser-mcp CLI. MODE decides the
@@ -62,7 +63,7 @@ function send(message) {
 function handle(message) {
   if (MODE === 'silent') return;
   if (message.method === 'initialize') {
-    if (MODE === 'normal' || MODE === 'internal-32603') {
+    if (MODE === 'normal' || MODE === 'internal-32603' || MODE === 'wrong-code') {
       send({
         jsonrpc: '2.0',
         id: message.id,
@@ -87,6 +88,10 @@ function handle(message) {
   if (message.method === 'tools/list') {
     // internal-32603 is a different transport-era failure with the same numeric
     // code; only the pinned "Not connected" wording means a dead upstream.
+    if (MODE === 'wrong-code') {
+      send({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: __NOT_CONNECTED__ } });
+      return;
+    }
     if (MODE === 'internal-32603') {
       send({ jsonrpc: '2.0', id: message.id, error: { code: -32603, message: 'Internal error' } });
       return;
@@ -127,7 +132,7 @@ rl.on('line', (line) => {
 rl.on('close', () => process.exit(0));
 `;
 
-type StubMode = 'normal' | 'reject-2026' | 'reject-generic' | 'silent' | 'internal-32603';
+type StubMode = 'normal' | 'reject-2026' | 'reject-generic' | 'silent' | 'internal-32603' | 'wrong-code';
 
 const tempRoots: string[] = [];
 const sessions: BrokerSession[] = [];
@@ -173,7 +178,8 @@ function createRuntime(mode: StubMode): string {
   const source = STUB_SOURCE.replace('__MODE__', JSON.stringify(mode))
     .replace('__TOOLS__', JSON.stringify(STUB_TOOLS))
     .replace('__PROTOCOL_MESSAGE__', JSON.stringify(PROTOCOL_2026_MESSAGE))
-    .replace('__GENERIC_MESSAGE__', JSON.stringify(GENERIC_MESSAGE));
+    .replace('__GENERIC_MESSAGE__', JSON.stringify(GENERIC_MESSAGE))
+    .replace('__NOT_CONNECTED__', JSON.stringify(NOT_CONNECTED));
   writeFileSync(path.join(modules, 'cloakbrowser-mcp', 'dist', 'cli.js'), source);
   return root;
 }
@@ -448,6 +454,24 @@ describe('F1 — only the pinned dead-upstream answer is classified', () => {
     expect(payload.lastError).toBeNull();
     expect(Object.hasOwn(payload, 'backendSubstate')).toBe(false);
     expect(Object.hasOwn(payload, 'backendRestart')).toBe(false);
+    expect(session.stderr()).not.toContain('dead-backend recovery');
+  });
+});
+
+describe('F1 — the wording alone is not a death either', () => {
+  it('does not classify "Not connected" under another error code', async () => {
+    const dataDir = createRuntime('wrong-code');
+    const session = startBroker(dataDir);
+    await session.request('initialize', {
+      protocolVersion: '2025-06-18',
+      capabilities: {},
+      clientInfo: { name: 'test', version: '1' },
+    });
+    const list = await session.request('tools/list', {});
+    expect(list.error).toEqual({ code: -32000, message: 'Not connected' });
+    const payload = await callStatus(session);
+    expect(payload.backendState).toBe('running');
+    expect(Object.hasOwn(payload, 'backendSubstate')).toBe(false);
     expect(session.stderr()).not.toContain('dead-backend recovery');
   });
 });
