@@ -776,7 +776,7 @@ describe('pin discovery and the fail-closed guard', () => {
       bridgeTo: '1.15.2',
       wrapperFrom: '0.6.3',
       wrapperTo: '0.6.4',
-      versionFrom: '2.21.0',
+      versionFrom: '2.21.1',
       versionTo: '2.21.1',
     });
     expect(written.changed).toContain('shared/core/lib/provision.mjs');
