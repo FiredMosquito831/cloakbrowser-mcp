@@ -1,10 +1,7 @@
 import {
-  chmodSync,
-  closeSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
-  openSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -18,6 +15,7 @@ import { spawn } from 'node:child_process';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { holdEngineLock, manifestProfileLock } from '@tests/helpers/engine-lock-holder.js';
 
 // Copy on lock, the identity tier and browser-scoped lifetime (2.20.0).
 //
@@ -678,56 +676,53 @@ describe('broker on_locked=copy', () => {
 
   // The engine-lock latch is proven by holding the copied profile's lock file so
   // the product's own probe (`openSync(path, 'r+')` for Chromium's lockfile) is
-  // refused. That needs a platform-specific holder:
-  //   Windows - a process opens the file with no sharing, which is exactly how
-  //             Chromium holds `lockfile`; the probe then fails with EBUSY.
-  //   POSIX   - there is no mandatory locking, so a sharing violation cannot be
-  //             reproduced; the equivalent the product also reads as live is a
-  //             file the probe cannot open for writing (mode 0400 -> EACCES),
-  //             which is its documented "the OS refuses to open it" case. Root
-  //             ignores the mode, so the case is skipped there.
+  // refused. `holdEngineLock` owns the platform route (a Windows handle with the
+  // manifest's share mode, or the POSIX `chmod 0400` -> EACCES case) and confirms
+  // the product reads it live; on a host where the mode is not enforced (root) it
+  // skips with the reason instead of passing on a fake lock.
   // The close-tool instant path and the copy release are covered on every
   // platform by the two tests above (`browser_close` -> discarded, base lock
   // free), so this case adds the latch itself.
-  it.skipIf(HOLDER_MODE === 'none')(
-    'latches the engine lock and releases the copy when the browser closes',
-    async () => {
-      const root = tempRoot('browser-latch-');
-      const dataDir = createRuntime(root);
-      const base = path.join(dataDir, 'profiles', 'default');
-      seedBase(base);
-      const session = startBroker({ dataDir, isolation: 'copy', lifetime: 'browser' });
-      await initialize(session);
-      await callTool(session, 'browser_navigate', { url: 'data:text/html,x' });
-      const caps = await capabilities(session);
-      const sessionDir = String((caps.profileCopy as Record<string, unknown>).sessionDir);
-      // The stub wrote the engine lock, but nothing holds it, so the probe reads it
-      // stale and the latch stays closed.
-      expect((await profilesCurrent(session)).browserOpen).toBeNull();
+  it('latches the engine lock and releases the copy when the browser closes', async (t) => {
+    const root = tempRoot('browser-latch-');
+    const dataDir = createRuntime(root);
+    const base = path.join(dataDir, 'profiles', 'default');
+    seedBase(base);
+    const session = startBroker({ dataDir, isolation: 'copy', lifetime: 'browser' });
+    await initialize(session);
+    await callTool(session, 'browser_navigate', { url: 'data:text/html,x' });
+    const caps = await capabilities(session);
+    const sessionDir = String((caps.profileCopy as Record<string, unknown>).sessionDir);
+    // The stub wrote the engine lock, but nothing holds it, so the probe reads it
+    // stale and the latch stays closed.
+    expect((await profilesCurrent(session)).browserOpen).toBeNull();
 
-      // Hold the copied profile's engine lock, so the next probe reads it live and
-      // the latch opens.
-      const holder = await holdEngineLock(path.join(sessionDir, 'lockfile'));
-      try {
-        await callTool(session, 'browser_navigate', { url: 'data:text/html,y' });
-        const open = await profilesCurrent(session);
-        expect(open.browserOpen).toBe(true);
-        expect(open.browserOpenSource).toBe('engine-lock');
-      } finally {
-        await holder.stop();
-        // The browser removes its lock file on exit.
-        rmSync(path.join(sessionDir, 'lockfile'), { force: true });
-      }
-      // The browser is gone: the poll notices within a second and the copy is
-      // deleted while the broker keeps running.
-      await new Promise((resolve) => setTimeout(resolve, 1800));
-      const closed = await profilesCurrent(session);
-      expect(closed.browserOpen).toBe(false);
-      expect(closed.browserOpenSource).toBe('engine-lock');
-      expect(existsSync(sessionDir)).toBe(false);
-      expect(profile.readProfileLock(base)).toMatchObject({ state: 'free' });
-    },
-  );
+    // Hold the copied profile's engine lock, so the next probe reads it live and
+    // the latch opens.
+    const holder = await holdEngineLock(t, {
+      file: path.join(sessionDir, 'lockfile'),
+      profileDir: sessionDir,
+      descriptor: manifestProfileLock('cloak'),
+    });
+    try {
+      await callTool(session, 'browser_navigate', { url: 'data:text/html,y' });
+      const open = await profilesCurrent(session);
+      expect(open.browserOpen).toBe(true);
+      expect(open.browserOpenSource).toBe('engine-lock');
+    } finally {
+      await holder.stop();
+      // The browser removes its lock file on exit.
+      rmSync(path.join(sessionDir, 'lockfile'), { force: true });
+    }
+    // The browser is gone: the poll notices within a second and the copy is
+    // deleted while the broker keeps running.
+    await new Promise((resolve) => setTimeout(resolve, 1800));
+    const closed = await profilesCurrent(session);
+    expect(closed.browserOpen).toBe(false);
+    expect(closed.browserOpenSource).toBe('engine-lock');
+    expect(existsSync(sessionDir)).toBe(false);
+    expect(profile.readProfileLock(base)).toMatchObject({ state: 'free' });
+  });
 });
 
 describe('broker seat gate and the copy modes', () => {
@@ -886,76 +881,4 @@ function createSeatPlugin(root: string): string {
     readFileSync(path.join(pluginDir, 'engines', 'profiles.json')),
   );
   return plugin;
-}
-
-// Which holder proves a live engine lock on this platform. Windows opens the file
-// with no sharing (what Chromium does, so the probe's write-open fails with
-// EBUSY); POSIX has no mandatory locking, so the equivalent the product reads as
-// live is a file the probe cannot open for writing (mode 0400 -> EACCES). Root
-// ignores the mode, so there is no holder there and the latch case is skipped;
-// the close-tool path and the copy release stay covered on every platform.
-const HOLDER_MODE: 'windows' | 'posix' | 'none' =
-  process.platform === 'win32'
-    ? 'windows'
-    : typeof process.getuid === 'function' && process.getuid() !== 0
-      ? 'posix'
-      : 'none';
-
-function holdEngineLock(file: string): Promise<{ stop: () => Promise<void> }> {
-  if (HOLDER_MODE === 'windows') {
-    return holdExclusiveFile(file);
-  }
-  chmodSync(file, 0o400);
-  return Promise.resolve({
-    stop: async () => {
-      chmodSync(file, 0o600);
-    },
-  });
-}
-
-// Hold a file open with no sharing, the way a browser holds its engine lock: the
-// OS then refuses every other open, which is what `exclusive-open-write` reads.
-// Windows only; holdEngineLock routes the POSIX equivalent.
-async function holdExclusiveFile(file: string): Promise<{ stop: () => Promise<void> }> {
-  const script =
-    `$f=[System.IO.File]::Open('${file.replaceAll("'", "''")}','Open','ReadWrite','None');` +
-    'Write-Output held; Start-Sleep -Seconds 60';
-  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: true,
-  });
-  const pid = child.pid;
-  if (pid === undefined) {
-    throw new Error('could not start the file holder');
-  }
-  const deadline = Date.now() + 15000;
-  while (Date.now() < deadline) {
-    try {
-      const handle = openSync(file, 'r+');
-      closeSync(handle);
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EBUSY') {
-        return {
-          stop: async () => {
-            try {
-              process.kill(pid);
-            } catch {
-              // Already gone.
-            }
-            await new Promise<void>((resolve) => {
-              if (child.exitCode !== null || child.signalCode !== null) {
-                resolve();
-                return;
-              }
-              child.once('exit', () => resolve());
-              setTimeout(() => resolve(), 3000);
-            });
-          },
-        };
-      }
-      throw error;
-    }
-  }
-  throw new Error(`the file holder never made ${file} exclusive`);
 }

@@ -1,11 +1,9 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import {
-  closeSync,
   copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
-  openSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -16,6 +14,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { holdEngineLock, manifestProfileLock } from '@tests/helpers/engine-lock-holder.js';
 
 interface CopySummary {
   ok: boolean;
@@ -119,81 +118,12 @@ const SECRET_SEED = 'SEED-SECRET-9c1b';
 const LOCK_FILENAME = '.cloakbrowser-mcp-profile.lock';
 
 const tempRoots: string[] = [];
-const holders: FileHolder[] = [];
 
-afterEach(async () => {
-  for (const holder of holders.splice(0)) {
-    await holder.stop();
-  }
+afterEach(() => {
   for (const root of tempRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }
 });
-
-interface FileHolder {
-  pid: number;
-  stop: () => Promise<void>;
-}
-
-// Hold a file like the browser holds its lock. Chromium's lockfile is shared for
-// readers and exclusive for writers (share "Read": reads succeed, r+ fails);
-// Firefox's parent.lock refuses readers too (share "None": read and r+ both fail
-// with EBUSY). A real process with one Windows handle, started and stopped by
-// exact pid.
-async function holdExclusiveForRead(file: string, share: 'Read' | 'None' = 'Read'): Promise<FileHolder> {
-  const script =
-    `$f=[System.IO.File]::Open('${file.replaceAll("'", "''")}','Open','ReadWrite','${share}');` +
-    'Write-Output held; Start-Sleep -Seconds 120';
-  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: true,
-  });
-  const pid = child.pid;
-  if (pid === undefined) {
-    throw new Error('could not start the file holder');
-  }
-  const deadline = Date.now() + 10000;
-  while (Date.now() < deadline) {
-    try {
-      const handle = openSync(file, 'r+');
-      closeSync(handle);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EBUSY') {
-        let stopped = false;
-        const stop = async () => {
-          if (stopped) {
-            return;
-          }
-          stopped = true;
-          try {
-            process.kill(pid);
-          } catch {
-            // Already gone.
-          }
-          await new Promise<void>((resolve) => {
-            if (child.exitCode !== null || child.signalCode !== null) {
-              resolve();
-              return;
-            }
-            const timer = setTimeout(resolve, 3000);
-            child.once('exit', () => {
-              clearTimeout(timer);
-              resolve();
-            });
-          });
-        };
-        return { pid, stop };
-      }
-    }
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  try {
-    process.kill(pid);
-  } catch {
-    // Already gone.
-  }
-  throw new Error('the file holder never locked the file');
-}
 
 // A scratch plugin root whose engines directory is the real one, with one
 // engine's lock descriptor replaced by a pid rule. The copy tool reads the
@@ -939,12 +869,16 @@ describe('live engine-lock refusals', () => {
 
   it.skipIf(process.platform !== 'win32')(
     'refuses a Chromium profile while a real process holds lockfile, then copies once it exits',
-    async () => {
+    async (t) => {
       const dataDir = tempRoot();
       createCloakFixture(dataDir);
-      const lockPath = path.join(dataDir, 'profiles', 'default', 'lockfile');
-      const holder = await holdExclusiveForRead(lockPath);
-      holders.push(holder);
+      const profileDir = path.join(dataDir, 'profiles', 'default');
+      const lockPath = path.join(profileDir, 'lockfile');
+      const holder = await holdEngineLock(t, {
+        file: lockPath,
+        profileDir,
+        descriptor: manifestProfileLock('cloak'),
+      });
 
       const message = expectFailure(run({ from: 'default', to: 'alice', dataDir }), 'source-locked');
       expect(message).toContain(lockPath);
@@ -962,12 +896,16 @@ describe('live engine-lock refusals', () => {
 
   it.skipIf(process.platform !== 'win32')(
     'refuses a Camoufox profile while a real process holds parent.lock, then copies once it exits',
-    async () => {
+    async (t) => {
       const dataDir = tempRoot();
       createCamoufoxFixture(dataDir);
-      const lockPath = path.join(dataDir, 'profiles', 'camoufox', 'default', 'parent.lock');
-      const holder = await holdExclusiveForRead(lockPath, 'None');
-      holders.push(holder);
+      const profileDir = path.join(dataDir, 'profiles', 'camoufox', 'default');
+      const lockPath = path.join(profileDir, 'parent.lock');
+      const holder = await holdEngineLock(t, {
+        file: lockPath,
+        profileDir,
+        descriptor: manifestProfileLock('camoufox'),
+      });
 
       const message = expectFailure(
         run({ engine: 'camoufox', from: 'default', to: 'alice', dataDir }),

@@ -12,11 +12,9 @@
 // (EBUSY on this machine), so it carries no process id; a lock file that does
 // carry a pid is checked with process.kill(pid, 0). Both rules are exercised.
 import {
-  closeSync,
   copyFileSync,
   mkdirSync,
   mkdtempSync,
-  openSync,
   readFileSync as originalReadFileSync,
   realpathSync,
   rmSync,
@@ -30,6 +28,7 @@ import process from 'node:process';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { holdEngineLock, manifestProfileLock } from '@tests/helpers/engine-lock-holder.js';
 
 // A lock file the OS refuses to open cannot be produced portably (Windows only),
 // so the error mapping is exercised by injecting the exact error Node reported
@@ -328,16 +327,12 @@ const CLOAK_STATUS_KEYS = withEngineLock(withIdentityCopy(withSeat(STATUS_KEYS_2
 
 const tempRoots: string[] = [];
 const sessions: BrokerSession[] = [];
-const holders: FileHolder[] = [];
 
 afterEach(async () => {
   faults.unreadablePath = '';
   faults.unreadableCode = '';
   faults.unopenablePath = '';
   faults.unopenableCode = '';
-  for (const holder of holders.splice(0)) {
-    await holder.stop();
-  }
   for (const session of sessions.splice(0)) {
     await session.close();
   }
@@ -379,72 +374,6 @@ function injectedCode(lockPath: string, code: string): void {
 function injectedOpenCode(lockPath: string, code: string): void {
   faults.unopenablePath = lockPath;
   faults.unopenableCode = code;
-}
-
-interface FileHolder {
-  pid: number;
-  stop: () => Promise<void>;
-}
-
-// Hold a file the way Chromium holds its lockfile: one Windows handle opened for
-// read and write with FILE_SHARE_READ, so other readers succeed while any open
-// for writing is refused. Measured on this machine: the writer-open fails with
-// EBUSY and the file is released the moment the holder exits. The holder is a
-// real process, started and stopped by exact pid.
-async function holdExclusiveForRead(file: string): Promise<FileHolder> {
-  const script =
-    `$f=[System.IO.File]::Open('${file.replaceAll("'", "''")}','Open','ReadWrite','Read');` +
-    'Write-Output held; Start-Sleep -Seconds 120';
-  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: true,
-  });
-  const pid = child.pid;
-  if (pid === undefined) {
-    throw new Error('could not start the file holder');
-  }
-  const deadline = Date.now() + 10000;
-  while (Date.now() < deadline) {
-    try {
-      const handle = openSync(file, 'r+');
-      closeSync(handle);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EBUSY') {
-        let stopped = false;
-        const stop = async () => {
-          if (stopped) {
-            return;
-          }
-          stopped = true;
-          try {
-            process.kill(pid);
-          } catch {
-            // Already gone.
-          }
-          await new Promise<void>((resolve) => {
-            if (child.exitCode !== null || child.signalCode !== null) {
-              resolve();
-              return;
-            }
-            const timer = setTimeout(resolve, 3000);
-            child.once('exit', () => {
-              clearTimeout(timer);
-              resolve();
-            });
-          });
-        };
-        return { pid, stop };
-      }
-      // Another error while the holder starts; keep waiting.
-    }
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  try {
-    process.kill(pid);
-  } catch {
-    // Already gone.
-  }
-  throw new Error('the file holder never locked the file');
 }
 
 describe('engine lock reading (exclusive-open)', () => {
@@ -592,11 +521,14 @@ describe('engine lock reading (exclusive-open-write)', () => {
 
   it.skipIf(process.platform !== 'win32')(
     'reports live while a real process holds the file and stale after it exits',
-    async () => {
+    async (t) => {
       const dir = profileWithLock('write-real-holder', '', 'lockfile');
       const lockPath = path.join(dir, 'lockfile');
-      const holder = await holdExclusiveForRead(lockPath);
-      holders.push(holder);
+      const holder = await holdEngineLock(t, {
+        file: lockPath,
+        profileDir: dir,
+        descriptor: manifestProfileLock('cloak'),
+      });
       const live = profile.readEngineProfileLock(dir, descriptor);
       expect(live).toMatchObject({ state: 'live', owner: { pid: null }, error: null });
       expect(profile.engineLockBlocksStart(live)).toBe(true);
@@ -1258,15 +1190,18 @@ describe('broker engine-lock preflight', () => {
 
   it.skipIf(process.platform !== 'win32')(
     'refuses to spawn when another process holds the Chromium lockfile',
-    async () => {
+    async (t) => {
       const root = tempRoot('pr-camoufox-preflight-cloak-live-');
       const dataDir = createCloakRuntime(path.join(root, 'data'));
       const profileDir = path.join(dataDir, 'profiles', 'default');
       mkdirSync(profileDir, { recursive: true });
       const lockPath = path.join(profileDir, 'lockfile');
       writeFileSync(lockPath, '');
-      const holder = await holdExclusiveForRead(lockPath);
-      holders.push(holder);
+      const holder = await holdEngineLock(t, {
+        file: lockPath,
+        profileDir,
+        descriptor: manifestProfileLock('cloak'),
+      });
 
       const session = startBroker({ dataDir, engine: 'cloak', pluginDir, onLocked: 'block' });
       const instructions = await initialize(session);
