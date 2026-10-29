@@ -442,6 +442,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 10000): Promise<boo
     if (predicate()) {
       return true;
     }
+    // budget: 25 ms poll interval under the caller's 10 s waitFor deadline
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   return predicate();
@@ -1130,7 +1131,9 @@ describe('broker copy-keep mode', () => {
     session.endInput();
     expect(await session.exited).toBe(0);
     const waited = Date.now() - startedAt;
+    // budget: the product's copy-keep lock wait is 5 s by construction, so 4.75 s is the least that proves it waited
     expect(waited).toBeGreaterThanOrEqual(profile.COPY_KEEP_LOCK_WAIT_MS - 250);
+    // budget: upper half of the same band; 5 s + 5 s absorbs a loaded runner's extra broker start
     expect(waited).toBeLessThan(profile.COPY_KEEP_LOCK_WAIT_MS + 5000);
     expect(existsSync(sessionDir)).toBe(true);
     expect(hashTree(base)).toBe(baseHashBefore);

@@ -242,6 +242,29 @@ const configOptions7 = {
     'jsdoc/require-returns-description': 'off',
   },
 };
+// A lock holder is a process that exists only to hold one file, and six copies of
+// it drifted apart (the 2026-10-28 holder audit). The one supported way to hold an
+// engine lock is holdEngineLock() in tests/helpers/engine-lock-holder.ts; that
+// directory is excluded here because it is where the single spawn belongs.
+const powershellLockHolderMessage =
+  'Do not spawn a PowerShell lock holder from a test: use holdEngineLock() from tests/helpers/engine-lock-holder.ts (the 2026-10-28 holder audit).';
+const forbiddenPowershellSpawn = [
+  {
+    selector: 'CallExpression[callee.name=/^spawn(Sync)?$/][arguments.0.value=/powershell|pwsh/i]',
+    message: powershellLockHolderMessage,
+  },
+  {
+    selector: 'CallExpression[callee.property.name=/^spawn(Sync)?$/][arguments.0.value=/powershell|pwsh/i]',
+    message: powershellLockHolderMessage,
+  },
+];
+const configOptions8 = {
+  files: ['tests/**/*.ts'],
+  ignores: ['tests/helpers/**'],
+  rules: {
+    'no-restricted-syntax': ['error', ...forbiddenPowershellSpawn],
+  },
+};
 export default tseslint.config(
   configOptions,
   argumentValue,
@@ -256,5 +279,6 @@ export default tseslint.config(
   configOptions5,
   configOptions6,
   configOptions7,
+  configOptions8,
   prettier,
 );

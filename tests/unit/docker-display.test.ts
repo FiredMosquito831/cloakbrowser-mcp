@@ -205,6 +205,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
     if (Date.now() >= deadline) throw new Error('Timed out waiting for expected condition');
+    // budget: 5 ms poll interval under the caller's 1 s waitFor deadline; the predicate reads process state
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }

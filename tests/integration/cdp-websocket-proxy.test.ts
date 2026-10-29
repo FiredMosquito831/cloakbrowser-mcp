@@ -268,6 +268,7 @@ describe('CDP WebSocket proxy integration', () => {
     const toMatchObjectOptions4 = { error: { code: 'gateway_timeout' } } as const;
     expect(receiver14Actual).toMatchObject(toMatchObjectOptions4);
     const computedValue = Date.now() - startedAt;
+    // budget: the proxy's handshake deadline is 25 ms; 500 ms proves the 504 is that deadline, not a connect timeout
     expect(computedValue).toBeLessThan(500);
   });
   it('admits exactly eight paired sockets and recovers capacity after close', async () => {
@@ -584,12 +585,14 @@ describe('CDP WebSocket proxy integration', () => {
     publishGeneration(proxy, publishGenerationOptions6);
     const browserPathResult17 = browserPath();
     const client = await connect(proxy, browserPathResult17);
+    // budget: 50 ms lets the client's upgrade reach OPEN; a failed upgrade would already have closed the socket
     await new Promise<void>((resolve) => setTimeout(resolve, 50));
     expect(client.readyState).toBe(WebSocket.OPEN);
     upstreamSocket?.pause();
     const clientClosed = onceClose(client);
     const startedAt = Date.now();
     const closing = proxy.close();
+    // budget: 10 ms is enough for close() to reach the listener release while the client socket is still open
     await new Promise<void>((resolve) => setTimeout(resolve, 10));
     const propertyValue3 = 'http';
     const cdpPortAllocatorOptions2 = { start: allocatorPort, end: allocatorPort } as const;
@@ -609,6 +612,7 @@ describe('CDP WebSocket proxy integration', () => {
     await expect(receiver26Actual).rejects.toMatchObject(toMatchObjectOptions10);
     await closing;
     const computedValue4 = Date.now() - startedAt;
+    // budget: the proxy's shutdown deadline is 40 ms; 500 ms proves close() waited on that bound, not on the client
     expect(computedValue4).toBeLessThan(500);
     const receiver27Actual = clientClosed;
     const toMatchObjectOptions11 = { code: 1001, reason: 'going_away' } as const;

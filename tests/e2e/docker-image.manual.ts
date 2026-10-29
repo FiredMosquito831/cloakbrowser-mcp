@@ -233,12 +233,14 @@ describe('Docker image distribution E2E', () => {
     dockerExec(containerName, values18);
     await waitForDockerHealth(containerName, 'unhealthy');
     const computedValue = Date.now() - unhealthyStartedAt;
+    // budget: one Docker health transition is 2 s interval x 2 retries + 3 s timeout = 7 s; 8 s covers it
     expect(computedValue).toBeLessThanOrEqual(8000);
     const healthyStartedAt = Date.now();
     const values19: string[] = ['sh', '-c', `kill -CONT ${cliPid}`];
     dockerExec(containerName, values19);
     await waitForDockerHealth(containerName, 'healthy');
     const computedValue2 = Date.now() - healthyStartedAt;
+    // budget: one Docker health transition is 2 s interval x 2 retries + 3 s timeout = 7 s; 8 s covers it
     expect(computedValue2).toBeLessThanOrEqual(8000);
   });
   it('detects an unresponsive retained Xvfb and recovers after it resumes', async () => {
@@ -259,12 +261,14 @@ describe('Docker image distribution E2E', () => {
     dockerExec(containerName, values21);
     await waitForDockerHealth(containerName, 'unhealthy');
     const computedValue3 = Date.now() - unhealthyStartedAt;
+    // budget: one Docker health transition is 2 s interval x 2 retries + 3 s timeout = 7 s; 8 s covers it
     expect(computedValue3).toBeLessThanOrEqual(8000);
     const healthyStartedAt = Date.now();
     const values22: string[] = ['sh', '-c', `kill -CONT ${xvfbPid}`];
     dockerExec(containerName, values22);
     await waitForDockerHealth(containerName, 'healthy');
     const computedValue4 = Date.now() - healthyStartedAt;
+    // budget: one Docker health transition is 2 s interval x 2 retries + 3 s timeout = 7 s; 8 s covers it
     expect(computedValue4).toBeLessThanOrEqual(8000);
     const currentUrl10: string = url;
     const result11: string | null = headed.headers.get('mcp-session-id');

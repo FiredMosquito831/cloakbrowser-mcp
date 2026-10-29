@@ -57,6 +57,7 @@ if (scenario !== 'empty' && scenario !== 'collection') {
     it('records an unhandled rejection', async () => {
       const failure = new Error('Fixture unhandled rejection');
       void Promise.reject(failure);
+      // budget: 30 ms keeps the test alive for the microtask queue, where the unhandled rejection surfaces
       await new Promise((resolve) => setTimeout(resolve, 30));
     });
   }

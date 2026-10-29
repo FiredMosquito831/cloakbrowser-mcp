@@ -242,6 +242,7 @@ export async function waitForDockerExec(
               const stringResult = String(error);
               return new Error(stringResult);
             })();
+      // budget: 100 ms retry interval under the 10 s waitForDockerExec deadline; the docker call itself blocks
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }
@@ -263,6 +264,7 @@ export async function waitForDockerExit(containerName: string, timeoutMs = 10000
       })()
     )
       return;
+    // budget: 100 ms poll interval under the caller's 10 s waitForDockerExit deadline
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   const message12 = `Docker container did not exit: ${containerName}`;
@@ -294,6 +296,7 @@ export async function waitForDockerHttp(
               return new Error(stringResult2);
             })();
     }
+    // budget: 100 ms poll interval under the caller's 10 s waitForDockerHttp deadline
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw (
@@ -312,6 +315,7 @@ export async function waitForDockerHealth(
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (dockerHealthStatus(containerName) === expected) return;
+    // budget: 100 ms poll interval under the caller's 12 s waitForDockerHealth deadline
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   const message15 = `Docker health did not become ${expected}`;

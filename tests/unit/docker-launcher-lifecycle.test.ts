@@ -121,6 +121,7 @@ async function waitFor(predicate: () => boolean | Promise<boolean>): Promise<voi
   const deadline = Date.now() + 2000;
   while (!(await predicate())) {
     if (Date.now() >= deadline) throw new Error('Timed out waiting launcher state');
+    // budget: 10 ms poll interval under the 2 s deadline above; the predicate probes the launcher
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
