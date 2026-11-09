@@ -124,6 +124,8 @@ The same repository is a Claude Code plugin marketplace named `cloakbrowser-mcp`
 
 Install one path per engine. Plugin settings are per plugin and are not carried across; a Kameleo per-engine plugin is not shipped. See `plugins/cloakbrowser/README.md` and `plugins/camoufox/README.md`.
 
+A plugin's first start on a machine that has never provisioned now connects immediately. The broker answers Claude Code's handshake itself when the engine has not done so within 5 s, and answers `tools/list` within 15 s from the cached list or the three meta-tools; the real tool list arrives automatically through `notifications/tools/list_changed` when provisioning finishes, and `browser_engine_status` reports `backendState: "starting"` with `backendSubstate: "provisioning"` meanwhile. No restart is needed. The windows are operator environment overrides (`STEALTH_HANDSHAKE_GRACE_MS`, `STEALTH_TOOLS_LIST_GRACE_MS`), not plugin settings.
+
 ### GitHub Copilot In VS Code
 
 ```json
