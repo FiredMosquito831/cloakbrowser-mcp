@@ -540,6 +540,10 @@ describe('browser_capabilities artifact diagnostics', () => {
     const expectedKeys = [...Object.keys(fixture)];
     // 2.21.0 adds the launcher-side settings right after ignoredSettings.
     expectedKeys.splice(expectedKeys.indexOf('ignoredSettings') + 1, 0, 'launcherSettings');
+    // 2.23.1 adds the host platform right after the launcher-side settings block.
+    // It is capabilities-only and always present, so the status payload is
+    // unchanged.
+    expectedKeys.splice(expectedKeys.indexOf('launcherSettings') + 1, 0, 'platform');
     expectedKeys.splice(expectedKeys.indexOf('profileLock') + 1, 0, 'engineProfileLock');
     // 2.16.0 adds the resolved on_locked policy inside the profile block, right
     // after profileApplies.
