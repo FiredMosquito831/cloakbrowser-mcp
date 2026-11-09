@@ -225,6 +225,46 @@ function readPluginVersion() {
 
 const BROKER_VERSION = readPluginVersion();
 
+// --- first-start handshake (2.23.0) ------------------------------------------
+// On a machine that has never provisioned, the whole MCP connect window is spent
+// inside the launcher: the npm runtime, uv, the managed Python, the venv and the
+// Camoufox browser build all run before the engine that answers initialize
+// exists. Claude Code's MCP startup timeout is 30 000 ms, so a first start on a
+// new machine failed to connect, and the only documented workaround was a
+// restart. The broker now answers the client's handshake itself when the backend
+// has not done so within a bounded window and lets provisioning continue behind
+// it; the backend's own answers are consumed when they arrive and the real tool
+// list is announced with notifications/tools/list_changed.
+//
+// Both windows are measured from process start, not from the backend spawn: the
+// client's connect window opens when the broker does, and the artifact-directory
+// probe can delay the spawn by up to 2 s. They are internal constants with an
+// environment override so a test can shorten them; they are deliberately NOT
+// plugin settings.
+const PROCESS_STARTED_AT = Date.now();
+const HANDSHAKE_GRACE_MS = startupGraceFromEnv('STEALTH_HANDSHAKE_GRACE_MS', 5000);
+const TOOLS_LIST_GRACE_MS = startupGraceFromEnv('STEALTH_TOOLS_LIST_GRACE_MS', 15000);
+// A tools/list that arrives after its process-start deadline still gives a warm
+// backend this long to answer, so a late client never gets a cold answer for a
+// backend that would have answered at once. The floor is capped by the grace
+// itself, so a shortened test window stays exactly what the test asked for.
+const TOOLS_LIST_LATE_FLOOR_MS = 1000;
+
+// An unset or empty value is the default; an invalid or negative one falls back
+// to the default with one log line and never fails a start.
+function startupGraceFromEnv(name, fallback) {
+  const raw = process.env[name];
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    return fallback;
+  }
+  const value = Number(raw.trim());
+  if (!Number.isInteger(value) || value < 0) {
+    log(`ignoring invalid ${name} value "${raw.trim()}"; using ${fallback} ms`);
+    return fallback;
+  }
+  return value;
+}
+
 function usableEngineValue(value) {
   if (!nonEmptyString(value)) {
     return null;
@@ -2917,6 +2957,11 @@ const state = {
   // dead-backend restart needs them again on every restart, so the source is
   // kept here instead of the one-shot slot.
   clientHandshake: { initializeLine: null, initializedLine: null },
+  // First-start handshake (2.23.0): the client requests whose answer the broker
+  // is still waiting for, keyed by request id, with the timer that answers them
+  // itself when the backend has not. A request leaves this map the moment the
+  // backend answers it, and every timer is cleared on shutdown.
+  startupTimers: new Map(),
   pendingRequests: new Map(),
   hiddenByManifest: new Set(),
   hiddenByCollision: new Set(),
@@ -2987,13 +3032,20 @@ function backendAlive() {
   return child !== null && child.exitCode === null && child.signalCode === null;
 }
 
+// The backend substates that mean the backend this session started can never
+// answer again. "provisioning" (2.23.0) is deliberately absent: a backend that is
+// still provisioning is alive and will answer, so every routing decision stays on
+// the normal path. One set decides both the reported value and the routing, so
+// the two can never disagree.
+const UNUSABLE_BACKEND_SUBSTATES = new Set(['upstream-disconnected']);
+
 // A backend that answered with its upstream gone (2.19.0) is as unusable as an
 // exited one, so every routing decision treats it the same way: tools/list is
 // answered by the broker's meta-tools instead of a relayed failure, and a tool
 // call becomes the retry. On every healthy path backendSubstate is null and this
 // is exactly backendAlive().
 function backendUsable() {
-  return backendAlive() && state.backendSubstate === null;
+  return backendAlive() && !UNUSABLE_BACKEND_SUBSTATES.has(state.backendSubstate);
 }
 
 function backendDescription() {
@@ -3567,6 +3619,7 @@ function attemptDeadBackendRestart(reason) {
 // this answer is fully handled here and must not be relayed.
 function handleUpstreamDisconnectedAnswer(pending, id, message) {
   noteUpstreamDisconnected(message);
+  clearStartupTimer(id);
   if (pending.method === 'tools/call') {
     state.pendingRequests.delete(id);
     if (typeof pending.rawLine === 'string' && attemptDeadBackendRestart('the upstream disconnected')) {
@@ -5046,24 +5099,45 @@ function sendMetaOnlyList(id, cursor) {
   sendResult(id, { tools });
 }
 
-function synthesizeInitialize(id, reason) {
-  state.initializeAnswered = true;
-  state.initializeAnsweredAt = state.initializeAnsweredAt ?? Date.now();
+// The first-start sentence (2.23.0). It is neither the hold sentence nor
+// "backend unavailable": the backend is alive and provisioning, the broker
+// answered so the server could connect, and the real list follows by itself.
+function firstStartInstructionText() {
+  return (
+    `The ${state.engineId} engine is starting for the first time on this machine: its runtime is being ` +
+    'provisioned (packages, and for the Camoufox engines Python and the browser build), which can take ' +
+    'minutes. The broker answered the MCP handshake so this server could connect; the full tool list ' +
+    'appears automatically when the engine is ready, and until then the three broker meta-tools answer. ' +
+    'Call browser_engine_status to see progress.'
+  );
+}
+
+function synthesizeInitialize(id, reason, options = {}) {
+  // The first-start answer is the one synthesized handshake that does NOT record
+  // an answer time: the client was answered, but startupMs has to measure the
+  // backend's own answer, which is still to come (2.23.0).
+  const firstStart = options.firstStart === true;
+  if (!firstStart) {
+    state.initializeAnswered = true;
+    state.initializeAnsweredAt = state.initializeAnsweredAt ?? Date.now();
+  }
   const dependencyHint = systemDependencyHint();
   // A single-seat hold is not a failure: the session is usable and recovers by
   // itself, so it gets its own honest sentence instead of "restart Claude Code".
-  const instructions = state.hold.active
-    ? `${holdInstructionText()} ${artifactDirectorySentence()}`
-    : state.profile.pendingCopy !== null
-      ? `${copyPendingInstructionText()} ${artifactDirectorySentence()}`
-      : `The ${state.engineId} backend is unavailable: ${reason} ` +
-        'Call browser_engine_status for details. Only broker meta-tools are exposed until Claude Code restarts the MCP server.' +
-        (state.profile.fallback === null ? '' : ` ${state.profile.fallback.reason}`) +
-        (dependencyHint === null ? '' : ` ${dependencyHint}`) +
-        (state.profile.isolated && state.profile.appliesToEngine && !state.profile.onLockedIsolated
-          ? ` ${PROFILE_ISOLATED_NOTE}`
-          : '') +
-        ` ${artifactDirectorySentence()}`;
+  const instructions = firstStart
+    ? `${firstStartInstructionText()} ${artifactDirectorySentence()}`
+    : state.hold.active
+      ? `${holdInstructionText()} ${artifactDirectorySentence()}`
+      : state.profile.pendingCopy !== null
+        ? `${copyPendingInstructionText()} ${artifactDirectorySentence()}`
+        : `The ${state.engineId} backend is unavailable: ${reason} ` +
+          'Call browser_engine_status for details. Only broker meta-tools are exposed until Claude Code restarts the MCP server.' +
+          (state.profile.fallback === null ? '' : ` ${state.profile.fallback.reason}`) +
+          (dependencyHint === null ? '' : ` ${dependencyHint}`) +
+          (state.profile.isolated && state.profile.appliesToEngine && !state.profile.onLockedIsolated
+            ? ` ${PROFILE_ISOLATED_NOTE}`
+            : '') +
+          ` ${artifactDirectorySentence()}`;
   sendResult(id, {
     protocolVersion: state.requestedProtocolVersion ?? '2025-06-18',
     capabilities: { tools: {} },
@@ -5076,10 +5150,111 @@ function synthesizeInitialize(id, reason) {
   });
 }
 
+// --- first-start handshake: the bounded window (2.23.0) ----------------------
+// A request the broker forwarded to a backend that has not answered it yet gets
+// one timer. When it fires, the broker answers the client itself and marks the
+// pending request as a replay, so the backend's own answer is consumed instead of
+// being relayed a second time under the same id.
+
+function clearStartupTimer(id) {
+  const timer = state.startupTimers.get(id);
+  if (timer !== undefined) {
+    clearTimeout(timer);
+    state.startupTimers.delete(id);
+  }
+}
+
+function clearAllStartupTimers() {
+  for (const timer of state.startupTimers.values()) {
+    clearTimeout(timer);
+  }
+  state.startupTimers.clear();
+}
+
+// How long this request may wait for the backend's own answer. initialize uses
+// the plain process-start deadline. tools/list keeps a floor, so a client that
+// asks late still gives a warm backend a real chance to answer instead of
+// receiving a cold answer for a backend that would have replied at once; the
+// floor is capped by the grace, so a shortened test window stays exact.
+function startupWindowMs(method) {
+  const remaining =
+    PROCESS_STARTED_AT + (method === 'initialize' ? HANDSHAKE_GRACE_MS : TOOLS_LIST_GRACE_MS) - Date.now();
+  if (method === 'initialize') {
+    return Math.max(0, remaining);
+  }
+  return Math.min(Math.max(remaining, TOOLS_LIST_LATE_FLOOR_MS), TOOLS_LIST_GRACE_MS);
+}
+
+// The cold path never overlaps a path that already answers for the client: a
+// single-seat hold, a deferred session copy, a refused start and a dead backend
+// each answer for themselves, and the request must have reached a live child.
+function coldStartApplies() {
+  return (
+    state.hold.active === false &&
+    state.profile.pendingCopy === null &&
+    state.engineError === null &&
+    backendAlive()
+  );
+}
+
+function answerColdStart(method, id, cursor) {
+  const pending = state.pendingRequests.get(id);
+  if (pending === undefined || pending.method !== method || pending.replay === true) {
+    return;
+  }
+  if (!coldStartApplies()) {
+    return;
+  }
+  pending.replay = true;
+  // The broker answered for a backend that has answered nothing yet: that is
+  // exactly what the additive "provisioning" substate reports. It does not make
+  // the backend unusable — it is alive and will answer.
+  if (state.backendAnswered === false) {
+    state.backendSubstate = 'provisioning';
+  }
+  if (method === 'initialize') {
+    log(
+      `first start: the backend has not answered initialize within ${HANDSHAKE_GRACE_MS} ms, so the broker ` +
+        'answers the handshake and lets provisioning continue; the tool list follows automatically',
+    );
+    synthesizeInitialize(id, 'the engine runtime is still being provisioned', { firstStart: true });
+    return;
+  }
+  log(
+    `first start: the backend has not answered tools/list within ${TOOLS_LIST_GRACE_MS} ms, so the broker ` +
+      'answers from the cached tool list or the meta-tools and announces the real list when it arrives',
+  );
+  sendHeldToolList(id, cursor);
+}
+
+function armStartupTimer(method, id, cursor) {
+  if (method !== 'initialize' && method !== 'tools/list') {
+    return;
+  }
+  clearStartupTimer(id);
+  const timer = setTimeout(() => {
+    state.startupTimers.delete(id);
+    answerColdStart(method, id, cursor);
+  }, startupWindowMs(method));
+  // A pending window must never hold the process open after the client is gone;
+  // beginShutdown clears every timer as well.
+  if (typeof timer.unref === 'function') {
+    timer.unref();
+  }
+  state.startupTimers.set(id, timer);
+}
+
 function drainPendingRequests(reason) {
   const pending = [...state.pendingRequests.entries()];
   state.pendingRequests.clear();
+  clearAllStartupTimers();
   for (const [id, request] of pending) {
+    if (request.replay === true) {
+      // The broker already answered this request (a hold replay or a first-start
+      // answer); a second response under the same id would corrupt the client's
+      // stream.
+      continue;
+    }
     if (request.method === 'initialize') {
       synthesizeInitialize(id, reason);
       continue;
@@ -5368,6 +5543,9 @@ function beginShutdown() {
   }
   state.shuttingDown = true;
   stopBrowserWatch();
+  // No first-start window may outlive the client: every pending timer is cleared
+  // so the process exits promptly (2.23.0).
+  clearAllStartupTimers();
   log('stdin closed; stopping backend');
   const child = state.child;
   if (child === null || child.exitCode !== null || child.signalCode !== null) {
@@ -5497,7 +5675,9 @@ function handleClientRequest(message, rawLine) {
       // restart runs, then the call is forwarded below as if nothing had
       // happened; when no restart may run the call is answered with the honest
       // error naming the state and the fix.
-      const reason = state.backendSubstate === null ? 'the backend exited' : 'the upstream disconnected';
+      const reason = UNUSABLE_BACKEND_SUBSTATES.has(state.backendSubstate)
+        ? 'the upstream disconnected'
+        : 'the backend exited';
       if (!attemptDeadBackendRestart(reason)) {
         sendToolError(id, deadBackendToolError(name));
         return;
@@ -5607,6 +5787,7 @@ function handleClientRequest(message, rawLine) {
   if (!forwardToBackend(rawLine)) {
     if (isRequest) {
       state.pendingRequests.delete(id);
+      clearStartupTimer(id);
       if (method === 'initialize') {
         synthesizeInitialize(id, backendDescription());
       } else if (method === 'tools/list') {
@@ -5615,6 +5796,13 @@ function handleClientRequest(message, rawLine) {
         sendError(id, -32603, `Cannot handle "${String(method)}": ${backendDescription()}.`);
       }
     }
+    return;
+  }
+  // The request reached a live child. A backend that is still provisioning will
+  // not answer it for a while, so the broker keeps a bounded window open and
+  // answers the client itself when it expires (2.23.0).
+  if (isRequest) {
+    armStartupTimer(method, id, message.params?.cursor);
   }
 }
 
@@ -5624,12 +5812,23 @@ function handleClientRequest(message, rawLine) {
 // visible through initializeRejected and lastError.
 function noteBackendAnswered(pending) {
   state.backendAnswered = true;
+  // The first-start substate describes a backend that has answered nothing yet,
+  // so the first answer of any kind ends it (2.23.0).
+  endProvisioningSubstate();
   if (
     state.initializeRejected &&
     state.backend.state === 'failed' &&
     (pending?.method === 'tools/list' || pending?.method === 'tools/call')
   ) {
     state.backend.state = 'running';
+  }
+}
+
+// The first-start substate ends the moment the backend answers anything or dies:
+// the reported value must never outlive what it describes.
+function endProvisioningSubstate() {
+  if (state.backendSubstate === 'provisioning') {
+    state.backendSubstate = null;
   }
 }
 
@@ -5645,7 +5844,9 @@ function handleBackendMessage(message, rawLine) {
     // broker, so this response is consumed, never relayed. The facts it carries
     // (server info, capabilities, a rejection) are still recorded.
     state.pendingRequests.delete(id);
+    clearStartupTimer(id);
     state.backendAnswered = true;
+    endProvisioningSubstate();
     if (pending.method === 'initialize') {
       if (message.error === undefined) {
         state.initializeAnswered = true;
@@ -5662,6 +5863,14 @@ function handleBackendMessage(message, rawLine) {
         state.backend.state = 'failed';
       }
     }
+    if (pending.method === 'tools/list' && Array.isArray(message.result?.tools)) {
+      // The first-start answer (2.23.0): the client already has the cached list or
+      // the meta-tools, so the backend's real list is recorded (which saves the
+      // cache) and announced instead of being relayed under a used id.
+      state.lastToolsListWaitMs = Date.now() - pending.sentAt;
+      recordBackendTools(message.result.tools, pending.cursor !== undefined);
+      notifyToolsListChanged();
+    }
     return;
   }
   // Dead-backend recovery (2.19.0): the bridge answered with its own upstream
@@ -5674,6 +5883,7 @@ function handleBackendMessage(message, rawLine) {
   if (isResponse) {
     noteBackendAnswered(pending);
     state.pendingRequests.delete(id);
+    clearStartupTimer(id);
   }
   // Browser lifecycle (2.20.0): one engine-lock probe after each tool response,
   // except on the two instant paths (browser_close, _meta.isClose). The seat
@@ -5901,6 +6111,8 @@ function startBackend() {
   child.on('error', (error) => {
     state.lastError = `Failed to start backend: ${error.message}`;
     state.backend.state = 'failed';
+    // A backend that never started is not provisioning any more (2.23.0).
+    endProvisioningSubstate();
     log(state.lastError);
     drainPendingRequests(backendDescription());
   });
@@ -5920,6 +6132,8 @@ function startBackend() {
     state.backend.exitCode = code;
     state.backend.exitSignal = signal;
     state.backend.state = wasStarting ? 'failed' : 'exited';
+    // A backend that exited is not provisioning any more (2.23.0).
+    endProvisioningSubstate();
     if (!state.shuttingDown) {
       const detail = signal === null ? `code ${String(code)}` : `signal ${signal}`;
       // The last stderr line explains most backend exits (a profile lock, a
