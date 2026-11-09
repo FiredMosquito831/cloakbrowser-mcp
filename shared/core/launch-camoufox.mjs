@@ -84,6 +84,33 @@ function fail(message) {
   process.exit(1);
 }
 
+// A headed Camoufox cannot start on a Linux machine with no display (2.23.1).
+// The wrapper passes `headless` straight into camoufox_options and Camoufox
+// itself defaults to headed, so the default configuration would fail inside the
+// browser with a raw launch error. The value is never changed here: silently
+// flipping to headless is the behaviour 2.21.0 removed for the Chromium path,
+// and it changes detectability without telling anyone. The start fails once,
+// with one actionable sentence, and the broker records it in lastError.
+export const DISPLAYLESS_LINUX_SENTENCE =
+  'No DISPLAY or WAYLAND_DISPLAY is set on this Linux machine, so a headed Camoufox cannot start. ' +
+  'Set the Headless setting to true, or run under Xvfb.';
+
+// Pure: `env` is the RESOLVED child environment (buildChildEnv's output), where
+// PLAYWRIGHT_MCP_HEADLESS is already the canonical "true"/"false" spelling. The
+// sentence is returned only when all three conditions hold, so a Windows or
+// macOS start, a headless start and a Linux start with a display are unchanged.
+export function displaylessLinuxProblem(env, platform = process.platform) {
+  if (platform !== 'linux') {
+    return null;
+  }
+  if (env.PLAYWRIGHT_MCP_HEADLESS === 'true') {
+    return null;
+  }
+  const display = typeof env.DISPLAY === 'string' ? env.DISPLAY.trim() : '';
+  const wayland = typeof env.WAYLAND_DISPLAY === 'string' ? env.WAYLAND_DISPLAY.trim() : '';
+  return display === '' && wayland === '' ? DISPLAYLESS_LINUX_SENTENCE : null;
+}
+
 export function buildChildEnv(source) {
   const env = { ...source };
   for (const name of EMPTY_OPTIONAL_VARS) {
@@ -231,6 +258,13 @@ function resolveBinary(env, paths, build) {
 
 async function main() {
   const env = buildChildEnv(process.env);
+  // Fail before provisioning anything: a display-less Linux host cannot start a
+  // headed Camoufox, so it gets the one actionable sentence immediately instead
+  // of minutes of runtime setup followed by a raw browser error.
+  const displayless = displaylessLinuxProblem(env);
+  if (displayless !== null) {
+    fail(displayless);
+  }
   const spec = resolveOverride(env, 'CAMOUFOX_MCP_PACKAGE', PACKAGE_PIN);
   const build = resolveOverride(env, 'CAMOUFOX_BROWSER_BUILD', BUILD_PIN);
 

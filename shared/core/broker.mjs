@@ -4460,6 +4460,12 @@ function capabilitiesPayload(clientRoots) {
     // the same function the launcher itself runs on the same environment, so the
     // report can never disagree with the child the engine actually got.
     ...launcherSettingsFields(),
+    // The host platform (2.23.1), always present and additive: process.platform
+    // ("win32", "linux", "darwin", ...), so a payload says at a glance which
+    // platform branch this start took. It is a constant for the process, never
+    // conditional, so every engine and every path (including a meta-only start
+    // after a failed backend) carries it and no other key moves.
+    platform: process.platform,
     ...(systemDeps.length === 0 ? {} : { systemDependencies: systemDeps }),
     ...nativeCapabilitiesExtras(),
     // Per-account profile facts, additive. The proxy URL itself is never

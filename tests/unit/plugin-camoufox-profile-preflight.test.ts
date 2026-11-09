@@ -308,7 +308,7 @@ function withCopyContentsNote(keys: string[]): string[] {
   return copy;
 }
 
-const SYNTHETIC_CAPABILITIES_KEYS = withCopyContentsNote(CAPABILITIES_KEYS_295);
+const SYNTHETIC_CAPABILITIES_KEYS = withPlatform(withCopyContentsNote(CAPABILITIES_KEYS_295));
 const SYNTHETIC_STATUS_KEYS = withCopyContentsNote(STATUS_KEYS_293);
 
 // 2.21.0 adds the launcher-side settings for an engine whose launcher turns them
@@ -320,8 +320,19 @@ function withLauncherSettings(keys: string[]): string[] {
   return copy;
 }
 
-const CLOAK_CAPABILITIES_KEYS = withLauncherSettings(
-  withEngineLock(withIdentityCopy(withSeat(CAPABILITIES_KEYS_295))),
+// 2.23.1 adds the host platform right after the launcher-side settings block, or
+// right after ignoredSettings for a launcher that resolves none. It is
+// capabilities-only (the status payload is unchanged), always present, and it
+// moves no other key.
+function withPlatform(keys: string[]): string[] {
+  const copy = [...keys];
+  const anchor = copy.includes('launcherSettings') ? 'launcherSettings' : 'ignoredSettings';
+  copy.splice(copy.indexOf(anchor) + 1, 0, 'platform');
+  return copy;
+}
+
+const CLOAK_CAPABILITIES_KEYS = withPlatform(
+  withLauncherSettings(withEngineLock(withIdentityCopy(withSeat(CAPABILITIES_KEYS_295)))),
 );
 const CLOAK_STATUS_KEYS = withEngineLock(withIdentityCopy(withSeat(STATUS_KEYS_293)));
 
