@@ -467,19 +467,22 @@ describe('copy-keep as a profile_isolation value', () => {
         readFileSync(path.join(repoRoot, 'plugins', name, '.claude-plugin', 'plugin.json'), 'utf8'),
       ) as { version: string; userConfig: { profile_isolation: { options: string[]; description: string } } };
       const setting = manifest.userConfig.profile_isolation;
-      expect(setting.options).toEqual(['shared', 'workspace', 'isolated', 'copy', 'copy-keep']);
+      expect(setting.options).toEqual(['shared', 'workspace', 'isolated', 'copy', 'copy-keep', 'session']);
       expect(setting.description).toContain('copy-keep');
       expect(setting.description).toContain('previous-');
       expect(setting.description).toContain('never deleted automatically');
       expect(setting.description).not.toContain('in memory');
-      expect(manifest.version).toBe('2.23.1');
+      expect(manifest.version).toBe('2.24.0');
     }
+    // 2.24.0 appended "session" to the same setting (see
+    // plugin-profile-session.test.ts); every earlier value keeps its position.
     expect(profile.PROFILE_ISOLATION_VALUES).toEqual([
       'shared',
       'workspace',
       'isolated',
       'copy',
       'copy-keep',
+      'session',
     ]);
     expect(profile.PROFILE_ISOLATION_COPY_KEEP).toBe('copy-keep');
     expect(profile.PROFILE_ISOLATION_COPY_VALUES).toEqual(['copy', 'copy-keep']);

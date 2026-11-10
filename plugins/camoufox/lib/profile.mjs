@@ -72,17 +72,25 @@ export const DEFAULT_LAUNCHER = 'launch.mjs';
 // base path, so the session's changes are kept. A hard kill never swaps. In this
 // version both copy modes resolve whatever profile_dir/account/the
 // pointer/engine default resolves and do not combine with "workspace".
+// "session" (2.24.0) resolves the base exactly like "shared" and runs the whole
+// session on an identity copy of it, but it never takes the base profile's lock:
+// the base is a read-only source, so several Claude Code sessions (each with its
+// own MCP server) can run at once on the same base, which is what "copy" cannot
+// do because its base lock serialises them. The copy lasts for the broker, not
+// the browser, and is discarded on a clean exit exactly like "copy".
 export const PROFILE_ISOLATION_VALUES = Object.freeze([
   'shared',
   'workspace',
   'isolated',
   'copy',
   'copy-keep',
+  'session',
 ]);
 export const DEFAULT_PROFILE_ISOLATION = 'shared';
 export const PROFILE_ISOLATION_ISOLATED = 'isolated';
 export const PROFILE_ISOLATION_COPY = 'copy';
 export const PROFILE_ISOLATION_COPY_KEEP = 'copy-keep';
+export const PROFILE_ISOLATION_SESSION = 'session';
 // The two modes that run on a session copy. They share the base resolution, the
 // preflights, the base lock, the copy plan and the session directory; they differ
 // only in what a clean shutdown does with the copy.
@@ -425,6 +433,12 @@ export const DEFAULT_COPY_CONTENTS = COPY_CONTENTS_IDENTITY;
 // may not use it. A setting may never silently destroy data, so the value is
 // replaced with "full" in code and every payload says it was clamped and why.
 export const COPY_CONTENTS_SOURCE_CLAMPED = 'clamped';
+// The fourth (2.24.0): profile_isolation "session" always copies the identity
+// tier, because its base may be live and only that tier excludes the files a live
+// writer holds. The setting is reported as not applicable rather than clamped:
+// nothing is being replaced or destroyed, the tier simply is not the user's to
+// choose in this mode.
+export const COPY_CONTENTS_SOURCE_SESSION = 'session';
 export function resolveCopyContents(value) {
   const raw = typeof value === 'string' ? value.trim().toLowerCase() : '';
   if (raw === '') {
@@ -588,6 +602,64 @@ export function profileCopyOnLockReason({ baseDir, sessionDir, owner, at, conten
     `The profile ${base} is in use (${when}), so this session runs on a temporary copy taken at ${takenAt} ` +
     `(${session}).${identity} Anything this session changes is discarded when the copy is discarded, and the ` +
     'base profile is never written.'
+  );
+}
+
+// profile_isolation=session (2.24.0). The session runs on an identity copy of the
+// base profile and the base is a read-only source: no lock is ever taken on it,
+// so several sessions can run at once, and a base that is already in use is
+// copied rather than refused. The copy lasts for the broker (the MCP server), not
+// for the browser, and a clean exit discards it exactly like "copy".
+export function profileSessionNote(baseDir, sessionDir) {
+  const base = nonEmptyString(baseDir) ? baseDir : 'the selected profile';
+  const session = nonEmptyString(sessionDir) ? sessionDir : 'a temporary copy';
+  return (
+    `Profile isolation is "session": this session runs on an identity copy of ${base} at ${session}, ` +
+    'the base profile is never locked and never written, so other sessions can use it at the same time, ' +
+    'and the copy is discarded when this session ends cleanly.'
+  );
+}
+
+// The one sentence a "session" start reports for copy_contents: the tier is not a
+// choice there. A session copy is taken from a base another browser may be
+// writing, and only the identity tier excludes the files a live writer holds
+// (*-shm, LevelDB LOCK); a "full" copy of a live base is the 2026-10-28 abort.
+// The setting is therefore reported as not applicable, never silently honoured.
+export function sessionCopyContentsNote() {
+  return (
+    'copy_contents is not applied to profile_isolation "session": that copy is always the identity tier ' +
+    '(cookies, saved logins and the key that decrypts them, the seed and installed add-ons), because it is ' +
+    'taken from a base another browser may be writing and only that tier excludes the files a live writer holds.'
+  );
+}
+
+// The same shape for profile_lifetime: a "session" copy belongs to the broker, so
+// the browser-scoped lifetime the setting names cannot apply to it.
+export function sessionProfileLifetimeNote() {
+  return (
+    'profile_lifetime is not applied to profile_isolation "session": its copy lasts for this MCP server ' +
+    '(the Claude Code session), not for the browser, and is discarded when the session ends cleanly.'
+  );
+}
+
+// And for on_locked: under "session" nothing ever blocks, so the policy has
+// nothing to decide. A live base is copied, never refused.
+export function sessionOnLockedNote() {
+  return (
+    'on_locked is not applied to profile_isolation "session": a base in use is copied rather than refused, ' +
+    'so this mode never blocks, never falls back to a numbered sibling and never switches to isolated.'
+  );
+}
+
+// The one honest sentence about what "session" does NOT give, shared by the
+// payload and both READMEs: one MCP server per Claude Code session, one browser
+// per server. Subagents inside one session share the server, therefore the
+// browser. An engine with a seat limit is still limited by it.
+export function sessionParallelismNote() {
+  return (
+    'One Claude Code session is one MCP server and therefore one browser: subagents inside one session share ' +
+    'that browser (they queue on it), so use separate sessions for separate browsers. An engine with a seat ' +
+    'limit (the free CloakBrowser tier is one browser) still allows only as many browsers as the licence does.'
   );
 }
 
@@ -1252,9 +1324,9 @@ export function profileIgnoredReason(ignored) {
 // passed in already read (null when absent or invalid); an invalid name here is
 // ignored rather than turned into an error, because a broken pointer is never
 // fatal. With no pointer the result is byte-identical to the behaviour before the
-// pointer existed. profile_isolation="copy" and "copy-keep" resolve exactly like
-// "shared" (same precedence, same sources) and never derive a workspace profile:
-// in this version the copy modes and workspace do not combine.
+// pointer existed. profile_isolation="copy", "copy-keep" and "session" resolve
+// exactly like "shared" (same precedence, same sources) and never derive a
+// workspace profile: in this version the copy modes and workspace do not combine.
 export function resolveProfile({
   account,
   profileDir,
