@@ -1747,17 +1747,25 @@ function recheckProfileAtBrowserAction() {
   if (dir === null) {
     return false;
   }
-  const check = profileStillBlocked(dir);
-  const bridgeBlocks = state.child === null && check.lock !== null && lockBlocksStart(check.lock);
-  const engineBlocks = check.engineLock !== null && engineLockBlocksStart(check.engineLock);
+  // Both locks are read here, not through profileStillBlocked(): that helper
+  // returns as soon as the bridge lock blocks, so it never reports the engine
+  // lock in the case this check exists for (a browser holding the profile while
+  // our own bridge lock is absent or ours).
+  const bridgeLock = readProfileLock(dir);
+  const bridgeBlocks = state.child === null && lockBlocksStart(bridgeLock);
+  const engineLock =
+    state.engine !== null && state.engine.profileLock !== undefined
+      ? readEngineProfileLock(dir, state.engine.profileLock)
+      : null;
+  const engineBlocks = engineLock !== null && engineLockBlocksStart(engineLock);
   if (!bridgeBlocks && !engineBlocks) {
     return false;
   }
   const plan = planOnLockedOutcome({
     bridgeBlocks,
     engineBlocks,
-    lock: check.lock,
-    engineLock: check.engineLock,
+    lock: bridgeBlocks ? bridgeLock : null,
+    engineLock: engineBlocks ? engineLock : null,
     lockDir: dir,
     pluginManaged: true,
   });
@@ -1769,11 +1777,9 @@ function recheckProfileAtBrowserAction() {
   // profile_dir keeps its block behaviour and never reaches the planner.
   if (plan.outcome === 'none') {
     if (onLocked === 'block' || onLocked === 'fallback') {
-      const blocking = bridgeBlocks ? check.lock : check.engineLock;
-      const refusal =
-        bridgeBlocks && check.lock !== null
-          ? profileLockMessage(check.lock, { fallbackExhausted: false, fallbackKind: 'sibling' })
-          : engineProfileLockMessage(blocking ?? {}, {});
+      const refusal = bridgeBlocks
+        ? profileLockMessage(bridgeLock, { fallbackExhausted: false, fallbackKind: 'sibling' })
+        : engineProfileLockMessage(engineLock ?? {}, {});
       engineError = refusal;
       state.engineError = engineError;
       state.lastError = state.lastError === null ? engineError : state.lastError;
