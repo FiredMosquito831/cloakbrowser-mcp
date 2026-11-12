@@ -658,8 +658,9 @@ export function sessionOnLockedNote() {
 export function sessionParallelismNote() {
   return (
     'One Claude Code session is one MCP server and therefore one browser: subagents inside one session share ' +
-    'that browser (they queue on it), so use separate sessions for separate browsers. An engine with a seat ' +
-    'limit (the free CloakBrowser tier is one browser) still allows only as many browsers as the licence does.'
+    "that browser, and their tool calls interleave: a navigation or click from one can be answered with another's " +
+    'page. Use separate sessions for separate browsers. An engine with a seat limit (the free CloakBrowser tier ' +
+    'is one browser) still allows only as many browsers as the licence does.'
   );
 }
 
