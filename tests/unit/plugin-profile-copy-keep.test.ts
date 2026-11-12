@@ -472,7 +472,7 @@ describe('copy-keep as a profile_isolation value', () => {
       expect(setting.description).toContain('previous-');
       expect(setting.description).toContain('never deleted automatically');
       expect(setting.description).not.toContain('in memory');
-      expect(manifest.version).toBe('2.24.0');
+      expect(manifest.version).toBe('2.24.1');
     }
     // 2.24.0 appended "session" to the same setting (see
     // plugin-profile-session.test.ts); every earlier value keeps its position.

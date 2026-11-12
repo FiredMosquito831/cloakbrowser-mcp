@@ -440,7 +440,7 @@ describe('session as a profile_isolation value', () => {
       expect(setting.description).toContain('seat limit');
       expect(setting.description).toContain('not applicable');
       expect(setting.description.toLowerCase()).not.toContain('in memory');
-      expect(manifest.version).toBe('2.24.0');
+      expect(manifest.version).toBe('2.24.1');
     }
     expect(profile.PROFILE_ISOLATION_VALUES).toEqual([
       'shared',
@@ -487,6 +487,8 @@ describe('session as a profile_isolation value', () => {
     expect(profile.sessionOnLockedNote()).toContain('copied rather than refused');
     // The subagent limitation is stated, and the seat caveat with it.
     expect(profile.sessionParallelismNote()).toContain('subagents inside one session share');
+    expect(profile.sessionParallelismNote()).toContain('tool calls interleave');
+    expect(profile.sessionParallelismNote()).not.toContain('queue');
     expect(profile.sessionParallelismNote()).toContain('seat limit');
   });
 });
