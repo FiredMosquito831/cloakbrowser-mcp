@@ -443,7 +443,7 @@ describe('session as a profile_isolation value', () => {
       expect(setting.description).toContain('seat limit');
       expect(setting.description).toContain('not applicable');
       expect(setting.description.toLowerCase()).not.toContain('in memory');
-      expect(manifest.version).toBe('2.25.0');
+      expect(manifest.version).toBe('2.26.0');
     }
     expect(profile.PROFILE_ISOLATION_VALUES).toEqual([
       'shared',

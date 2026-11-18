@@ -335,10 +335,23 @@ export function applyLauncherSettings(env, launcherName, log) {
 
 // The payload object browser_capabilities reports, or null for a launcher that
 // resolves none of these settings (an unknown or future launcher).
-export function launcherSettingsReport(env, launcherName) {
+export function launcherSettingsReport(env, launcherName, sourceOverrides = null) {
   const { report } = resolveLauncherSettings(env, launcherName);
   if (Object.keys(report).length === 0) {
     return null;
   }
-  return { launcher: launcherName, ...report };
+  // 2.26.0: a document-won value reaches the launcher as the same env variable
+  // as a setting, so the payload needs the source override to stay honest.
+  // With no overrides the existing object is returned unchanged.
+  if (sourceOverrides === null) {
+    return { launcher: launcherName, ...report };
+  }
+  const withSources = {};
+  for (const [name, entry] of Object.entries(report)) {
+    withSources[name] =
+      Object.hasOwn(sourceOverrides, name) && entry.source === 'setting'
+        ? { ...entry, source: sourceOverrides[name] }
+        : entry;
+  }
+  return { launcher: launcherName, ...withSources };
 }

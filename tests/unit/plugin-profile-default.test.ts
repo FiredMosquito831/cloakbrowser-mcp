@@ -121,6 +121,7 @@ interface BrokerOptions {
   pluginDir?: string;
   harness?: string | null;
   dataDirAlias?: boolean;
+  settingsLevel?: string;
 }
 
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
@@ -231,6 +232,7 @@ function startBroker(options: BrokerOptions): BrokerSession {
     'STEALTH_PROFILE_ISOLATION',
     'STEALTH_ON_LOCKED',
     'STEALTH_HARNESS',
+    'STEALTH_SETTINGS_LEVEL',
     'PLAYWRIGHT_MCP_USER_DATA_DIR',
   ]) {
     delete childEnv[name];
@@ -242,6 +244,7 @@ function startBroker(options: BrokerOptions): BrokerSession {
   if (options.isolation !== undefined) childEnv.STEALTH_PROFILE_ISOLATION = options.isolation;
   if (options.onLocked !== undefined) childEnv.STEALTH_ON_LOCKED = options.onLocked;
   if (options.profileDir !== undefined) childEnv.PLAYWRIGHT_MCP_USER_DATA_DIR = options.profileDir;
+  if (options.settingsLevel !== undefined) childEnv.STEALTH_SETTINGS_LEVEL = options.settingsLevel;
   const broker = options.pluginDir === undefined ? brokerPath : path.join(options.pluginDir, 'broker.mjs');
   const child = spawn(process.execPath, [broker], {
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -1318,16 +1321,52 @@ describe('2.25.0 layered pointer precedence', () => {
     expect((first.precedence as { harness: Record<string, unknown> }).harness.id).toBe('opencode');
     expect((second.precedence as { harness: Record<string, unknown> }).harness.id).toBe('claude-code');
 
-    // The CLI data-root path has no inference: without STEALTH_HARNESS it gains
-    // no precedence key at all and runs on exactly the same child environment.
+    // The CLI data-root path has no harness inference, but the alias is itself
+    // the 2.26.0 gate: the settings half is emitted while the child environment
+    // stays equal to the explicit-harness alias run.
     const aliased = startBroker({ dataDir, dataDirAlias: true });
     const aliasedExplicit = startBroker({ dataDir, dataDirAlias: true, harness: 'opencode' });
     await initialize(aliased);
     await initialize(aliasedExplicit);
     const aliasCaps = await capabilities(aliased);
-    expect(Object.hasOwn(aliasCaps, 'precedence')).toBe(false);
+    const aliasPrecedence = aliasCaps.precedence as {
+      harness: Record<string, unknown>;
+      documents: Record<string, unknown>;
+      settingsLevel: Record<string, unknown>;
+      settings: Record<string, unknown>;
+    };
+    expect(Object.keys(aliasPrecedence)).toEqual([
+      'harness',
+      'profile',
+      'documents',
+      'settingsLevel',
+      'settings',
+    ]);
+    expect(aliasPrecedence.harness).toEqual({ id: null, source: 'unset', error: null });
     expect(Object.hasOwn(aliasCaps, 'profileDefaultGlobal')).toBe(true);
     expect(await effectiveEnvironment(aliased)).toEqual(await effectiveEnvironment(aliasedExplicit));
+
+    // An explicit document level on the plugin path is the other D0 opt-in:
+    // the same gated settings half appears without a CLI data-root alias.
+    const optedIn = startBroker({ dataDir, settingsLevel: 'global' });
+    await initialize(optedIn);
+    const optedInCaps = await capabilities(optedIn);
+    const optedInPrecedence = optedInCaps.precedence as {
+      harness: Record<string, unknown>;
+      documents: Record<string, unknown>;
+      settingsLevel: Record<string, unknown>;
+      settings: Record<string, unknown>;
+    };
+    expect(Object.keys(optedInPrecedence)).toEqual([
+      'harness',
+      'profile',
+      'documents',
+      'settingsLevel',
+      'settings',
+    ]);
+    expect(optedInPrecedence.harness).toEqual({ id: 'claude-code', source: 'env', error: null });
+    expect(optedInPrecedence.settingsLevel).toEqual({ value: 'global', source: 'env' });
+    expect(Object.hasOwn(optedInCaps, 'precedenceNote')).toBe(false);
   });
 
   it('writes only the selected level with scoped set-default and keeps global response keys', async () => {

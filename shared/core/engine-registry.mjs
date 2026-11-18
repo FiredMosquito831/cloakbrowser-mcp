@@ -477,7 +477,14 @@ function validateRuntime(manifest) {
 // how the broker proves a live owner. The rule names come from lib/profile.mjs so
 // validation and the preflight can never drift apart. An engine without the field
 // keeps every previous byte of behaviour: no second check, no new payload key.
-const ENGINE_PROFILE_LOCK_OWNERS = new Set(ENGINE_LOCK_OWNER_RULES);
+// 2.26.0: build this set lazily. settings-precedence.mjs imports both this
+// registry and profile.mjs, while profile.mjs imports the harness rule from
+// settings-precedence.mjs. Reading the exported rules at module evaluation
+// closes that ESM cycle and can observe the binding before initialization.
+// The deferred read keeps one source of truth and the same validation result.
+function engineProfileLockOwners() {
+  return new Set(ENGINE_LOCK_OWNER_RULES);
+}
 const ENGINE_PROFILE_LOCK_FILE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 function validateProfileLock(manifest) {
@@ -504,8 +511,9 @@ function validateProfileLock(manifest) {
   if (!nonEmptyString(manifest.profileLock.owner)) {
     return 'profileLock.owner is missing';
   }
-  if (!ENGINE_PROFILE_LOCK_OWNERS.has(manifest.profileLock.owner.trim())) {
-    return `profileLock.owner must be one of: ${[...ENGINE_PROFILE_LOCK_OWNERS].join(', ')}`;
+  const owners = engineProfileLockOwners();
+  if (!owners.has(manifest.profileLock.owner.trim())) {
+    return `profileLock.owner must be one of: ${[...owners].join(', ')}`;
   }
   if (manifest.profileApplies === false) {
     return 'profileLock is only meaningful when profileApplies is not false';

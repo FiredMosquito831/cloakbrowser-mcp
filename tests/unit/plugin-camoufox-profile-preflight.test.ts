@@ -748,7 +748,7 @@ describe('manifest profileLock validation', () => {
       registry.validateManifest({ ...base, profileLock: { file: 'parent.lock', owner: 'open' } }, 'alpha', [
         'full',
       ]),
-    ).toContain('profileLock.owner must be one of');
+    ).toBe('profileLock.owner must be one of: exclusive-open, exclusive-open-write, pid');
   });
 
   it('rejects a descriptor on an engine that owns no plugin profile', () => {
