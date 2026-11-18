@@ -1,209 +1,61 @@
-# cloakbrowser-mcp
+# Secret Agent Browser MCPs
 
-<p align="center">
-  <img src="docs/assets/brand/logo-wordmark.svg" alt="CloakBrowser MCP" width="640" />
-</p>
+A collection of adapted MCP tools for popular stealth-automation browsers, through the Playwright MCP contract.
 
-[![CI](https://github.com/swimmwatch/cloakbrowser-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/swimmwatch/cloakbrowser-mcp/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/swimmwatch/cloakbrowser-mcp/branch/main/graph/badge.svg)](https://codecov.io/gh/swimmwatch/cloakbrowser-mcp)
-[![Actionlint](https://github.com/swimmwatch/cloakbrowser-mcp/actions/workflows/actionlint.yml/badge.svg)](https://github.com/swimmwatch/cloakbrowser-mcp/actions/workflows/actionlint.yml)
-[![CodeQL](https://github.com/swimmwatch/cloakbrowser-mcp/actions/workflows/codeql.yml/badge.svg)](https://github.com/swimmwatch/cloakbrowser-mcp/actions/workflows/codeql.yml)
-[![Dependency Review](https://github.com/swimmwatch/cloakbrowser-mcp/actions/workflows/dependency-review.yml/badge.svg)](https://github.com/swimmwatch/cloakbrowser-mcp/actions/workflows/dependency-review.yml)
-[![OpenSSF Scorecard](https://github.com/swimmwatch/cloakbrowser-mcp/actions/workflows/scorecard.yml/badge.svg)](https://github.com/swimmwatch/cloakbrowser-mcp/actions/workflows/scorecard.yml)
-[![Zizmor](https://github.com/swimmwatch/cloakbrowser-mcp/actions/workflows/zizmor.yml/badge.svg)](https://github.com/swimmwatch/cloakbrowser-mcp/actions/workflows/zizmor.yml)
-[![Release](https://github.com/swimmwatch/cloakbrowser-mcp/actions/workflows/release.yml/badge.svg)](https://github.com/swimmwatch/cloakbrowser-mcp/actions/workflows/release.yml)
-[![GitHub Release](https://img.shields.io/github/v/release/swimmwatch/cloakbrowser-mcp?logo=github&label=GitHub%20release)](https://github.com/swimmwatch/cloakbrowser-mcp/releases)
-[![MCP Registry](https://img.shields.io/badge/MCP%20Registry-published-2E8555)](https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.swimmwatch%2Fcloakbrowser-mcp)
-[![cloakbrowser-mcp MCP server](https://glama.ai/mcp/servers/swimmwatch/cloakbrowser-mcp/badges/score.svg)](https://glama.ai/mcp/servers/swimmwatch/cloakbrowser-mcp)
-[![LobeHub MCP](https://lobehub.com/badge/mcp/swimmwatch-cloakbrowser-mcp)](https://lobehub.com/mcp/swimmwatch-cloakbrowser-mcp)
-[![Awesome MCP Servers](https://img.shields.io/badge/Awesome%20MCP%20Servers-listed-2E8555)](https://github.com/punkpeye/awesome-mcp-servers)
-[![npm](https://img.shields.io/npm/v/cloakbrowser-mcp.svg?logo=npm)](https://www.npmjs.com/package/cloakbrowser-mcp)
-[![npm downloads](https://img.shields.io/npm/dm/cloakbrowser-mcp.svg?logo=npm&label=npm%20downloads)](https://www.npmjs.com/package/cloakbrowser-mcp)
-[![Docker Hub pulls](https://img.shields.io/docker/pulls/swimmwatch/cloakbrowser-mcp?logo=docker&label=Docker%20Hub)](https://hub.docker.com/r/swimmwatch/cloakbrowser-mcp)
-[![Docker image](https://img.shields.io/docker/v/swimmwatch/cloakbrowser-mcp?sort=semver&logo=docker&label=Docker%20image)](https://hub.docker.com/r/swimmwatch/cloakbrowser-mcp/tags)
-[![Node.js 22.13+ or 24+](https://img.shields.io/badge/Node.js-22.13%2B%20or%2024%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![TypeScript strict](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](tsconfig.json)
-[![Cross-platform](https://img.shields.io/badge/Cross--platform-Linux%20%7C%20macOS%20%7C%20Windows-2563eb)](docs/version-compatibility.md)
-[![Available on CodeGuilds](https://img.shields.io/badge/Available_on-CodeGuilds-6366f1)](https://codeguilds.dev/packages/cloakbrowser-mcp)
-[![MCP Server](https://img.shields.io/badge/MCP-server-000000)](https://modelcontextprotocol.io/)
-[![MCP transports](https://img.shields.io/badge/MCP%20transports-stdio%20%7C%20Streamable%20HTTP-7C3AED)](docs/configuration.md)
-[![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](docs/docker.md)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![MCP Toplist](https://mcptoplist.com/badge/io.github.swimmwatch%2Fcloakbrowser-mcp.svg)](https://mcptoplist.com/server/io.github.swimmwatch%2Fcloakbrowser-mcp)
+Derived from [swimmwatch/cloakbrowser-mcp](https://github.com/swimmwatch/cloakbrowser-mcp) (MIT): the bridge, its CLI, packaging and the [`docs/`](docs/) tree are upstream's. This repository adapts them into a Claude Code plugin marketplace and adds a complete, proper stealth implementation for agentic harnesses and tasks. Full attribution is in [NOTICE](NOTICE).
 
-`cloakbrowser-mcp` is a drop-in Playwright MCP-compatible browser automation server with unchanged upstream tools, [CloakBrowser](https://github.com/CloakHQ/CloakBrowser) Chromium, and production-ready npm, Docker, and Streamable HTTP packaging. It runs upstream [`@playwright/mcp`](https://github.com/microsoft/playwright-mcp) as the canonical tool surface and points that runtime at CloakBrowser.
+## Install
 
-## 30-second demo
-
-[![30-second demo showing CloakBrowser MCP startup, humanized research prompt typing, web automation, and testing workflows](docs/assets/videos/30-second-demo.webp)](docs/assets/videos/30-second-demo.mp4)
-
-Run `npx -y cloakbrowser-mcp@latest`, connect Claude Desktop or Codex CLI, ask for web research, daily automation, or testing in plain English, and inspect the real browser result.
-
-Documentation: [swimmwatch.github.io/cloakbrowser-mcp](https://swimmwatch.github.io/cloakbrowser-mcp/) · [Comparison](https://swimmwatch.github.io/cloakbrowser-mcp/comparison/) · [Recipes](https://swimmwatch.github.io/cloakbrowser-mcp/recipes/)
-
-Use it when you need:
-
-- Playwright MCP browser automation backed by CloakBrowser;
-- unchanged upstream browser tools plus two local introspection tools;
-- npm or Docker installation over stdio or Streamable HTTP;
-- opt-in, session-scoped [managed CDP access](docs/configuration.md#managed-cdp) for
-  CDP-capable clients through `chromium.connectOverCDP()`;
-- [persistent browser profiles](docs/recipes/persistent-login-profile.md), validated context options, and Chrome extension loading;
-- GeoIP-aware proxy matching for regional QA;
-- humanized mouse, keyboard, and scroll behavior for interaction-sensitive flows.
-
-Cross-platform checks cover npm on Linux x64/arm64, macOS arm64/x64, and Windows x64 across the Node.js versions listed in [Testing](https://swimmwatch.github.io/cloakbrowser-mcp/testing/). Docker images are built and smoke-tested for `linux/amd64` and `linux/arm64`.
-
-See [`@playwright/mcp` vs `cloakbrowser-mcp`](docs/comparison.md) when deciding whether plain upstream Playwright MCP or CloakBrowser MCP fits a deployment better. The [Recipes](docs/recipes/index.md) pages show task-focused setup paths for persistent login profiles, Chrome extensions, reverse proxies, regional QA, client connections, and CI smoke tests.
-
-## Install With npm
+This repository is a Claude Code plugin marketplace named `cloakbrowser-mcp`. The marketplace name and both plugin ids keep their existing values, so installed configurations, tool prefixes and data directories stay where they are.
 
 ```bash
-npx -y cloakbrowser-mcp@latest
-```
-
-Requires Node.js 22.13+ in the 22.x line, or Node.js 24+. Run diagnostics before wiring a client:
-
-```bash
-npx -y cloakbrowser-mcp@latest doctor
-```
-
-For Streamable HTTP instead of stdio:
-
-```bash
-npx -y cloakbrowser-mcp@latest --transport streamable-http --http-port 3000
-```
-
-See the generated [CLI Reference](https://swimmwatch.github.io/cloakbrowser-mcp/generated/cli/) for all flags.
-
-## Install With Docker
-
-```bash
-docker run --rm -i \
-  -v "$PWD/artifacts:/data" \
-  swimmwatch/cloakbrowser-mcp:latest
-```
-
-For Streamable HTTP:
-
-```bash
-docker run --rm -p 127.0.0.1:3000:3000 \
-  -v "$PWD/artifacts:/data" \
-  swimmwatch/cloakbrowser-mcp:latest \
-  --transport streamable-http --http-host 0.0.0.0 --http-port 3000
-```
-
-The Docker image writes artifacts to `/data` and is published for `linux/amd64` and `linux/arm64`. It defaults to `CLOAK_PLAYWRIGHT_MCP_NO_SANDBOX=true` for compatibility with containerized runtimes where Chromium sandboxing is often unavailable. If your host and container runtime support Chromium sandboxing, set `CLOAK_PLAYWRIGHT_MCP_NO_SANDBOX=false`; for untrusted pages, keep container network access and mounted host directories tightly scoped. The same tags are also available from `ghcr.io/swimmwatch/cloakbrowser-mcp`. See [Docker](docs/docker.md) for persistent profiles, extension mounts, HTTPS, and smoke-test examples, or use the [reverse proxy recipe](docs/recipes/docker-streamable-http-reverse-proxy.md) for a focused Streamable HTTP deployment.
-
-## Add To MCP Clients
-
-### Codex CLI
-
-```bash
-codex mcp add cloakbrowser -- npx -y cloakbrowser-mcp@latest
-```
-
-### Claude Code
-
-```bash
-claude mcp add --transport stdio cloakbrowser -- npx -y cloakbrowser-mcp@latest
-```
-
-The same repository is a Claude Code plugin marketplace named `cloakbrowser-mcp`:
-
-```bash
-/plugin marketplace add FiredMosquito831/cloakbrowser-mcp
+/plugin marketplace add FiredMosquito831/secret-agent-browser-mcps
 /plugin install cloakbrowser@cloakbrowser-mcp   # universal broker, default
 /plugin install camoufox@cloakbrowser-mcp       # fixed Camoufox engine
 ```
+
+Install one path per engine. Plugin settings are per plugin and are not carried across; a Kameleo per-engine plugin is not shipped. See the [cloakbrowser](plugins/cloakbrowser/README.md) and [camoufox](plugins/camoufox/README.md) plugin READMEs. For the upstream bridge's npm, Docker and Streamable HTTP installation, see [Getting started](docs/getting-started.md) and [Docker](docs/docker.md).
+
+## Per-harness installation
+
+Reserved for the installer CLI: a later release will generate each harness's configuration from the CLI's own help, so the snippets cannot drift from the tool. No harness-specific configuration is duplicated here.
+
+## Plugins
 
 | Plugin | Engine | What it adds |
 |---|---|---|
 | `cloakbrowser` | selectable: `cloak` (default), `playwright`, `camoufox`, `camoufox-native`, `kameleo` | the 77-tool CloakBrowser surface, a manifest-driven broker, and every engine setting |
 | `camoufox` | fixed `camoufox` (stealth Firefox) | only the settings that engine honours; 27 tools at the portable profile, 70 at full; provisions its own Python runtime |
 
-Install one path per engine. Plugin settings are per plugin and are not carried across; a Kameleo per-engine plugin is not shipped. See `plugins/cloakbrowser/README.md` and `plugins/camoufox/README.md`.
+## What this repository adds
 
-A plugin's first start on a machine that has never provisioned now connects immediately. The broker answers Claude Code's handshake itself when the engine has not done so within 5 s, and answers `tools/list` within 15 s from the cached list or the three meta-tools; the real tool list arrives automatically through `notifications/tools/list_changed` when provisioning finishes, and `browser_engine_status` reports `backendState: "starting"` with `backendSubstate: "provisioning"` meanwhile. No restart is needed. The windows are operator environment overrides (`STEALTH_HANDSHAKE_GRACE_MS`, `STEALTH_TOOLS_LIST_GRACE_MS`), not plugin settings. `STEALTH_DATA_DIR` names the data root for installs without a plugin manager; `CLAUDE_PLUGIN_DATA` always wins when both are set, and a new root starts empty — existing profiles, runtimes and caches are never migrated.
+- **One broker, five engines.** `cloak` (CloakBrowser Chromium), `playwright` (stock Chromium), `camoufox` (stealth Firefox through a pinned wrapper), `camoufox-native` (the native PyPI server) and `kameleo` (CDP attach, live-unverified), selected through a manifest-driven registry.
+- **A stable tool surface.** Microsoft's Playwright MCP contract with `portable` and `full` profiles, seven tool-group switches and `disabled_tools`: 77 tools at `full` for the universal plugin, 70 for the Camoufox plugin, 27 at `portable` for both.
+- **Session-safe profiles.** Per-account, workspace, isolated, copy, copy-keep and session modes; lock preflights, one-seat CloakBrowser gating, copies that never lose data, lazy profile lifetime and a tool-list cache that keeps a cold start usable.
+- **No manual browser dependencies.** The first start provisions the pinned npm runtime, checksum-verified `uv`, a managed CPython and the engine venvs under plugin data. The CloakBrowser Chromium binary downloads to `~/.cloakbrowser` on first use.
+- **Camoufox corrections.** An always-on overlay restores the stock search engines; saved logins are opt-in, device identity can be pinned to a profile, and the heartbeat is configurable. The broker also recovers from a dead backend with one bounded restart.
+- **Weekly upstream sync** with pin guards and a handled-conflict flow, documented in [scripts/upstream-sync/README.md](scripts/upstream-sync/README.md).
 
-### GitHub Copilot In VS Code
+## Where the browsers come from
 
-```json
-{
-  "servers": {
-    "cloakbrowser": {
-      "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "cloakbrowser-mcp@latest"]
-    }
-  }
-}
-```
+| Engine | Source | Credit and licence |
+|---|---|---|
+| `cloak` | [CloakBrowser](https://github.com/CloakHQ/CloakBrowser) stealth-patched Chromium | Proprietary binary. The v146 build is free; more than one concurrent session needs a vendor licence. |
+| `playwright` | Stock Playwright Chromium, driven by [Playwright MCP](https://github.com/microsoft/playwright-mcp) | Tool names and schemas are Microsoft's; parity is structural, not a reimplementation. |
+| `camoufox` | [Camoufox](https://github.com/camoufox-org/camoufox) stealth Firefox, driven by the pinned [camoufox-playwright-mcp](https://pypi.org/project/camoufox-playwright-mcp/) 0.1.5 wrapper | The wrapper is fetched from PyPI at first start and is never bundled here. |
+| `camoufox-native` | [mcp-camoufox](https://pypi.org/project/mcp-camoufox/) 0.4.5 from PyPI | FSL-1.1-MIT (source-available, not OSI-approved); fetched at first start and never bundled. The npm package of the same name is a different project. |
+| `kameleo` | [Kameleo](https://kameleo.io/downloads) desktop app over a local CDP endpoint | Proprietary and user-installed; the attach path is live-unverified and no stealth claim is made for it. |
 
-### Claude Desktop, Cursor, Cline, Windsurf, Warp, And Other `mcpServers` Clients
+The bridge these plugins drive is [swimmwatch/cloakbrowser-mcp](https://github.com/swimmwatch/cloakbrowser-mcp) (MIT), which starts upstream `@playwright/mcp` and points it at the selected browser. This repository is an adapted collection, not a new upstream: the marketplace, plugins and broker are this project's work.
 
-Add this server entry to the client's MCP JSON config:
+## Upstream bridge documentation
 
-```json
-{
-  "mcpServers": {
-    "cloakbrowser": {
-      "command": "npx",
-      "args": ["-y", "cloakbrowser-mcp@latest"]
-    }
-  }
-}
-```
+The documentation in [`docs/`](docs/) documents the upstream bridge this collection adapts. It is kept for reference and is not rewritten here.
 
-### Docker-backed stdio
+- Upstream site: [Documentation](https://swimmwatch.github.io/cloakbrowser-mcp/) · [Comparison](https://swimmwatch.github.io/cloakbrowser-mcp/comparison/) · [Recipes](https://swimmwatch.github.io/cloakbrowser-mcp/recipes/) · [Testing](https://swimmwatch.github.io/cloakbrowser-mcp/testing/) · [Generated CLI reference](https://swimmwatch.github.io/cloakbrowser-mcp/generated/cli/).
+- In this checkout: [Getting started](docs/getting-started.md), [Configuration](docs/configuration.md), [Managed CDP access](docs/configuration.md#managed-cdp), [Comparison](docs/comparison.md), [Recipes](docs/recipes/index.md), [Persistent login profile](docs/recipes/persistent-login-profile.md), [Claude Desktop](docs/recipes/connect-claude-desktop.md), [Codex CLI](docs/recipes/connect-codex-cli.md), [Reverse proxy](docs/recipes/docker-streamable-http-reverse-proxy.md), [GeoIP proxy matching](docs/geoip-proxy-matching.md), [Humanized input behavior](docs/humanized-input-behavior.md), [Docker](docs/docker.md), [Version compatibility](docs/version-compatibility.md), [Contributor guide](docs/contributor-guide.md) and [test reporting](tests/README.md).
 
-```json
-{
-  "mcpServers": {
-    "cloakbrowser": {
-      "command": "docker",
-      "args": [
-        "run",
-        "--rm",
-        "-i",
-        "-v",
-        "/tmp/cloakbrowser-artifacts:/data",
-        "swimmwatch/cloakbrowser-mcp:latest"
-      ]
-    }
-  }
-}
-```
-
-### Already-running Streamable HTTP server
-
-```bash
-npx -y cloakbrowser-mcp@latest --transport streamable-http --http-port 3000
-codex mcp add cloakbrowser --url http://127.0.0.1:3000/mcp
-claude mcp add --transport http cloakbrowser http://127.0.0.1:3000/mcp
-```
-
-### Prompt For A Code Assistant
-
-Paste this into Codex, Claude Code, Copilot, Cursor, Cline, Windsurf, or a similar coding assistant that can edit MCP config:
-
-```text
-Install the CloakBrowser MCP server for this workspace. Name it "cloakbrowser".
-Prefer stdio with command "npx" and args ["-y", "cloakbrowser-mcp@latest"].
-If this client uses VS Code mcp.json, add it under "servers" with type "stdio".
-If this client uses Claude/Cursor/Cline/Windsurf/Warp-style config, add it under
-"mcpServers" with the same command and args. Do not add secrets.
-```
-
-More examples are in [Getting Started](docs/getting-started.md), with dedicated recipes for [Claude Desktop](docs/recipes/connect-claude-desktop.md) and [Codex CLI](docs/recipes/connect-codex-cli.md).
-
-## Configuration
-
-Use upstream `PLAYWRIGHT_MCP_*` variables for browser, artifacts, timeouts, network, and tool capability settings. Cloak-specific bridge toggles use `CLOAK_PLAYWRIGHT_MCP_*`. Select a Pro Preview browser build before startup with `--release-channel preview` or `CLOAK_PLAYWRIGHT_MCP_RELEASE_CHANNEL=preview`; the default is `stable`.
-
-The common variable table now lives in [Configuration](docs/configuration.md). That page also covers persistent profiles, validated context options, Chrome extensions, Streamable HTTP metadata, and HTTPS/auth options. See [GeoIP Proxy Matching](docs/geoip-proxy-matching.md) for regional proxy behavior, [Humanized Input Behavior](docs/humanized-input-behavior.md) for interaction realism, and [Recipes](docs/recipes/index.md) for task-focused configurations.
-
-## Version Compatibility
+## Version compatibility
 
 <!-- compatibility-table:start -->
 
@@ -241,27 +93,8 @@ The common variable table now lives in [Configuration](docs/configuration.md). T
 
 See [Version Compatibility](docs/version-compatibility.md) for the maintained compatibility table.
 
-## Tools
+Both plugins are at version **2.24.3** and move in lockstep. The pins are unchanged: bridge `cloakbrowser-mcp@1.15.1` on Patchright `1.64.1` with engine wrapper `cloakbrowser@0.6.3`; Camoufox wrapper `camoufox-playwright-mcp==0.1.5` with `fastmcp==3.4.7` and `mcp==1.29.0`; managed `uv` `0.13.5`, CPython `3.13.17`, browser build `v156.0.1-beta.39`; native PyPI wrapper `mcp-camoufox==0.4.5`.
 
-The upstream Playwright MCP tool list is authoritative. This project does not reimplement or re-document upstream browser schemas in source code.
+## Credits and licence
 
-Local tools:
-
-- `cloakbrowser_binary_info` returns CloakBrowser package, platform, cache, and resolved binary data.
-- `cloakbrowser_bridge_info` returns bridge metadata, upstream package/version, and local tool names.
-
-## Development
-
-```bash
-npm install
-npm run build
-npm test
-npm run docker:build
-npm run docker:smoke
-npm run server:validate
-npm run bridge:compare -- cloakbrowser-mcp:dev --report bridge-parity-report.json
-```
-
-Documentation starts at [docs/getting-started.md](docs/getting-started.md). Contributor material is grouped under [docs/contributor-guide.md](docs/contributor-guide.md).
-
-See [test reporting](tests/README.md) for local Allure reports and combined CI matrix reports linked from pull requests.
+This repository is derived from [swimmwatch/cloakbrowser-mcp](https://github.com/swimmwatch/cloakbrowser-mcp) (MIT). The upstream bridge and its documentation remain upstream's work; this repository adds the adapted marketplace, plugins and broker. See [NOTICE](NOTICE) for the full attribution and [LICENSE](LICENSE) for the MIT terms, kept verbatim. The CloakBrowser binary and Kameleo are proprietary; `mcp-camoufox` is FSL-1.1-MIT. This is a licence note, not legal advice.

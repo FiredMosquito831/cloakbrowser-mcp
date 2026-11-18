@@ -2,7 +2,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 
-// STEALTH_DATA_DIR (2.24.2). The plugin-manager path must stay byte-identical,
+// STEALTH_DATA_DIR (2.24.3). The plugin-manager path must stay byte-identical,
 // so CLAUDE_PLUGIN_DATA wins whenever it is set; the alias only serves installs
 // without a plugin manager. The same resolver is used by every JS site, and the
 // Python entry and CLI scripts follow the same rule.
