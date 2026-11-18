@@ -726,3 +726,80 @@ describe('broker reporting for an isolated start', () => {
     });
   });
 });
+
+describe('2.25.0 harness pointer under isolated mode', () => {
+  function harnessPointerPath(dataDir: string): string {
+    return path.join(dataDir, 'profiles', 'cloak', '.default.claude-code');
+  }
+
+  function writeHarnessPointer(dataDir: string, text: string): string {
+    const file = harnessPointerPath(dataDir);
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, text);
+    return file;
+  }
+
+  it('reports the harness pointer as ignored with the unchanged reason sentence', async () => {
+    const dataDir = createRuntime(tempRoot('isolated-harness-'));
+    writeHarnessPointer(dataDir, 'work\n');
+    const session = startBroker({ dataDir, isolation: 'isolated' });
+    await initialize(session);
+    const caps = await capabilities(session);
+    expect(caps.profileSource).toBe('isolated');
+    expect(caps.profileIgnored).toEqual([
+      {
+        setting: 'default_profile_pointer',
+        value: 'work',
+        reason: 'profile_isolation is "isolated": this start uses no profile, so the setting has no effect.',
+      },
+    ]);
+    expect(String(caps.profileIgnoredReason)).toContain('no profile directory is resolved');
+    const precedence = caps.precedence as {
+      harness: Record<string, unknown>;
+      profile: Record<string, unknown>;
+    };
+    expect(precedence.harness).toEqual({ id: 'claude-code', source: 'env', error: null });
+    expect(precedence.profile).toMatchObject({
+      won: 'isolated',
+      session: { profile_dir: null, account: null },
+    });
+    expect((precedence.profile.harness as Record<string, unknown>).state).toBe('present');
+    const payload = await status(session);
+    expect(payload.precedence).toEqual({ harness: { id: 'claude-code', source: 'env', error: null } });
+    expect(Object.hasOwn(payload, 'profilePointerLevel')).toBe(false);
+    expect(Object.hasOwn(payload, 'profileDefault')).toBe(false);
+    const list = await profilesPayload(session);
+    expect(list.current).toHaveProperty('profileIgnored');
+  });
+
+  it('reports the effective pointer when a broken harness pointer falls through to global', async () => {
+    const dataDir = createRuntime(tempRoot('isolated-harness-broken-'));
+    writeHarnessPointer(dataDir, 'alice\nwork\n');
+    writePointer(dataDir, 'global-work\n');
+    const session = startBroker({ dataDir, isolation: 'isolated' });
+    await initialize(session);
+    const caps = await capabilities(session);
+    expect(caps.profileIgnored).toEqual([
+      {
+        setting: 'default_profile_pointer',
+        value: 'global-work',
+        reason: 'profile_isolation is "isolated": this start uses no profile, so the setting has no effect.',
+      },
+    ]);
+    const precedence = caps.precedence as { profile: Record<string, unknown> };
+    expect((precedence.profile.harness as Record<string, unknown>).state).toBe('invalid');
+    expect((precedence.profile.global as Record<string, unknown>).state).toBe('present');
+    expect(session.stderr().split('must contain exactly one profile name').length - 1).toBe(0);
+  });
+
+  it('adds no ignored pointer entry when no pointer file exists', async () => {
+    const dataDir = createRuntime(tempRoot('isolated-harness-none-'));
+    const session = startBroker({ dataDir, isolation: 'isolated' });
+    await initialize(session);
+    const caps = await capabilities(session);
+    expect(Array.isArray(caps.profileIgnored) ? caps.profileIgnored : []).toEqual([]);
+    const precedence = caps.precedence as { profile: Record<string, unknown> };
+    expect((precedence.profile.harness as Record<string, unknown>).state).toBe('missing');
+    expect((precedence.profile.global as Record<string, unknown>).state).toBe('missing');
+  });
+});

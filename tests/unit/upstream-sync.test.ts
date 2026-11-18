@@ -778,7 +778,7 @@ describe('pin discovery and the fail-closed guard', () => {
       wrapperTo: '0.6.4',
       // The fixture copies the real plugins/ tree, so `versionFrom` must be the
       // version the tree is at; the rewrite target is arbitrary.
-      versionFrom: '2.24.4',
+      versionFrom: '2.25.0',
       versionTo: '2.24.5',
     });
     expect(written.changed).toContain('shared/core/lib/provision.mjs');

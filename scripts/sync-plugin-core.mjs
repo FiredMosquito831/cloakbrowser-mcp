@@ -35,6 +35,7 @@ export const CORE_FILES = Object.freeze([
   'lib/ping-timeout.mjs',
   'lib/profile.mjs',
   'lib/provision.mjs',
+  'lib/settings-precedence.mjs',
   'lib/surface.mjs',
   'lib/tool-cache.mjs',
   'launch-camoufox-native.mjs',

@@ -22,6 +22,13 @@ interface SettingsModule {
   ): RootResolution;
 }
 
+interface PrecedenceModule {
+  resolveHarness(
+    env?: Record<string, string | undefined>,
+    log?: (message: string) => void,
+  ): { id: string | null; source: string; error: string | null };
+}
+
 interface ProfileDefaultModule {
   runProfileDefault(options: {
     engine?: string;
@@ -42,6 +49,9 @@ const settings = (await import(
 const profileDefault = (await import(
   new URL('../../plugins/cloakbrowser/scripts/profile-default.mjs', import.meta.url).href
 )) as unknown as ProfileDefaultModule;
+const precedence = (await import(
+  new URL('../../plugins/cloakbrowser/lib/settings-precedence.mjs', import.meta.url).href
+)) as unknown as PrecedenceModule;
 
 const fallback = path.join(path.sep, 'opt', 'legacy-fallback');
 const alias = path.join(path.sep, 'opt', 'stealth-alias');
@@ -149,5 +159,37 @@ describe('profile-default CLI data root', () => {
     expect(call({ CLAUDE_PLUGIN_DATA: pluginData, STEALTH_DATA_DIR: alias }, explicit).summary?.dataDir).toBe(
       path.resolve(explicit),
     );
+  });
+});
+
+describe('harness identity on the two data-root paths', () => {
+  it('infers claude-code only from the plugin-manager data root', () => {
+    const log = vi.fn();
+    expect(precedence.resolveHarness({ CLAUDE_PLUGIN_DATA: pluginData }, log)).toEqual({
+      id: 'claude-code',
+      source: 'env',
+      error: null,
+    });
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it('does not infer on the CLI alias path or with an explicit harness value', () => {
+    const log = vi.fn();
+    expect(precedence.resolveHarness({ STEALTH_DATA_DIR: alias }, log)).toEqual({
+      id: null,
+      source: 'unset',
+      error: null,
+    });
+    expect(
+      precedence.resolveHarness({ CLAUDE_PLUGIN_DATA: pluginData, STEALTH_HARNESS: 'opencode' }, log),
+    ).toEqual({
+      id: 'opencode',
+      source: 'env',
+      error: null,
+    });
+    expect(
+      precedence.resolveHarness({ CLAUDE_PLUGIN_DATA: pluginData, STEALTH_DATA_DIR: alias }, log),
+    ).toEqual({ id: null, source: 'unset', error: null });
+    expect(log).not.toHaveBeenCalled();
   });
 });

@@ -445,6 +445,9 @@ describe('normal backend status stays byte-identical', () => {
       'engineProfileLock',
       ...IDENTITY_KEYS,
       ...PING_TIMEOUT_KEYS,
+      // 2.25.0: the inferred harness id is the only precedence fact a liveness
+      // read reports; it never walks a pointer file or a settings document.
+      'precedence',
     ]);
   });
 });

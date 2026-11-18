@@ -472,7 +472,7 @@ describe('copy-keep as a profile_isolation value', () => {
       expect(setting.description).toContain('previous-');
       expect(setting.description).toContain('never deleted automatically');
       expect(setting.description).not.toContain('in memory');
-      expect(manifest.version).toBe('2.24.4');
+      expect(manifest.version).toBe('2.25.0');
     }
     // 2.24.0 appended "session" to the same setting (see
     // plugin-profile-session.test.ts); every earlier value keeps its position.
@@ -1200,4 +1200,63 @@ describe('broker copy-keep mode', () => {
       await session.close();
     }
   }, 30_000);
+});
+
+describe('2.25.0 copy-keep on a harness base', () => {
+  function pointer(dataDir: string, harness: string | null): string {
+    return path.join(dataDir, 'profiles', 'cloak', harness === null ? '.default' : `.default.${harness}`);
+  }
+
+  function setup(dataDir: string): { globalBase: string; harnessBase: string; globalHash: string } {
+    createRuntime(dataDir);
+    const globalBase = seedBaseProfile(dataDir, 'cloak', 'globalbase');
+    const harnessBase = seedBaseProfile(dataDir, 'cloak', 'harnessbase');
+    writeFileSync(pointer(dataDir, null), 'globalbase\n');
+    writeFileSync(pointer(dataDir, 'claude-code'), 'harnessbase\n');
+    return { globalBase, harnessBase, globalHash: hashTree(globalBase) };
+  }
+
+  it('swaps only the harness base on a clean close and preserves the global base', async () => {
+    const dataDir = tempRoot('keep-harness-clean-');
+    const { globalBase, harnessBase, globalHash } = setup(dataDir);
+    const session = startBroker({ dataDir, isolation: 'copy-keep' });
+    await initialize(session);
+    await effectiveEnvironment(session);
+    const caps = await capabilities(session);
+    expect(caps.profileCopy).toMatchObject({ baseDir: harnessBase });
+    expect(caps.profilePointerLevel).toBe('harness');
+    expect((caps.precedence as { profile: Record<string, unknown> }).profile).toMatchObject({
+      won: 'pointer',
+    });
+
+    session.endInput();
+    expect(await session.exited).toBe(0);
+    expect(hashTree(globalBase)).toBe(globalHash);
+    const previousName = readdirSync(path.join(dataDir, 'profiles', 'cloak')).find((name) =>
+      name.startsWith('harnessbase.previous-'),
+    );
+    expect(previousName).toBeDefined();
+    expect(
+      readdirSync(path.join(dataDir, 'profiles', 'cloak')).some((name) =>
+        name.startsWith('globalbase.previous-'),
+      ),
+    ).toBe(false);
+    const record = profile.readSwapRecord('cloak', dataDir);
+    expect(record).toMatchObject({ state: 'swapped', baseDir: harnessBase });
+    expect(readFileSync(path.join(harnessBase, 'session-marker.txt'), 'utf8')).toBe('from-session\n');
+  });
+
+  it('never swaps a harness base after a hard kill', async () => {
+    const dataDir = tempRoot('keep-harness-crash-');
+    const { harnessBase, globalHash } = setup(dataDir);
+    const before = hashTree(harnessBase);
+    const session = startBroker({ dataDir, isolation: 'copy-keep' });
+    await initialize(session);
+    await effectiveEnvironment(session);
+    session.kill();
+    await session.exited;
+    expect(hashTree(harnessBase)).toBe(before);
+    expect(profile.readSwapRecord('cloak', dataDir)).toBeNull();
+    expect(globalHash).toBe(hashTree(path.join(dataDir, 'profiles', 'cloak', 'globalbase')));
+  });
 });
