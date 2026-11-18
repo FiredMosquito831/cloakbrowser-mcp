@@ -187,7 +187,15 @@ export function findClosingBrace(text, open) {
   return -1;
 }
 
-export function insertJsonProperty(text, objectSpan, key, valueText, indent) {
+export function insertJsonProperty(
+  text,
+  objectSpan,
+  key,
+  valueText,
+  indent = '  ',
+  eol = '\n',
+  format = 'json',
+) {
   const properties = jsonProperties(text, objectSpan);
   const existing = properties.find((property) => property.key === key);
   // Replace only the value span: the existing quoted key and its indentation
@@ -196,12 +204,65 @@ export function insertJsonProperty(text, objectSpan, key, valueText, indent) {
     return { start: existing.valueStart, end: existing.valueEnd, inserted: valueText, action: 'replace' };
   }
   const last = properties.at(-1);
+  // Match the parent's trailing-comma style. With a pre-existing trailing
+  // comma, our property ends with one too, so removal is unambiguous.
+  const trailing = format === 'jsonc' && last?.commaAfter !== null ? ',' : '';
   // Insert AFTER an existing trailing comma, not before it: the comma belongs
   // to the previous property and must stay with it for add/remove byte equality.
   const at = last ? (last.commaAfter === null ? last.valueEnd : last.commaAfter + 1) : objectSpan.innerStart;
   const prefix = last && last.commaAfter === null ? ',' : '';
-  const inserted = `${prefix}\n${indent}${JSON.stringify(key)}: ${valueText}`;
+  const inserted = `${prefix}${eol}${indent}${JSON.stringify(key)}: ${valueText}${trailing}`;
   return { start: at, end: at, inserted, action: 'insert' };
+}
+
+function nestedJsonObject(keys, leaf, indent, eol, level = 0) {
+  const pad = indent.repeat(level + 1);
+  const body = `${pad}${JSON.stringify(keys[0])}: ${
+    keys.length === 1 ? leaf : nestedJsonObject(keys.slice(1), leaf, indent, eol, level + 1)
+  }`;
+  return `{${eol}${body}${eol}${indent.repeat(level)}}`;
+}
+
+// Create missing parent objects in one splice. A missing root is created too.
+export function insertJsonPath(
+  text,
+  parentKeys,
+  name,
+  valueText,
+  indent = '  ',
+  eol = '\n',
+  format = 'json',
+) {
+  const found = findJsonObject(text, parentKeys);
+  if (found.found) {
+    return insertJsonProperty(text, found.objectSpan, name, valueText, indent, eol, format);
+  }
+  if (found.nonObject) {
+    throw new SabmError(
+      'refused',
+      'parse-error',
+      `${parentKeys.slice(0, found.missingAt + 1).join('.')} is not an object; refusing to guess an edit span.`,
+      'Convert the parent to an object with an editor, then try again.',
+    );
+  }
+  if (!found.objectSpan) {
+    return {
+      start: 0,
+      end: text.length,
+      inserted: `${nestedJsonObject([...parentKeys, name], valueText, indent, eol)}${eol}`,
+      action: 'create',
+    };
+  }
+  const missing = parentKeys.slice(found.missingAt);
+  return insertJsonProperty(
+    text,
+    found.objectSpan,
+    missing[0],
+    nestedJsonObject([...missing.slice(1), name], valueText, indent, eol),
+    indent,
+    eol,
+    format,
+  );
 }
 
 export function removeJsonProperty(text, objectSpan, key, format = 'json') {
@@ -212,16 +273,21 @@ export function removeJsonProperty(text, objectSpan, key, format = 'json') {
   const previous = properties[index - 1];
   const candidates = [];
   if (property.commaAfter !== null) {
+    // A pre-existing trailing comma means our inserted property also carries
+    // one; its leading newline + indent are part of our span too.
+    if (previous?.commaAfter !== null && previous?.commaAfter !== undefined) {
+      candidates.push({ start: previous.commaAfter + 1, end: property.commaAfter + 1 });
+    }
     candidates.push({ start: property.start, end: property.commaAfter + 1 });
   }
   if (previous) {
+    // A comma directly before a last property with no comma of its own was
+    // inserted by us; remove it first. Parsers accept trailing commas in JSONC,
+    // so parser-only candidate selection would leave that comma behind.
+    candidates.push({ start: previous.valueEnd, end: property.valueEnd });
     if (previous.commaAfter !== null) {
-      // Keep a pre-existing trailing comma (JSONC corpus); remove our property.
       candidates.push({ start: previous.commaAfter + 1, end: property.valueEnd });
     }
-    // Drop a comma we inserted immediately after the previous value (strict
-    // JSON corpus). Both candidates are tried against the real parser.
-    candidates.push({ start: previous.valueEnd, end: property.valueEnd });
   }
   candidates.push({ start: property.start, end: property.valueEnd });
   for (const candidate of candidates) {
@@ -294,6 +360,24 @@ export function removeTomlEntry(text, entry) {
   let end = entry.end;
   if (end < text.length && text[end] === '\n') end += 1;
   return { start, end, action: 'remove' };
+}
+
+// Remove parent objects that our writer created when they become empty.
+// Objects containing comments or other keys are left untouched.
+export function removeEmptyParentChain(text, parentKeys, format = 'json') {
+  let working = text;
+  for (let depth = parentKeys.length - 1; depth >= 0; depth -= 1) {
+    const chain = findJsonObject(working, parentKeys.slice(0, depth + 1));
+    if (!chain.found) break;
+    const span = chain.objectSpan;
+    if (working.slice(span.innerStart, span.close).trim() !== '') break;
+    const parent = findJsonObject(working, parentKeys.slice(0, depth));
+    if (!parent.found) break;
+    const edit = removeJsonProperty(working, parent.objectSpan, parentKeys[depth], format);
+    if (!edit) break;
+    working = spliceText(working, edit);
+  }
+  return working;
 }
 
 export function spliceText(text, edit) {

@@ -67,11 +67,13 @@ export async function pruneBackups(backupDir, prefix) {
     if (error?.code === 'ENOENT') return;
     throw error;
   }
-  const mine = names
-    .filter((name) => name.startsWith(`${prefix}.sabm-backup-`))
-    .sort()
-    .reverse();
-  for (const name of mine.slice(MAX_BACKUPS)) {
+  const mine = await Promise.all(
+    names
+      .filter((name) => name.startsWith(`${prefix}.sabm-backup-`))
+      .map(async (name) => ({ name, mtime: (await stat(join(backupDir, name))).mtimeMs })),
+  );
+  mine.sort((left, right) => right.mtime - left.mtime || right.name.localeCompare(left.name));
+  for (const { name } of mine.slice(MAX_BACKUPS)) {
     await import('node:fs/promises').then((fs) => fs.rm(join(backupDir, name), { force: true }));
   }
 }

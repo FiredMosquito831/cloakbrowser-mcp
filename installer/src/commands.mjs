@@ -12,7 +12,9 @@ import {
   assertDocumentKey,
   brokerPrecedence,
   cliLogicalWinner,
-  scopeSettings,
+  readDocument,
+  scopeValues,
+  settingsDocumentPath,
   writeSettingsValues,
 } from './settings-documents.mjs';
 import { SETTINGS_ENV_NAMES } from '../vendor/lib/settings-precedence.mjs';
@@ -30,8 +32,10 @@ import {
 import {
   findJsonObject,
   findTomlEntry,
+  insertJsonPath,
   insertJsonProperty,
   jsonProperties,
+  removeEmptyParentChain,
   removeJsonProperty,
   removeTomlEntry,
   insertTomlEntry,
@@ -40,14 +44,27 @@ import {
 import { composeEnvironment } from './shim-runtime.mjs';
 
 const ENGINE_IDS = ['cloak', 'playwright', 'camoufox', 'camoufox-native', 'kameleo'];
+const WRITABLE_HARNESSES = new Set(['claude-code', 'codex', 'antigravity', 'opencode']);
 const D0_NOTICE =
   'Claude Code plugin-management installs are configured only through /plugin -> Configure. The npm/npx path is disjoint; no values are written by this CLI.';
-const CLAUDE_COMMANDS = [
-  'claude plugin marketplace add FiredMosquito831/secret-agent-browser-mcps',
-  'claude plugin install cloakbrowser@cloakbrowser-mcp',
-  'printf \'%s\' \'{"browser_engine":"cloak"}\' | claude plugin configure cloakbrowser@cloakbrowser-mcp --values-stdin',
-  'claude plugin list --json',
-];
+function assertWritableHarness(harnessId, command) {
+  if (!harnessId || WRITABLE_HARNESSES.has(harnessId)) return;
+  throw new SabmError(
+    'refused',
+    'unsupported-harness',
+    `${command} has no Phase 1 writer for ${harnessId}; only codex, antigravity and opencode are written (claude-code is print-only).`,
+    `Run ${command} with codex, antigravity, opencode or claude-code.`,
+  );
+}
+
+function claudeCommands(engine) {
+  return [
+    'claude plugin marketplace add FiredMosquito831/secret-agent-browser-mcps',
+    'claude plugin install cloakbrowser@cloakbrowser-mcp',
+    `printf '%s' '{"browser_engine":"${engine}"}' | claude plugin configure cloakbrowser@cloakbrowser-mcp --values-stdin`,
+    'claude plugin list --json',
+  ];
+}
 
 function harnessList(value) {
   if (value === undefined || value === null) return undefined;
@@ -83,7 +100,7 @@ function entryValue(
     ];
     if (disabled) body.push('"disabled": true');
     if (enabled) body.push('"disabled": false');
-    return `{\n${body.map((line) => `${indent}${line}`).join(',\n')}\n}`;
+    return `{${eol}${body.map((line) => `${indent}${line}`).join(`,${eol}`)}${eol}}`;
   }
   const body = [
     '"type": "local"',
@@ -92,7 +109,7 @@ function entryValue(
   ];
   if (disabled) body.push('"disabled": true');
   if (enabled) body.push('"disabled": false');
-  return `{\n${body.map((line) => `${indent}${line}`).join(',\n')}\n}`;
+  return `{${eol}${body.map((line) => `${indent}${line}`).join(`,${eol}`)}${eol}}`;
 }
 
 function refusalsFor(state, target, name) {
@@ -134,13 +151,22 @@ function planEdit(text, target, name, value, remove = false) {
       : { ...insertTomlEntry(text, value), action: 'create' };
   }
   const found = findJsonObject(text, target.parent);
+  const eol = detectEol(text);
+  const indent = detectIndent(text, target.parent);
   if (!found.found) {
-    throw new Error(
-      `${target.path} has no object at ${target.parent.join('.')}; refusing to guess an edit span.`,
-    );
+    if (remove) return null;
+    if (found.nonObject) {
+      throw new SabmError(
+        'refused',
+        'parse-error',
+        `${target.path} has a non-object parent at ${target.parent.join('.')}; refusing to guess an edit span.`,
+        'Convert the parent to an object with an editor, then try again.',
+      );
+    }
+    return insertJsonPath(text, target.parent, name, value, indent, eol, target.format);
   }
   if (remove) return removeJsonProperty(text, found.objectSpan, name, target.format);
-  return insertJsonProperty(text, found.objectSpan, name, value, detectIndent(text, target.parent));
+  return insertJsonProperty(text, found.objectSpan, name, value, indent, eol, target.format);
 }
 
 async function entryText(target) {
@@ -152,11 +178,14 @@ async function entryText(target) {
   }
 }
 
-async function writeEntry({ target, name, value, remove, dataRoot, hooks = {} }) {
+async function writeEntry({ target, name, value, remove, dataRoot, hooks = {}, removeParentKeys = [] }) {
   const original = await entryText(target);
   const edit = planEdit(original, target, name, value, remove);
   if (!edit) return { write: null, text: original };
-  const nextText = spliceText(original, edit);
+  let nextText = spliceText(original, edit);
+  if (remove && removeParentKeys.length > 0 && target.format !== 'toml') {
+    nextText = removeEmptyParentChain(nextText, removeParentKeys, target.format);
+  }
   const { atomicWriteText } = await import('./writers.mjs');
   const { parseText } = await import('./parsers.mjs');
   const write = await atomicWriteText(target.path, original || null, nextText, {
@@ -192,6 +221,7 @@ export async function installResult(options, context) {
       remedy: 'Use a documented path on macOS/Linux; Phase 3 will verify Windows paths.',
     });
   }
+  assertWritableHarness(harness.id, 'install');
   const schema = await loadSchema(options, context);
   const settings = validateAll(schema, (options.config ?? []).map(parseKeyValue));
   const root = resolveDataRoot(options, context);
@@ -208,7 +238,7 @@ export async function installResult(options, context) {
       engine,
       changed: false,
       files: [],
-      commands: CLAUDE_COMMANDS,
+      commands: claudeCommands(engine),
       warnings: [D0_NOTICE],
       next,
       dataRoot: root.path,
@@ -217,6 +247,7 @@ export async function installResult(options, context) {
   const state = await inspectConfig(target, name, root.path);
   refusalsFor(state, target, name);
   const text = await entryText(target);
+  const parentWasAbsent = target.format !== 'toml' && !findJsonObject(text, target.parent).found;
   const value = entryValue(target, {
     name,
     dataRoot: root.path,
@@ -258,11 +289,17 @@ export async function installResult(options, context) {
       });
       writes.push(written.write);
     }
+    const entryKey = `${harness.id}:${scope}:${name}`;
+    const priorManifest = await readManifest(root.path);
+    const createdPaths = { ...(priorManifest?.createdPaths ?? {}) };
+    if (parentWasAbsent) createdPaths[entryKey] = target.parent;
+    else delete createdPaths[entryKey];
     const manifest = await writeManifest(
       root.path,
-      [`${harness.id}:${scope}:${name}`],
-      [bundle.pluginVersion],
+      [entryKey, ...(priorManifest?.entries ?? [])],
+      [bundle.pluginVersion, ...(priorManifest?.engines ?? [])],
       options.hooks,
+      createdPaths,
     );
     writes.push(manifest.write);
     const written = await writeEntry({
@@ -309,6 +346,7 @@ export async function installResult(options, context) {
 
 export async function uninstallResult(options, context) {
   const harness = getHarness(options.harness);
+  assertWritableHarness(harness.id, 'uninstall');
   const scope = options.scope ?? 'user';
   const name = options.name ?? 'cloakbrowser';
   const target = await resolveTarget(harness.id, { scope, project: options.project }, context);
@@ -354,6 +392,9 @@ export async function uninstallResult(options, context) {
       },
     );
   }
+  const manifestBefore = await readManifest(root.path);
+  const entryKey = `${harness.id}:${scope}:${name}`;
+  const removeParentKeys = manifestBefore?.createdPaths?.[entryKey] ?? [];
   const writes = [];
   if (!options.dryRun) {
     const removed = await writeEntry({
@@ -363,21 +404,36 @@ export async function uninstallResult(options, context) {
       remove: true,
       dataRoot: root.path,
       hooks: options.hooks,
+      removeParentKeys,
     });
     if (removed.write) writes.push(removed.write);
+    if (!options.force && manifestBefore) {
+      const remainingEntries = (manifestBefore.entries ?? []).filter((item) => item !== entryKey);
+      const createdPaths = { ...(manifestBefore.createdPaths ?? {}) };
+      delete createdPaths[entryKey];
+      const updated = await writeManifest(
+        root.path,
+        remainingEntries,
+        manifestBefore.engines ?? [],
+        options.hooks,
+        createdPaths,
+      );
+      writes.push(updated.write);
+    }
     if (options.force) {
       const manifest = await readManifest(root.path);
       const { atomicWriteText } = await import('./writers.mjs');
       try {
         const text = await readFile(join(root.path, 'manifest.json'), 'utf8');
+        const manifestPath = join(root.path, 'manifest.json');
         writes.push(
-          await atomicWriteText(join(root.path, 'manifest.json'), text, '', {
+          await atomicWriteText(manifestPath, text, text, {
             backupRoot: root.path,
             hooks: options.hooks,
             action: 'remove',
-            validate: (candidate) => candidate === '',
           }),
         );
+        await rm(manifestPath, { force: true });
       } catch (error) {
         if (error?.code !== 'ENOENT') throw error;
       }
@@ -399,6 +455,7 @@ export async function uninstallResult(options, context) {
 }
 
 export async function updateResult(options, context) {
+  assertWritableHarness(options.harness ?? null, 'update');
   const root = resolveDataRoot(options, context);
   const bundle = await loadBundle(options, context);
   const installed = await readCurrent(root.path);
@@ -432,7 +489,7 @@ export async function updateResult(options, context) {
     options.hooks,
   );
   writes.push(updated.write);
-  const removed = await pruneEngines(root.path, keep);
+  const removed = await pruneEngines(root.path, keep, bundle.pluginVersion);
   return success('update', {
     check: false,
     dryRun: false,
@@ -449,6 +506,7 @@ export async function updateResult(options, context) {
 export async function enableResult(options, context, enabled) {
   const command = enabled ? 'enable' : 'disable';
   const harness = getHarness(options.harness);
+  assertWritableHarness(harness.id, command);
   const scope = options.scope ?? 'user';
   const name = options.name ?? 'cloakbrowser';
   const target = await resolveTarget(harness.id, { scope, project: options.project }, context);
@@ -564,11 +622,32 @@ export async function configureResult(options, context) {
     .concat((options.unset ?? []).map((key) => ({ key, value: '' })));
   const normalized = [];
   if (harness && values.length > 0) {
+    assertWritableHarness(harness, 'configure');
     for (const pair of values) {
       const validated = pair.value === '' ? null : validateSettingValue(schema, pair.key, pair.value);
       if (validated === null) assertDocumentKey(pair.key);
       normalized.push({ key: pair.key, value: validated ? validated.value : null });
     }
+  }
+  // Preflight every operation that can fail before the first write: invalid
+  // documents are refused by writeSettingsValues, and --print-env must be
+  // composable now so a later failure cannot leave a changed tree with
+  // writes:[] in a failure envelope.
+  let harnessDocument = null;
+  try {
+    harnessDocument = await readDocument(settingsDocumentPath(root.path, 'harness', harness));
+  } catch {
+    harnessDocument = null;
+  }
+  let preflightEnvironment = null;
+  if (options.printEnv) {
+    preflightEnvironment = await composeEnvironment({
+      dataRoot: root.path,
+      harness: harness ?? 'claude-code',
+      entry: name,
+      env: context.env,
+      cwd: context.cwd,
+    });
   }
   const writes = [];
   const written = [];
@@ -587,6 +666,9 @@ export async function configureResult(options, context) {
     for (const item of normalized) written.push({ key: item.key, level, value: item.value });
   }
   const gated = await gatedPrecedence(options, context, root, harness);
+  const scopeDocument = await readDocument(settingsDocumentPath(root.path, 'harness', harness)).catch(
+    () => null,
+  );
   const payload = {
     harness,
     entry: name,
@@ -611,6 +693,7 @@ export async function configureResult(options, context) {
         project,
         env: context.env,
         envName: SETTINGS_ENV_NAMES[key],
+        scopes: scopeDocument?.parsed ?? null,
       }),
     ),
     writes,
@@ -621,13 +704,21 @@ export async function configureResult(options, context) {
     payload.precedenceNote = gated.result.precedenceNote;
   }
   if (options.printEnv) {
-    const composed = await composeEnvironment({
-      dataRoot: root.path,
-      harness: harness ?? 'claude-code',
-      entry: name,
-      env: context.env,
-      cwd: context.cwd,
-    });
+    // preflightEnvironment already proved composition can succeed. A second
+    // composition after the write is best-effort so no post-write throw can
+    // turn a successful write into a failure envelope with writes:[].
+    let composed = preflightEnvironment;
+    try {
+      composed = await composeEnvironment({
+        dataRoot: root.path,
+        harness: harness ?? 'claude-code',
+        entry: name,
+        env: context.env,
+        cwd: context.cwd,
+      });
+    } catch {
+      // Keep the validated preflight environment.
+    }
     payload.environment = composed.env;
     payload.engine = composed.current?.pluginVersion ?? null;
   }
@@ -846,17 +937,42 @@ export async function doctorResult(options, context) {
     details: { verification },
   });
   const gates = await gatedPrecedence(options, context, root, doctorHarness);
+  const documentStates = [gates.documents.global, gates.documents.harness].filter(Boolean);
+  const invalidDocuments = documentStates.filter(
+    (document) => document.state === 'invalid' || document.error != null,
+  );
+  const badProblems = documentStates
+    .flatMap((document) => document.problems ?? [])
+    .filter((problem) => problem.reason === 'invalid-type');
+  const ignoredProblems = documentStates
+    .flatMap((document) => document.problems ?? [])
+    .filter((problem) => ['unknown key', 'session-only'].includes(problem.reason));
+  const settingsStatus = !gates.result.enabled
+    ? 'skip'
+    : invalidDocuments.length > 0 || badProblems.length > 0
+      ? 'error'
+      : ignoredProblems.length > 0
+        ? 'warning'
+        : 'ok';
   checks.push({
     name: 'settings-types',
-    status: !gates.result.enabled ? 'skip' : 'ok',
+    status: settingsStatus,
     message: !gates.result.enabled
       ? 'Settings documents are gated: no STEALTH_DATA_DIR or explicit settings_level; nothing was probed.'
-      : `Documents parsed; ${Object.keys(gates.documents.global?.settings ?? {}).length + Object.keys(gates.documents.harness?.settings ?? {}).length} broker setting(s) accepted.`,
+      : invalidDocuments.length > 0
+        ? `Invalid settings document(s): ${invalidDocuments.map((document) => document.error ?? document.path).join('; ')}`
+        : badProblems.length > 0
+          ? `Non-string settings value(s): ${badProblems.map((problem) => problem.key).join(', ')}.`
+          : ignoredProblems.length > 0
+            ? `${ignoredProblems.length} ignored key(s); every accepted value type-checks.`
+            : `Documents parsed; ${Object.keys(gates.documents.global?.settings ?? {}).length + Object.keys(gates.documents.harness?.settings ?? {}).length} broker setting(s) accepted.`,
     details: {
       documents: {
         global: gates.documents.global?.state ?? 'not-applicable',
         harness: gates.documents.harness?.state ?? 'not-applicable',
       },
+      invalidDocuments: invalidDocuments.map((document) => ({ path: document.path, error: document.error })),
+      problems: ignoredProblems.concat(badProblems),
     },
   });
   const { modeState } = await import('./paths.mjs');
@@ -906,4 +1022,4 @@ export async function disableResult(options, context) {
   return enableResult(options, context, false);
 }
 
-export { D0_NOTICE, CLAUDE_COMMANDS };
+export { D0_NOTICE, claudeCommands };

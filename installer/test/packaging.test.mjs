@@ -2,21 +2,23 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const REPO = resolve(ROOT, '..');
 const PREFIX = resolve(tmpdir(), 'sabm-installer-packaging');
+const NPM_CLI =
+  process.env.npm_execpath || join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
 await mkdir(PREFIX, { recursive: true });
 
 function run(command, args, options = {}) {
+  // On Windows, npm.cmd + shell=true splits paths containing spaces/# before
+  // npm sees them. Running npm-cli.js with node passes argv verbatim.
   const isNpm = command === 'npm';
-  const executable = isNpm && process.platform === 'win32' ? 'npm.cmd' : command;
-  const result = spawnSync(executable, args, {
+  const result = spawnSync(isNpm ? process.execPath : command, isNpm ? [NPM_CLI, ...args] : args, {
     encoding: 'utf8',
-    shell: isNpm && process.platform === 'win32',
     ...options,
   });
   assert.equal(result.status, 0, `${command} ${args.join(' ')} failed: ${result.stdout}\n${result.stderr}`);
@@ -49,7 +51,9 @@ test('npm pack ships dist, vendor and bin with no postinstall and stays under 3 
 test('packaged tarball installs into a scratch prefix and runs the smoke commands', async () => {
   const pack = run('npm', ['pack', '--json', '--pack-destination', PREFIX], { cwd: ROOT });
   const tarball = join(PREFIX, JSON.parse(pack.stdout)[0].filename);
-  const prefix = await mkdtemp(join(tmpdir(), 'sabm-packaged-'));
+  // Regression: a Windows temp prefix can contain spaces and URL-special
+  // characters; the CLI must still recognize its own entry and print output.
+  const prefix = await mkdtemp(join(tmpdir(), 'sabm packaged # '));
   run('npm', ['install', '--prefix', prefix, tarball, '--ignore-scripts', '--no-audit', '--no-fund'], {
     cwd: REPO,
   });

@@ -97,15 +97,11 @@ for (const name of files) {
   assert.equal(checked.status, 0, `${name} failed node --check: ${checked.stderr}`);
 }
 
-try {
-  const bundled = spawnSync(process.execPath, [join(root, 'scripts', 'build-installer.mjs'), '--check'], {
-    encoding: 'utf8',
-  });
-  assert.equal(bundled.status, 0, `bundle check failed: ${bundled.stdout}${bundled.stderr}`);
-  process.stdout.write(bundled.stdout);
-} catch (error) {
-  if (!error.message.includes('bundle.json')) throw error;
-}
+const bundled = spawnSync(process.execPath, [join(root, 'scripts', 'build-installer.mjs'), '--check'], {
+  encoding: 'utf8',
+});
+assert.equal(bundled.status, 0, `bundle check failed: ${bundled.stdout}${bundled.stderr}`);
+process.stdout.write(bundled.stdout);
 
 process.stdout.write(
   `installer check: ok (name/version, 2 bins, ${Object.keys(manifest.dependencies).length} deps, schema 36/23 + ${new Set(placeholderKeys).size} mappings + ${envValues.length - placeholderKeys.length} env pins, ${files.length} source files, vendored hash match)\n`,

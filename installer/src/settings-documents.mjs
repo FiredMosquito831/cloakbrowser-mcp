@@ -104,6 +104,14 @@ export function documentForLevel(dataRoot, harness, level, entry, project) {
   );
 }
 
+export function scopeValues(document, entry, project) {
+  const root = document?.scopes ?? {};
+  return {
+    entry: root.entries?.[entry]?.settings ?? {},
+    project: project ? (root.projects?.[resolve(project)]?.settings ?? {}) : {},
+  };
+}
+
 export function scopeSettings(document, entry, project) {
   const scopes = document?.settings && typeof document.settings === 'object' ? document : {};
   const entryValues = scopes.scopes?.entries?.[entry]?.settings ?? {};
@@ -282,8 +290,8 @@ export async function brokerPrecedence({ env, dataRoot, harness, settingsLevel, 
 
 // A separately named field keeps CLI scope winners out of the broker's
 // level/source vocabulary (env|session|harness|global|default).
-export function cliLogicalWinner(documents, { key, entry, project, env, envName }) {
-  const scopes = {
+export function cliLogicalWinner(documents, { key, entry, project, env, envName, scopes = null }) {
+  const levels = {
     global: undefined,
     harness: undefined,
     entry: undefined,
@@ -294,15 +302,16 @@ export function cliLogicalWinner(documents, { key, entry, project, env, envName 
     ['harness', documents?.harness],
   ]) {
     const value = document?.settings?.[key];
-    if (typeof value === 'string' && value !== '') scopes[level] = value;
+    if (typeof value === 'string' && value !== '') levels[level] = value;
   }
-  const scoped = scopeSettings(documents?.harness, entry, project);
-  if (typeof scoped[key] === 'string' && scoped[key] !== '') scopes.entry = scoped[key];
-  if (typeof scoped[key] === 'string' && scoped[key] !== '') scopes.project = scoped[key];
+  const scoped = scopeValues(scopes ?? documents?.harness, entry, project);
+  if (typeof scoped.entry[key] === 'string' && scoped.entry[key] !== '') levels.entry = scoped.entry[key];
+  if (typeof scoped.project[key] === 'string' && scoped.project[key] !== '')
+    levels.project = scoped.project[key];
   if (envName && typeof env?.[envName] === 'string' && env[envName] !== '')
     return { key, level: 'host', source: 'env' };
   for (const level of ['project', 'entry', 'harness', 'global']) {
-    if (scopes[level] !== undefined) return { key, level, source: 'document' };
+    if (levels[level] !== undefined) return { key, level, source: 'document' };
   }
   return { key, level: 'default', source: 'default' };
 }

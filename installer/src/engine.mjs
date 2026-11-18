@@ -155,7 +155,7 @@ export async function readCurrent(dataRoot) {
   }
 }
 
-export async function writeManifest(dataRoot, entries, engines, hooks = {}) {
+export async function writeManifest(dataRoot, entries, engines, hooks = {}, createdPaths = null) {
   const path = join(resolve(dataRoot), 'manifest.json');
   let text = null;
   try {
@@ -168,6 +168,7 @@ export async function writeManifest(dataRoot, entries, engines, hooks = {}) {
     cliVersion: CLI_VERSION,
     entries: [...new Set(entries)].sort(),
     engines: [...new Set(engines)].sort(),
+    ...(createdPaths ? { createdPaths } : {}),
   };
   const write = await atomicWriteText(path, text, `${JSON.stringify(manifest, null, 2)}\n`, {
     backupRoot: dataRoot,
@@ -191,7 +192,21 @@ export async function readManifest(dataRoot) {
   }
 }
 
-export async function pruneEngines(dataRoot, keep) {
+export function compareVersions(left, right) {
+  const a = String(left)
+    .split('.')
+    .map((part) => Number(part) || 0);
+  const b = String(right)
+    .split('.')
+    .map((part) => Number(part) || 0);
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    const difference = (a[index] ?? 0) - (b[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+export async function pruneEngines(dataRoot, keep, currentVersion = null) {
   const root = join(resolve(dataRoot), 'engine');
   let entries = [];
   try {
@@ -202,9 +217,13 @@ export async function pruneEngines(dataRoot, keep) {
     if (error?.code === 'ENOENT') return [];
     throw error;
   }
-  entries.sort().reverse();
+  // Numeric segments, not lexicographic text: 2.10.0 > 2.9.0 > 2.8.0.
+  entries.sort((left, right) => compareVersions(right, left));
+  const ordered = currentVersion
+    ? [currentVersion, ...entries.filter((name) => name !== currentVersion)]
+    : entries;
   const removed = [];
-  for (const name of entries.slice(Math.max(0, keep))) {
+  for (const name of ordered.slice(Math.max(0, keep))) {
     await rm(join(root, name), { recursive: true, force: true });
     removed.push(name);
   }

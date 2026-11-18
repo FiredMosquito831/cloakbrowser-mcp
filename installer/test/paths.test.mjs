@@ -71,5 +71,6 @@ test('path matrix, overrides, derived labels and Windows refusal', async () => {
 
   const unsupported = await invoke(['install', 'openclaw', '--scope', 'project', '--dry-run'], tree);
   assert.equal(unsupported.code, 2);
+  assert.equal(unsupported.jsonLines[0].error.kind, 'unsupported-scope');
   assert.match(unsupported.jsonLines[0].error.message, /OPENCLAW_CONFIG_PATH/);
 });

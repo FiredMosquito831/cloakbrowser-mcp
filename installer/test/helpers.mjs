@@ -41,6 +41,7 @@ export async function fixtureFor(format, variant = 'clean') {
   if (variant === 'inline') name = 'codex-inline.toml';
   if (variant === 'alias') name = 'hermes-alias.yaml';
   if (variant === 'duplicate') name = 'json-duplicate.json';
+  if (variant === 'no-trailing') name = 'opencode-no-trailing.jsonc';
   if (!name) throw new Error(`no fixture for ${format}/${variant}`);
   return readFile(join(FIXTURES, name));
 }

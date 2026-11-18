@@ -1,6 +1,8 @@
 #!/usr/bin/env node
+import { realpathSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { homedir as systemHomedir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { Command, CommanderError } from 'commander';
 import { errorEnvelope, exitCodeFor, failure, printJsonLine } from './envelope.mjs';
 import { makeContext } from './paths.mjs';
@@ -277,8 +279,21 @@ function printResultFor(name) {
   return (result, io) => printResult(name, result, io);
 }
 
-const here = new URL(import.meta.url);
-if (process.argv[1] && here.href === new URL(`file:///${process.argv[1].replace(/\\/g, '/')}`).href) {
+// Direct-execution detection must survive Windows short paths, drive-letter
+// case and URL-special characters (#, %, spaces). Compare canonical realpaths,
+// not a hand-built file: URL (which treats # as a fragment).
+export function isDirectInvocation(entry = process.argv[1], platform = process.platform) {
+  if (!entry) return false;
+  try {
+    const invoked = realpathSync.native(entry);
+    const module = realpathSync.native(fileURLToPath(import.meta.url));
+    return platform === 'win32' ? invoked.toLowerCase() === module.toLowerCase() : invoked === module;
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectInvocation()) {
   main()
     .then((code) => {
       process.exitCode = code;
