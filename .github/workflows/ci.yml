@@ -92,6 +92,8 @@ jobs:
       - name: Static checks
         if: matrix.os == 'ubuntu-latest' && matrix.node-version == needs.node-versions.outputs.minimum_node
         run: npm run check:static
+      - name: Installer check and tests
+        run: npm --prefix installer ci --ignore-scripts && npm --prefix installer run check && npm --prefix installer test
       - name: Build runtime
         id: build
         run: npm run build

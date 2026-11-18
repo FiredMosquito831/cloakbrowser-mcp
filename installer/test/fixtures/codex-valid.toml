@@ -1,0 +1,9 @@
+# Codex fixture: comments, quoted keys and CRLF must survive.
+model = "gpt-test"
+
+[mcp_servers."other.server"]
+command = "node"
+args = ["other.mjs"]
+
+[mcp_servers.env]
+KEEP = "yes"

@@ -1,0 +1,7 @@
+# Hermes fixture: comments and an anchor elsewhere in the file.
+defaults: &defaults
+  enabled: true
+copy: *defaults
+mcp_servers: # servers
+  other:
+    command: "node"

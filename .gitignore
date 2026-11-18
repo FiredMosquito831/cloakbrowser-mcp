@@ -1,5 +1,7 @@
 # Dependencies and package-manager caches
 /node_modules/
+installer/node_modules/
+installer/dist/
 .agents/skills/brag/
 .agents/skills/humanizer/
 .agents/skills/remotion/

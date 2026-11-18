@@ -1,0 +1,8 @@
+{
+  // OpenCode fixture with comments and trailing commas.
+  "mcp": {
+    "servers": {
+      "other": { "type": "local", "command": ["node", "other.mjs"], },
+    },
+  },
+}

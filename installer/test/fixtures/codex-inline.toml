@@ -1,0 +1,2 @@
+# Inline table for our entry: no safe splice span.
+mcp_servers.cloakbrowser = { command = "node" }

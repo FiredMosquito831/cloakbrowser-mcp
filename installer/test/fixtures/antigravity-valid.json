@@ -1,0 +1,6 @@
+{
+  "mcpServers": {
+    "other": { "command": "node", "args": ["other.mjs"] }
+  },
+  "keep": true
+}

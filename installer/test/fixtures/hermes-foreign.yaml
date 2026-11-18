@@ -1,0 +1,5 @@
+# A foreign entry of the same name.
+mcp_servers:
+  cloakbrowser:
+    command: "node"
+    args: ["D:/elsewhere/bin/run.mjs", "--harness", "hermes", "--entry", "cloakbrowser"]

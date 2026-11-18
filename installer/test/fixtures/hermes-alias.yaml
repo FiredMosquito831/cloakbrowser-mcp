@@ -1,0 +1,3 @@
+shared: &entry
+  command: "node"
+mcp_servers: *entry
