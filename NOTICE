@@ -1,0 +1,78 @@
+NOTICE
+======
+
+Secret Agent Browser MCPs is an adapted collection of MCP tools for popular stealth-automation
+browsers, through the Playwright MCP contract. It is derived from swimmwatch/cloakbrowser-mcp
+(MIT). The bridge, its CLI, packaging and the docs/ tree are upstream's work; this repository
+adapts them into a Claude Code plugin marketplace and adds a complete, proper stealth
+implementation for agentic harnesses and tasks. Full detail is in README.md.
+
+Attribution
+-----------
+
+- Upstream bridge - swimmwatch/cloakbrowser-mcp
+  https://github.com/swimmwatch/cloakbrowser-mcp
+  MIT. The Playwright MCP-compatible bridge, CLI, Docker/HTTP packaging and the documentation
+  carried under docs/ come from this project.
+
+- CloakBrowser - https://github.com/CloakHQ/CloakBrowser
+  The stealth-patched Chromium binary and engine wrapper used by the cloak engine. The binary is
+  proprietary: the v146 build is free and current builds require a vendor licence for more than
+  one concurrent session. This repository does not bundle it.
+
+- Playwright MCP - https://github.com/microsoft/playwright-mcp
+  The source of the tool names and schemas exposed through the contract. Parity is structural,
+  not a reimplementation.
+
+- Camoufox - https://github.com/camoufox-org/camoufox
+  The stealth Firefox browser behind the camoufox and camoufox-native engines.
+
+- camoufox-playwright-mcp 0.1.5 - https://pypi.org/project/camoufox-playwright-mcp/
+  The pinned wrapper that drives the Camoufox engine. It is fetched from PyPI at first start into
+  plugin data and is never bundled or redistributed here. No source-repository URL appears in the
+  pinned artifacts, so the package page is cited instead of guessing one.
+
+- mcp-camoufox 0.4.5 - https://pypi.org/project/mcp-camoufox/
+  The native Camoufox MCP server, fetched from PyPI at first start and never bundled here. Its
+  licence is FSL-1.1-MIT (source-available; not OSI-approved). The npm package of the same name is
+  a different project.
+
+- Kameleo - https://kameleo.io/downloads
+  A proprietary desktop application the user installs and licenses separately. The plugin only
+  attaches to its local CDP endpoint and never downloads, installs or redistributes the app. The
+  attach path is live-unverified.
+
+Derivation
+----------
+
+This repository is adapted from swimmwatch/cloakbrowser-mcp (MIT). It is a collection of adapted
+MCP tools for popular stealth-automation browsers, through the Playwright MCP contract, and adds a
+complete, proper stealth implementation for agentic harnesses and tasks. The marketplace, plugins
+and broker are this project's work; the upstream bridge remains upstream's.
+
+Licence
+-------
+
+The LICENSE notice is reproduced verbatim:
+
+MIT License
+
+Copyright (c) 2026 cloakbrowser-mcp contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

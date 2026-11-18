@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "cloakbrowser-mcp",
-  "description": "Claude Code marketplace for stealth browser MCP servers: CloakBrowser (universal broker) and Camoufox (per-engine plugin), each through the Playwright MCP tool contract.",
+  "description": "A collection of adapted MCP tools for popular stealth-automation browsers, through the Playwright MCP contract. Adapted from swimmwatch/cloakbrowser-mcp (MIT); this repository adds a complete, proper stealth implementation for agentic harnesses and tasks.",
   "owner": {
     "name": "FiredMosquito831"
   },

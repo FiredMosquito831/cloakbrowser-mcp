@@ -88,6 +88,8 @@ review it when a pin actually moves.
 A conflict is a handled outcome, not an unhandled failure:
 
 - `git merge --abort` restores the tree; nothing is pushed and `main` is untouched.
+- A conflict in `README.md` aborts the merge and opens the conflict issue; resolve it in our favour
+  (keep this repository's rebranded README) before re-running the sync.
 - One open issue titled `Upstream sync conflict (swimmwatch/main)` is created, or commented on
   when it already exists, with labels `upstream-sync` and `conflict`, assignee
   `FiredMosquito831`, the conflicting paths and a copy-paste resolution block.
