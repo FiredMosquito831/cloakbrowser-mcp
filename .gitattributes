@@ -1,5 +1,8 @@
 * text=auto eol=lf
 
+# The parser corpus deliberately uses CRLF; keep its bytes across checkouts.
+installer/test/fixtures/codex-valid.toml -text
+
 *.gif binary
 *.ico binary
 *.jpg binary
