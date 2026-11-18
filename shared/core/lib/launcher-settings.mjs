@@ -31,6 +31,8 @@
 // The safe branch for each setting is defined HERE, in code, not in plugin.json:
 // the plugin manifest's default is only what the host substitutes, and the
 // placeholder case exists precisely because the host may not substitute at all.
+import path from 'node:path';
+
 const SETTING_STATES = Object.freeze({
   UNSET: 'unset',
   EMPTY: 'empty',
@@ -65,6 +67,58 @@ export function settingState(raw) {
 function echo(raw) {
   const text = typeof raw === 'string' ? raw.trim().replaceAll('\n', ' ') : '';
   return text.length > 60 ? `${text.slice(0, 60)}...` : text;
+}
+
+export const DATA_ROOT_SOURCES = Object.freeze({
+  ALIAS: 'env-alias',
+  PLUGIN: 'plugin-data',
+  FALLBACK: 'fallback',
+});
+
+// The one plugin data-root resolver for the broker, every launcher, the Python
+// entry and the two CLI scripts. A Claude Code plugin install always has
+// CLAUDE_PLUGIN_DATA, and that path must stay byte-identical, so it wins when
+// both variables exist. STEALTH_DATA_DIR exists for installs without a plugin
+// manager (the npm/npx CLI) and is never set by Claude Code itself. An alias
+// that is empty, an unsubstituted placeholder, relative or otherwise unusable
+// is ignored with exactly one log line; nothing is created for it here.
+export function resolveDataRoot(env, fallbackDir, log = () => {}) {
+  const source = env ?? {};
+  const plugin = typeof source.CLAUDE_PLUGIN_DATA === 'string' ? source.CLAUDE_PLUGIN_DATA.trim() : '';
+  const hasAlias = Object.hasOwn(source, 'STEALTH_DATA_DIR') && source.STEALTH_DATA_DIR !== undefined;
+  const alias = hasAlias && typeof source.STEALTH_DATA_DIR === 'string' ? source.STEALTH_DATA_DIR.trim() : '';
+  let note = null;
+  let aliasDir = null;
+  if (hasAlias) {
+    if (plugin !== '') {
+      note =
+        'STEALTH_DATA_DIR is ignored because CLAUDE_PLUGIN_DATA is set; the plugin manager data root ' +
+        'is kept, so a host-level alias cannot move this install.';
+    } else if (alias === '') {
+      note = 'STEALTH_DATA_DIR is empty; the built-in fallback data root is kept.';
+    } else if (
+      alias.includes('${') ||
+      !path.isAbsolute(alias) ||
+      alias.includes('\0') ||
+      /[\r\n]/.test(alias)
+    ) {
+      note =
+        `STEALTH_DATA_DIR: ignoring unusable value "${echo(alias)}"; a data root must be an absolute ` +
+        'path with no placeholder or control characters.';
+    } else {
+      aliasDir = path.resolve(alias);
+    }
+  }
+  if (note !== null) {
+    log(note);
+  }
+  if (plugin !== '') {
+    return { dir: path.resolve(plugin), source: DATA_ROOT_SOURCES.PLUGIN, note };
+  }
+  if (aliasDir !== null) {
+    return { dir: aliasDir, source: DATA_ROOT_SOURCES.ALIAS, note: null };
+  }
+  return { dir: path.resolve(fallbackDir), source: DATA_ROOT_SOURCES.FALLBACK, note };
 }
 
 // A boolean setting whose documented safe branch is `safe`. The branch is used

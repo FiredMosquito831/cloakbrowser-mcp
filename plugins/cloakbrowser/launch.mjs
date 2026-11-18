@@ -4,7 +4,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { applyLauncherSettings } from './lib/launcher-settings.mjs';
+import { applyLauncherSettings, resolveDataRoot } from './lib/launcher-settings.mjs';
 import { ensureNpmRuntime, resolveNpmPackage, writeRuntimeLease } from './lib/provision.mjs';
 
 const EMPTY_OPTIONAL_VARS = [
@@ -76,9 +76,7 @@ function resolvePackage(source) {
 }
 
 function dataDir(env) {
-  return env.CLAUDE_PLUGIN_DATA !== undefined && env.CLAUDE_PLUGIN_DATA.trim() !== ''
-    ? env.CLAUDE_PLUGIN_DATA
-    : path.join(homedir(), '.cloakbrowser-mcp-plugin');
+  return resolveDataRoot(env, path.join(homedir(), '.cloakbrowser-mcp-plugin'), logLine).dir;
 }
 
 // profile_isolation=isolated turns the engine's own isolated switch on in the

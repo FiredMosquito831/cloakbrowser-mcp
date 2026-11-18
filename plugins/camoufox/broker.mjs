@@ -51,7 +51,7 @@ import {
   sha256File,
 } from './lib/password-manager.mjs';
 import { isRealDirectory, overlayPolicyPath, overlayRoot } from './lib/camoufox-overlay.mjs';
-import { launcherSettingsReport } from './lib/launcher-settings.mjs';
+import { DATA_ROOT_SOURCES, launcherSettingsReport, resolveDataRoot } from './lib/launcher-settings.mjs';
 import { PING_TIMEOUT_ENGINE_ID, pingTimeoutProblemNote, resolvePingTimeout } from './lib/ping-timeout.mjs';
 import { readProvisioningRecord } from './lib/provision.mjs';
 import { readToolCache, toolCacheKey, toolCachePath, writeToolCache } from './lib/tool-cache.mjs';
@@ -343,12 +343,12 @@ if (engineError === null) {
   }
 }
 
-// The plugin data root the launchers use. ${CLAUDE_PLUGIN_DATA} is the only
-// supported location; the home fallback matches launch.mjs exactly.
-const PLUGIN_DATA_DIR =
-  typeof process.env.CLAUDE_PLUGIN_DATA === 'string' && process.env.CLAUDE_PLUGIN_DATA.trim() !== ''
-    ? path.resolve(process.env.CLAUDE_PLUGIN_DATA.trim())
-    : path.join(homedir(), '.cloakbrowser-mcp-plugin');
+// The plugin data root the launchers use. CLAUDE_PLUGIN_DATA (set by Claude
+// Code's plugin manager) wins over STEALTH_DATA_DIR, so a host-level alias can
+// never move a working plugin install; the shared resolver serves the launchers,
+// the Python entry and both CLI scripts from the same rule.
+const DATA_ROOT = resolveDataRoot(process.env, path.join(homedir(), '.cloakbrowser-mcp-plugin'), log);
+const PLUGIN_DATA_DIR = DATA_ROOT.dir;
 
 // profile_isolation. "shared" (the default) is the behaviour before the setting
 // existed: one profile per account, shared by every Claude Code session.
@@ -5102,6 +5102,12 @@ function capabilitiesPayload(clientRoots) {
             : 'invalid',
     profileDefaultPath: pointerNow === null ? null : pointerNow.path,
     ...(pointerNow === null || pointerNow.error === null ? {} : { profileDefaultError: pointerNow.error }),
+    // 2.24.2: only a start that actually used the alias gains these two keys,
+    // with the effective root and its source. A plugin-manager install (or an
+    // ignored alias) gains no key, so its payload stays byte-identical.
+    ...(DATA_ROOT.source === DATA_ROOT_SOURCES.ALIAS
+      ? { dataDir: DATA_ROOT.dir, dataDirSource: DATA_ROOT.source }
+      : {}),
   };
 }
 

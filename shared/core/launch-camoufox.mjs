@@ -16,7 +16,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { applyLauncherSettings } from './lib/launcher-settings.mjs';
+import { applyLauncherSettings, resolveDataRoot } from './lib/launcher-settings.mjs';
 import { applyPingTimeout, pingTimeoutProblemNote } from './lib/ping-timeout.mjs';
 import { applyCamoufoxOverlay } from './lib/password-manager.mjs';
 import { ensurePython, ensureUv, ensureVenv, writeRuntimeLease } from './lib/provision.mjs';
@@ -143,9 +143,7 @@ export function buildChildEnv(source) {
 }
 
 function dataDir(env) {
-  return env.CLAUDE_PLUGIN_DATA !== undefined && env.CLAUDE_PLUGIN_DATA.trim() !== ''
-    ? env.CLAUDE_PLUGIN_DATA
-    : path.join(homedir(), '.camoufox-mcp-plugin');
+  return resolveDataRoot(env, path.join(homedir(), '.camoufox-mcp-plugin'), log).dir;
 }
 
 function resolveOverride(env, name, fallback) {

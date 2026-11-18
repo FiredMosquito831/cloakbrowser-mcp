@@ -180,12 +180,15 @@ function startBroker(options: {
   engine?: string;
   plugin?: string;
   stubLines?: string;
+  aliasDataDir?: boolean;
 }): BrokerSession {
   const env: Record<string, string | undefined> = {
     ...process.env,
     STEALTH_ENGINE: options.engine ?? 'cloak',
     STEALTH_TOOL_PROFILE: 'full',
-    CLAUDE_PLUGIN_DATA: options.dataDir,
+    ...(options.aliasDataDir === true
+      ? { STEALTH_DATA_DIR: options.dataDir }
+      : { CLAUDE_PLUGIN_DATA: options.dataDir }),
     CLOAK_PLAYWRIGHT_MCP_PACKAGE: 'cloakbrowser-mcp@1.15.1',
     PLAYWRIGHT_MCP_OUTPUT_DIR: options.outputDir ?? '',
     ...(options.stubLines === undefined ? {} : { STUB_LINES: options.stubLines }),
@@ -654,5 +657,24 @@ describe('browser_capabilities artifact diagnostics', () => {
       )} because the output_dir setting is empty and no file root was available from the client; set that setting to ` +
         `change it. ${NAVIGATE_URL_SENTENCE}`,
     );
+  });
+
+  it('reports the alias data root only when STEALTH_DATA_DIR actually won', async () => {
+    const root = tempRoot('capabilities-data-root-');
+    const dataDir = createRuntime(root);
+    const cwd = path.join(root, 'cwd');
+    mkdirSync(cwd, { recursive: true });
+
+    const managed = startBroker({ dataDir, cwd, roots: 'silent' });
+    await initialize(managed, false);
+    const managedPayload = await capabilities(managed);
+    expect(Object.hasOwn(managedPayload, 'dataDirSource')).toBe(false);
+
+    // The same root supplied only through the alias, with no plugin-manager variable.
+    const aliased = startBroker({ dataDir, cwd, roots: 'silent', aliasDataDir: true });
+    await initialize(aliased, false);
+    const aliasedPayload = await capabilities(aliased);
+    expect(aliasedPayload.dataDir).toBe(path.resolve(dataDir));
+    expect(aliasedPayload.dataDirSource).toBe('env-alias');
   });
 });
