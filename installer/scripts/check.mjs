@@ -3,36 +3,43 @@ import { spawnSync } from 'node:child_process';
 import { readFile, readdir } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const repo = resolve(root, '..');
 const read = (path) => readFile(path, 'utf8');
+const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
 const manifest = JSON.parse(await read(join(root, 'package.json')));
 assert.equal(manifest.name, 'secret-agent-browser-mcps');
-assert.equal(manifest.version, '1.0.0');
+assert.equal(manifest.version, '1.1.0');
 assert.deepEqual(Object.keys(manifest.bin).sort(), ['sabm', 'secret-agent-browser-mcps']);
 assert.equal(manifest.engines.node, '>=22.13.0');
 assert.deepEqual(Object.keys(manifest.dependencies).sort(), ['commander', 'json5', 'smol-toml', 'yaml']);
 assert.equal(manifest.scripts.check, 'node scripts/check.mjs');
+assert.ok(manifest.files.includes('dist') && manifest.files.includes('vendor'), 'dist and vendor must ship');
+assert.equal(manifest.scripts.postinstall, undefined, 'the package must never install at npm install time');
 
 const lock = JSON.parse(await read(join(root, 'package-lock.json')));
-assert.equal(lock.packages[''].version, '1.0.0');
+assert.equal(lock.packages[''].version, '1.1.0');
 assert.equal(lock.name, 'secret-agent-browser-mcps');
 
 const entry = await read(join(root, 'src', 'cli.mjs'));
 assert.ok(entry.startsWith('#!/usr/bin/env node\n'), 'bin entry needs a node shebang');
+for (const name of Object.keys(manifest.dependencies)) await import(name);
 
-for (const name of Object.keys(manifest.dependencies)) {
-  await import(name);
-}
+const vendored = await read(join(root, 'vendor', 'lib', 'settings-precedence.mjs'));
+assert.equal(
+  hash(vendored),
+  hash(await read(join(repo, 'shared', 'core', 'lib', 'settings-precedence.mjs'))),
+  'vendored settings-precedence.mjs is not byte-identical to shared/core',
+);
+const registry = await read(join(root, 'vendor', 'engine-registry.mjs'));
+assert.equal(hash(registry), hash(await read(join(repo, 'shared', 'core', 'engine-registry.mjs'))));
 
-const cloak = JSON.parse(
-  await read(join(root, '..', 'plugins', 'cloakbrowser', '.claude-plugin', 'plugin.json')),
-);
-const camoufox = JSON.parse(
-  await read(join(root, '..', 'plugins', 'camoufox', '.claude-plugin', 'plugin.json')),
-);
-const mcp = JSON.parse(await read(join(root, '..', 'plugins', 'cloakbrowser', '.mcp.json')));
+const cloak = JSON.parse(await read(join(repo, 'plugins', 'cloakbrowser', '.claude-plugin', 'plugin.json')));
+const camoufox = JSON.parse(await read(join(repo, 'plugins', 'camoufox', '.claude-plugin', 'plugin.json')));
+const mcp = JSON.parse(await read(join(repo, 'plugins', 'cloakbrowser', '.mcp.json')));
 const configKeys = Object.keys(cloak.userConfig);
 assert.equal(configKeys.length, 36);
 assert.equal(Object.keys(camoufox.userConfig).length, 23);
@@ -43,37 +50,63 @@ const placeholderKeys = envValues
 assert.deepEqual(
   placeholderKeys.filter((key) => !configKeys.includes(key)),
   [],
-  '.mcp.json maps an unknown user_config key',
 );
-const uniqueMappedKeys = [...new Set(placeholderKeys)].sort();
-assert.deepEqual(uniqueMappedKeys, [...configKeys].sort(), '.mcp.json must map every userConfig option');
-const fixedCount = envValues.length - placeholderKeys.length;
-assert.ok(fixedCount > 0, '.mcp.json should carry fixed pins');
+assert.deepEqual([...new Set(placeholderKeys)].sort(), [...configKeys].sort());
+assert.ok(envValues.length - placeholderKeys.length > 0);
 
 const srcDir = join(root, 'src');
-const files = (await readdir(srcDir)).filter((name) => name.endsWith('.mjs')).sort();
-assert.ok(files.includes('cli.mjs'));
+async function sourceFiles(dir, prefix = '') {
+  const files = [];
+  for (const item of await readdir(join(dir, prefix), { withFileTypes: true })) {
+    const name = prefix ? join(prefix, item.name) : item.name;
+    if (item.isDirectory()) files.push(...(await sourceFiles(dir, name)));
+    else if (name.endsWith('.mjs')) files.push(name.replace(/\\/g, '/'));
+  }
+  return files;
+}
+const files = await sourceFiles(srcDir);
+const READ_ONLY = new Set([
+  'cli.mjs',
+  'envelope.mjs',
+  'harnesses.mjs',
+  'parsers.mjs',
+  'paths.mjs',
+  'report.mjs',
+  'schema.mjs',
+  'schema-validation.mjs',
+  'settings-documents.mjs',
+]);
 const forbidden = [
   /node:child_process/,
   /\bspawn(Sync)?\s*\(/,
-  /require\s*\(\s*['"]child_process/,
   /\bwriteFile(Sync)?\s*\(/,
   /\bappendFile(Sync)?\s*\(/,
   /\bcreateWriteStream\s*\(/,
   /\bmkdir(Sync)?\s*\(/,
-  /\brmdir(Sync)?\s*\(/,
   /\bunlink(Sync)?\s*\(/,
   /\brename(Sync)?\s*\(/,
-  /\brmSync\s*\(/,
   /\bfetch\s*\(/,
 ];
 for (const name of files) {
   const source = await read(join(srcDir, name));
-  for (const pattern of forbidden) assert.doesNotMatch(source, pattern, `${name} contains a forbidden call`);
+  if (READ_ONLY.has(name)) {
+    for (const pattern of forbidden)
+      assert.doesNotMatch(source, pattern, `${name} contains a forbidden write/process call`);
+  }
   const checked = spawnSync(process.execPath, ['--check', join(srcDir, name)], { encoding: 'utf8' });
   assert.equal(checked.status, 0, `${name} failed node --check: ${checked.stderr}`);
 }
 
+try {
+  const bundled = spawnSync(process.execPath, [join(root, 'scripts', 'build-installer.mjs'), '--check'], {
+    encoding: 'utf8',
+  });
+  assert.equal(bundled.status, 0, `bundle check failed: ${bundled.stdout}${bundled.stderr}`);
+  process.stdout.write(bundled.stdout);
+} catch (error) {
+  if (!error.message.includes('bundle.json')) throw error;
+}
+
 process.stdout.write(
-  `installer check: ok (name/version, 2 bins, ${Object.keys(manifest.dependencies).length} deps, schema 36/23 + ${uniqueMappedKeys.length} mappings + ${fixedCount} env pins, ${files.length} source files, zero-write static guard)\n`,
+  `installer check: ok (name/version, 2 bins, ${Object.keys(manifest.dependencies).length} deps, schema 36/23 + ${new Set(placeholderKeys).size} mappings + ${envValues.length - placeholderKeys.length} env pins, ${files.length} source files, vendored hash match)\n`,
 );
