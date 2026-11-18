@@ -53,11 +53,23 @@ describe('resolveDataRoot', () => {
     expect(
       settings.resolveDataRoot({ CLAUDE_PLUGIN_DATA: pluginData, STEALTH_DATA_DIR: alias }, fallback, log),
     ).toEqual({
-      dir: path.resolve(pluginData),
+      dir: pluginData,
       source: 'plugin-data',
       note: expect.stringContaining('ignored because CLAUDE_PLUGIN_DATA is set'),
     });
     expect(log).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns a Windows-shaped CLAUDE_PLUGIN_DATA string unchanged on any platform', () => {
+    const windowsData = 'D:/scratch/plugin-data';
+    const log = vi.fn();
+    const resolution = settings.resolveDataRoot({ CLAUDE_PLUGIN_DATA: windowsData }, fallback, log);
+    expect(resolution).toEqual({ dir: windowsData, source: 'plugin-data', note: null });
+    expect(resolution.dir).toBe(windowsData);
+    expect(path.join(resolution.dir, 'profiles', 'camoufox-native')).toBe(
+      path.join(windowsData, 'profiles', 'camoufox-native'),
+    );
+    expect(log).not.toHaveBeenCalled();
   });
 
   it('uses the alias only when no plugin manager data root exists', () => {
@@ -128,7 +140,7 @@ describe('profile-default CLI data root', () => {
   it('uses the alias when only it is set, and CLAUDE_PLUGIN_DATA when both are', () => {
     expect(call({ STEALTH_DATA_DIR: alias }).summary?.dataDir).toBe(path.resolve(alias));
     expect(call({ CLAUDE_PLUGIN_DATA: pluginData, STEALTH_DATA_DIR: alias }).summary?.dataDir).toBe(
-      path.resolve(pluginData),
+      pluginData,
     );
   });
 

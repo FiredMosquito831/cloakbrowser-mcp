@@ -113,7 +113,10 @@ export function resolveDataRoot(env, fallbackDir, log = () => {}) {
     log(note);
   }
   if (plugin !== '') {
-    return { dir: path.resolve(plugin), source: DATA_ROOT_SOURCES.PLUGIN, note };
+    // The plugin manager's value is already absolute and must stay byte-identical:
+    // the 2.9.x launchers returned the trimmed string verbatim, and path.resolve()
+    // would prefix the CWD on POSIX when a Windows-shaped path is used in tests.
+    return { dir: plugin, source: DATA_ROOT_SOURCES.PLUGIN, note };
   }
   if (aliasDir !== null) {
     return { dir: aliasDir, source: DATA_ROOT_SOURCES.ALIAS, note: null };

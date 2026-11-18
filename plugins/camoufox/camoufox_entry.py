@@ -317,7 +317,9 @@ def plugin_data_dir(env=None) -> str:
         else:
             return os.path.abspath(alias)
     if plugin:
-        return os.path.abspath(plugin)
+        # Already trimmed and absolute: keep it byte-identical, as the launchers
+        # do. Do not normalise it with os.path.abspath().
+        return plugin
     return os.path.join(os.path.expanduser('~'), PLUGIN_DATA_FALLBACK)
 
 
