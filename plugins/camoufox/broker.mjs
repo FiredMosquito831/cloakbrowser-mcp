@@ -59,7 +59,13 @@ import {
   globalPointerReport,
   pointerSource,
   profilePrecedenceReport,
+  readSettingsDocuments,
   resolveHarness,
+  resolveIdentityMode,
+  resolveLayeredSettings,
+  resolveSettingsLevel,
+  settingsDocumentsEnabled,
+  settingsPrecedenceReport,
 } from './lib/settings-precedence.mjs';
 import {
   accountNameError,
@@ -364,6 +370,32 @@ if (engineError === null) {
 const DATA_ROOT = resolveDataRoot(process.env, path.join(homedir(), '.cloakbrowser-mcp-plugin'), log);
 const PLUGIN_DATA_DIR = DATA_ROOT.dir;
 
+// 2.26.0: decide FIRST whether a settings document may be probed. A plugin
+// install (CLAUDE_PLUGIN_DATA, no alias, no explicit opt-in) reads no document
+// at all, with or without files present. Only the derived `settingsEnv` carries
+// document-won values into the existing resolvers and the single spawn path.
+const settingsLevel = resolveSettingsLevel(process.env, log);
+const harness = resolveHarness(process.env, log);
+const documentRead = readSettingsDocuments({
+  env: process.env,
+  dataDir: PLUGIN_DATA_DIR,
+  harnessId: harness.id,
+  settingsLevel: settingsLevel.value,
+  log,
+});
+const documentsEnabled = documentRead.enabled;
+const settingsDocuments = documentRead.documents;
+const settingsResolution = resolveLayeredSettings({
+  env: process.env,
+  documents: settingsDocuments,
+  settingsLevel: settingsLevel.value,
+  dataRootEnabled: documentsEnabled,
+  engine,
+  profiles,
+  log,
+});
+const settingsEnv = settingsResolution.env;
+
 // profile_isolation. "shared" (the default) is the behaviour before the setting
 // existed: one profile per account, shared by every Claude Code session.
 // "workspace" derives one profile per project folder, Playwright-style.
@@ -381,7 +413,7 @@ const PLUGIN_DATA_DIR = DATA_ROOT.dir;
 // An unsubstituted placeholder and an unknown value both mean "shared"; they are
 // logged once and are never fatal.
 const isolationSetting =
-  typeof process.env.STEALTH_PROFILE_ISOLATION === 'string' ? process.env.STEALTH_PROFILE_ISOLATION : '';
+  typeof settingsEnv.STEALTH_PROFILE_ISOLATION === 'string' ? settingsEnv.STEALTH_PROFILE_ISOLATION : '';
 const profileIsolation = resolveProfileIsolation(isolationSetting);
 if (profileIsolation.placeholder !== null) {
   log(`ignoring unsubstituted profile-isolation placeholder: ${profileIsolation.placeholder.trim()}`);
@@ -395,7 +427,7 @@ if (profileIsolation.ignored !== null) {
 // starts with no profile at all. Unset, empty, a placeholder and an unknown value
 // all mean "fallback"; an unknown value is logged once and never fails a start.
 const onLockedSetting =
-  typeof process.env.STEALTH_ON_LOCKED === 'string' ? process.env.STEALTH_ON_LOCKED : '';
+  typeof settingsEnv.STEALTH_ON_LOCKED === 'string' ? settingsEnv.STEALTH_ON_LOCKED : '';
 const onLockedResolution = resolveOnLocked(onLockedSetting);
 if (onLockedResolution.placeholder !== null) {
   log(`ignoring unsubstituted on-locked placeholder: ${onLockedResolution.placeholder.trim()}`);
@@ -411,7 +443,7 @@ const onLocked = onLockedResolution.mode;
 // is the 2.12-2.19 behaviour. An unset, empty, placeholder or unknown value is
 // the default; an unknown value is logged once and never fails a start.
 const profileLifetimeSetting =
-  typeof process.env.STEALTH_PROFILE_LIFETIME === 'string' ? process.env.STEALTH_PROFILE_LIFETIME : '';
+  typeof settingsEnv.STEALTH_PROFILE_LIFETIME === 'string' ? settingsEnv.STEALTH_PROFILE_LIFETIME : '';
 const profileLifetimeResolution = resolveProfileLifetime(profileLifetimeSetting);
 if (profileLifetimeResolution.placeholder !== null) {
   log(`ignoring unsubstituted profile-lifetime placeholder: ${profileLifetimeResolution.placeholder.trim()}`);
@@ -427,7 +459,7 @@ const profileLifetime = profileLifetimeResolution.mode;
 // and says so. The effective tier also depends on the isolation mode (copy-keep
 // may never run on a thin tree), so it is computed below, after copyKeepMode.
 const copyContentsSetting =
-  typeof process.env.STEALTH_COPY_CONTENTS === 'string' ? process.env.STEALTH_COPY_CONTENTS : '';
+  typeof settingsEnv.STEALTH_COPY_CONTENTS === 'string' ? settingsEnv.STEALTH_COPY_CONTENTS : '';
 const copyContentsResolution = resolveCopyContents(copyContentsSetting);
 if (copyContentsResolution.placeholder !== null) {
   log(`ignoring unsubstituted copy-contents placeholder: ${copyContentsResolution.placeholder.trim()}`);
@@ -443,7 +475,7 @@ const copyContentsRequested = copyContentsResolution.mode;
 // setting is declared in the universal plugin only, so the dedicated Camoufox
 // plugin has no key and this resolves to the default there.
 const seatLimitSetting =
-  typeof process.env.STEALTH_SEAT_LIMIT === 'string' ? process.env.STEALTH_SEAT_LIMIT : '';
+  typeof settingsEnv.STEALTH_SEAT_LIMIT === 'string' ? settingsEnv.STEALTH_SEAT_LIMIT : '';
 const seatLimitResolution = resolveSeatLimit(seatLimitSetting);
 if (seatLimitResolution.placeholder !== null) {
   log(`ignoring unsubstituted seat-limit placeholder: ${seatLimitResolution.placeholder.trim()}`);
@@ -548,7 +580,6 @@ const copyContentsIgnoredNote = copyContentsClamped
 // broader default away. The global pointer keeps its historical object in
 // state.profile.pointer; only the three sites that mean the profile actually
 // in use are given the effective one.
-const harness = resolveHarness(process.env, log);
 const globalPointer = profileApplies ? readProfileDefaultPointer(engine.id, PLUGIN_DATA_DIR) : null;
 const harnessPointer =
   harness.id !== null && profileApplies
@@ -2458,29 +2489,10 @@ function releaseSessionForClosedBrowser() {
 // one feeds its engine's venv marker — so the inertness is reported from here and
 // documented in the READMEs.
 const IDENTITY_ENGINE_ID = 'camoufox';
-const IDENTITY_MODE_DEFAULT = 'profile';
-const IDENTITY_MODES = Object.freeze(['profile', 'random']);
 const IDENTITY_FILE_NAME = '.camoufox-identity.json';
 const IDENTITY_CONFIG_ENV_NAMES = ['CAMOUFOX_MCP_CONFIG', 'PLAYWRIGHT_MCP_CONFIG'];
 
-function resolveIdentityMode(value) {
-  const raw = typeof value === 'string' ? value : '';
-  const trimmed = raw.trim();
-  if (trimmed === '' || trimmed.includes('${')) {
-    return {
-      mode: IDENTITY_MODE_DEFAULT,
-      placeholder: trimmed.includes('${') ? trimmed : null,
-      ignored: null,
-    };
-  }
-  const folded = trimmed.toLowerCase();
-  if (IDENTITY_MODES.includes(folded)) {
-    return { mode: folded, placeholder: null, ignored: null };
-  }
-  return { mode: IDENTITY_MODE_DEFAULT, placeholder: null, ignored: trimmed };
-}
-
-const identityModeResolution = resolveIdentityMode(process.env.STEALTH_IDENTITY_MODE);
+const identityModeResolution = resolveIdentityMode(settingsEnv.STEALTH_IDENTITY_MODE);
 if (identityModeResolution.placeholder !== null) {
   log(`ignoring unsubstituted identity-mode placeholder: ${identityModeResolution.placeholder}`);
 }
@@ -2715,7 +2727,7 @@ function identitySentence() {
 }
 
 const runtimeHint = runtimeErrorHint(engine, process.env);
-const profileSelection = resolveToolProfile(process.env.STEALTH_TOOL_PROFILE, engine, profiles);
+const profileSelection = resolveToolProfile(settingsEnv.STEALTH_TOOL_PROFILE, engine, profiles);
 
 // --- server heartbeat timeout (2.14.1) --------------------------------------
 // The camoufox wrapper (camoufox-playwright-mcp 0.1.5) pings its client every
@@ -2727,7 +2739,7 @@ const profileSelection = resolveToolProfile(process.env.STEALTH_TOOL_PROFILE, en
 // this report can never disagree. A value that cannot be used becomes 0 and is
 // reported (the launcher also logs it once). The setting is inert for every
 // other engine — they send no server heartbeat — and they say so.
-const pingTimeoutState = resolvePingTimeout(process.env);
+const pingTimeoutState = resolvePingTimeout(settingsEnv);
 const PING_TIMEOUT_NOT_APPLICABLE_NOTE =
   'Ping timeout: ping_timeout_ms applies only to the camoufox engine; this engine sends no server heartbeat ping, so the setting has no effect.';
 
@@ -2750,7 +2762,10 @@ function pingTimeoutReport() {
   return {
     pingTimeoutApplies: true,
     pingTimeoutMs: pingTimeoutState.ms,
-    pingTimeoutSource: pingTimeoutState.source,
+    pingTimeoutSource:
+      pingTimeoutState.source === 'setting'
+        ? (state.settings.sourceOverrides.ping_timeout_ms ?? pingTimeoutState.source)
+        : pingTimeoutState.source,
     heartbeatEnabled: pingTimeoutState.ms > 0,
     ...(problemNote === null ? {} : { pingTimeoutNote: problemNote }),
   };
@@ -2769,7 +2784,7 @@ function pingTimeoutReport() {
 // hash cheaply. Off (the default) adds no key to any payload, so every engine
 // stays byte-identical; on, the applying engine reports what happened and the
 // engines that cannot apply it say so.
-const passwordManagerResolution = resolvePasswordManager(process.env);
+const passwordManagerResolution = resolvePasswordManager(settingsEnv);
 
 // The profile's Firefox login store: file existence only, never opened. A copy
 // start reports the session copy's store (it is copied with the profile); an
@@ -3131,8 +3146,8 @@ function provisioningReport() {
 const SERVER_CWD = process.cwd();
 const outputDirSetting = (() => {
   const raw =
-    typeof process.env.PLAYWRIGHT_MCP_OUTPUT_DIR === 'string'
-      ? process.env.PLAYWRIGHT_MCP_OUTPUT_DIR.trim()
+    typeof settingsEnv.PLAYWRIGHT_MCP_OUTPUT_DIR === 'string'
+      ? settingsEnv.PLAYWRIGHT_MCP_OUTPUT_DIR.trim()
       : '';
   if (raw === '') {
     return null;
@@ -3303,6 +3318,8 @@ const state = {
   nativeSurfaceError: null,
   toolProfile: profileSelection.profile,
   toolProfileSource: profileSelection.source,
+  // 2.26.0: the derived settings env, report and source overrides.
+  settings: settingsResolution,
   requestedToolProfile: profileSelection.requested,
   disabled: parseDisabledTools(process.env.CLOAK_DISABLED_TOOLS),
   // Profile state. `dir` is set only when the broker resolved an account or a
@@ -4635,7 +4652,10 @@ function profileLifetimeFields() {
   }
   return {
     profileLifetime: state.profile.lifetime,
-    profileLifetimeSource: state.profile.lifetimeSource,
+    profileLifetimeSource:
+      state.profile.lifetimeSource === 'setting'
+        ? (state.settings.sourceOverrides.profile_lifetime ?? state.profile.lifetimeSource)
+        : state.profile.lifetimeSource,
     browserOpen: state.browser.open,
     browserOpenSource: state.browser.source,
   };
@@ -4669,7 +4689,10 @@ function seatFields() {
   }
   return {
     seatLimit: facts.seatLimit,
-    seatLimitSource: facts.seatLimitSource,
+    seatLimitSource:
+      facts.seatLimitSource === 'setting'
+        ? (state.settings.sourceOverrides.seat_limit ?? facts.seatLimitSource)
+        : facts.seatLimitSource,
     seatsInUse: facts.seatsInUse,
     seatFree: facts.seatFree,
     ...(facts.seatScanTruncated ? { seatScanTruncated: true } : {}),
@@ -4686,7 +4709,11 @@ function launcherSettingsFields() {
   if (state.engine === null) {
     return {};
   }
-  const report = launcherSettingsReport(process.env, resolveLauncherName(state.engine));
+  const report = launcherSettingsReport(
+    settingsEnv,
+    resolveLauncherName(state.engine),
+    state.settings.sourceOverrides,
+  );
   return report === null ? {} : { launcherSettings: report };
 }
 
@@ -4702,7 +4729,10 @@ function copyContentsFields() {
   }
   return {
     copyContents: state.profile.copyContents,
-    copyContentsSource: state.profile.copyContentsSource,
+    copyContentsSource:
+      state.profile.copyContentsSource === 'setting'
+        ? (state.settings.sourceOverrides.copy_contents ?? state.profile.copyContentsSource)
+        : state.profile.copyContentsSource,
     ...(state.profile.copyContentsIgnoredNote === null
       ? {}
       : { copyContentsNote: state.profile.copyContentsIgnoredNote }),
@@ -4943,7 +4973,7 @@ function capabilitiesPayload(clientRoots) {
     state.profile.appliesToEngine && state.engine !== null
       ? listHarnessPointers(state.engineId, PLUGIN_DATA_DIR)
       : [];
-  const precedenceVisible = harness.id !== null || harnessPointerFilesNow.length > 0;
+  const precedenceVisible = harness.id !== null || harnessPointerFilesNow.length > 0 || documentsEnabled;
   const nextPointer = harnessPointerNow?.state === 'present' ? harnessPointerNow : pointerNow;
   const perToolSupport = {};
   if (state.toolsListed) {
@@ -5002,7 +5032,10 @@ function capabilitiesPayload(clientRoots) {
       ? (state.nativeSurface?.hiddenByCollision ?? [])
       : [...state.hiddenByCollision],
     requestedToolProfile: state.requestedToolProfile,
-    toolProfileSource: state.toolProfileSource,
+    toolProfileSource:
+      state.toolProfileSource === 'user'
+        ? (state.settings.sourceOverrides.tool_profile ?? state.toolProfileSource)
+        : state.toolProfileSource,
     engineDefaultToolProfile: state.engine?.defaultToolProfile ?? null,
     availableToolProfiles: state.profiles === null ? [] : availableProfileNames(state.profiles),
     portableToolNames: state.profiles === null ? [] : portableToolNames(state.profiles),
@@ -5042,7 +5075,10 @@ function capabilitiesPayload(clientRoots) {
     // when a workspace profile was busy and a numbered sibling was chosen.
     // engineProfileLock appears only for a manifest that declares profileLock.
     profileIsolation: state.profile.isolation,
-    profileIsolationSource: state.profile.isolationSource,
+    profileIsolationSource:
+      state.profile.isolationSource === 'setting'
+        ? (state.settings.sourceOverrides.profile_isolation ?? state.profile.isolationSource)
+        : state.profile.isolationSource,
     profileApplies: state.profile.appliesToEngine,
     // on_locked (2.16.0), additive and only where it can act: an engine whose
     // manifest declares profileApplies false keeps its exact previous payload.
@@ -5165,18 +5201,27 @@ function capabilitiesPayload(clientRoots) {
     ...(!precedenceVisible
       ? {}
       : {
-          precedence: profilePrecedenceReport({
-            harness,
-            session: {
-              profile_dir: state.profile.sessionProfileDir,
-              account: state.profile.sessionAccount,
-            },
-            harnessPointer: harnessPointerNow,
-            globalPointer: pointerNow,
-            pointerLevel: state.profile.pointerLevel,
-            won: state.profile.source,
-          }),
+          precedence: {
+            ...profilePrecedenceReport({
+              harness,
+              session: {
+                profile_dir: state.profile.sessionProfileDir,
+                account: state.profile.sessionAccount,
+              },
+              harnessPointer: harnessPointerNow,
+              globalPointer: pointerNow,
+              pointerLevel: state.profile.pointerLevel,
+              won: state.profile.source,
+            }),
+            ...settingsPrecedenceReport(
+              {},
+              { ...settingsResolution, documents: settingsDocuments, settingsLevel },
+            ),
+          },
         }),
+    ...(!precedenceVisible || settingsResolution.note === null
+      ? {}
+      : { precedenceNote: settingsResolution.note }),
     // 2.24.2: only a start that actually used the alias gains these two keys,
     // with the effective root and its source. A plugin-manager install (or an
     // ignored alias) gains no key, so its payload stays byte-identical.
@@ -5217,7 +5262,7 @@ function statusPayload() {
     state.profile.appliesToEngine && state.engine !== null
       ? listHarnessPointers(state.engineId, PLUGIN_DATA_DIR)
       : [];
-  const precedenceVisible = harness.id !== null || harnessPointerFilesNow.length > 0;
+  const precedenceVisible = harness.id !== null || harnessPointerFilesNow.length > 0 || documentsEnabled;
   return {
     engine: state.engineId,
     label: state.engine?.label ?? null,
@@ -5438,7 +5483,10 @@ function profileStatePayload() {
     profileDir: effective,
     defaultProfileDir: state.profile.defaultDir,
     profileIsolation: state.profile.isolation,
-    profileIsolationSource: state.profile.isolationSource,
+    profileIsolationSource:
+      state.profile.isolationSource === 'setting'
+        ? (state.settings.sourceOverrides.profile_isolation ?? state.profile.isolationSource)
+        : state.profile.isolationSource,
     // 2.25.0: the pointer level that supplied this start's base, and the one
     // silent consequence of a pointer under workspace isolation.
     ...(state.profile.source === 'pointer' ? { profilePointerLevel: state.profile.pointerLevel } : {}),
@@ -5529,7 +5577,7 @@ function respondProfiles(id, args) {
       state.profile.appliesToEngine && state.engine !== null
         ? listHarnessPointers(state.engineId, PLUGIN_DATA_DIR)
         : [];
-    const precedenceVisible = harness.id !== null || harnessPointerFiles.length > 0;
+    const precedenceVisible = harness.id !== null || harnessPointerFiles.length > 0 || documentsEnabled;
     const profiles = availableProfiles(
       pointer === null ? null : pointer.name,
       harnessPointer === null ? null : harnessPointer.name,
@@ -6726,7 +6774,7 @@ function startBackend() {
     // honours it; an explicit output_dir already reaches the engine through the
     // plugin env and is never rewritten, and an engine that ignores output_dir
     // never receives it.
-    env: backendEnvironment(process.env, {
+    env: backendEnvironment(settingsEnv, {
       engineId: state.engineId,
       profileDir: state.profile.dir,
       proxyServer: state.proxy.appliedProxy,
