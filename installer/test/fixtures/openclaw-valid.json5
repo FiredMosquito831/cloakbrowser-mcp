@@ -1,0 +1,11 @@
+{
+  // OpenClaw fixture: single quotes, unquoted keys, trailing commas.
+  mcp: {
+    servers: {
+      other: {
+        command: 'node',
+        args: ['other.mjs',],
+      },
+    },
+  },
+}

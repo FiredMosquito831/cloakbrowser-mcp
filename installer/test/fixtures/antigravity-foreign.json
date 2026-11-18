@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "cloakbrowser": {
+      "command": "node",
+      "args": ["D:/elsewhere/bin/run.mjs", "--harness", "antigravity", "--entry", "cloakbrowser"]
+    }
+  }
+}

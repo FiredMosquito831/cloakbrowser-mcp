@@ -17,6 +17,9 @@ const configOptions = {
     'coverage/**',
     'artifacts/**',
     'plugins/**',
+    // The nested installer package has its own lightweight check (node --check,
+    // prettier and a static zero-write guard); it is outside this TS project.
+    'installer/**',
     // The canonical copies of the plugin runtime assets are byte-identical to
     // the shipped copies under plugins/** (which this config already ignores).
     // Linting them would demand code changes that break that equality contract.

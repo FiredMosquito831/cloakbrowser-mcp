@@ -1,0 +1,11 @@
+{
+  // A foreign entry of the same name.
+  mcp: {
+    servers: {
+      cloakbrowser: {
+        command: 'node',
+        args: ['D:/elsewhere/bin/run.mjs', '--harness', 'openclaw', '--entry', 'cloakbrowser'],
+      },
+    },
+  },
+}

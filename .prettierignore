@@ -3,6 +3,7 @@ coverage
 artifacts
 .playwright-mcp
 node_modules
+installer/test/fixtures/**
 .agents/skills/brag
 .agents/skills/humanizer
 .agents/skills/remotion

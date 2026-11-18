@@ -1,0 +1,6 @@
+{
+  "mcpServers": {
+    "cloakbrowser": { "command": "first" },
+    "cloakbrowser": { "command": "second" }
+  }
+}

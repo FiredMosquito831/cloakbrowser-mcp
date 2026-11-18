@@ -1,0 +1,28 @@
+{
+  "name": "secret-agent-browser-mcps",
+  "version": "1.0.0",
+  "description": "Read-only reporter for the secret-agent-browser MCP installs (Phase 0).",
+  "type": "module",
+  "bin": {
+    "secret-agent-browser-mcps": "src/cli.mjs",
+    "sabm": "src/cli.mjs"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "license": "MIT",
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "check": "node scripts/check.mjs",
+    "test": "node --test test/envelope.test.mjs test/paths.test.mjs test/parsers.test.mjs test/report.test.mjs test/zero-writes.test.mjs"
+  },
+  "dependencies": {
+    "commander": "15.0.0",
+    "json5": "2.2.3",
+    "smol-toml": "1.9.1",
+    "yaml": "2.9.1"
+  }
+}

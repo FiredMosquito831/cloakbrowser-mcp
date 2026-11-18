@@ -1,0 +1,4 @@
+# A same-named entry that belongs to another install.
+[mcp_servers.cloakbrowser]
+command = "node"
+args = ["D:/elsewhere/bin/run.mjs", "--harness", "codex", "--entry", "cloakbrowser"]
