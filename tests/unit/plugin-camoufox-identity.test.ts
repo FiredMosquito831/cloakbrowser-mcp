@@ -141,6 +141,7 @@ function createStubPlugin(root: string): string {
     'ping-timeout.mjs',
     'profile.mjs',
     'provision.mjs',
+    'settings-precedence.mjs',
     'surface.mjs',
     'tool-cache.mjs',
   ]) {
@@ -319,7 +320,7 @@ describe('identity_mode in the shipped manifests', () => {
       expect(setting.description).toContain('.camoufox-identity.json');
       expect(setting.description).toContain('random');
       expect(setting.description).toContain('isolated');
-      expect(plugin.version).toBe('2.24.4');
+      expect(plugin.version).toBe('2.25.0');
     }
     const universal = JSON.parse(
       readFileSync(path.join(universalDir, '.claude-plugin', 'plugin.json'), 'utf8'),

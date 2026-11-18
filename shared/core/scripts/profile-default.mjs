@@ -19,6 +19,7 @@ import { statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { resolveDataRoot } from '../lib/launcher-settings.mjs';
+import { normalizeHarnessId } from '../lib/settings-precedence.mjs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   DEFAULT_ENGINE,
@@ -46,8 +47,9 @@ const USAGE = `Usage: node scripts/profile-default.mjs [--show | --set <name>] [
 Read or set the default-profile pointer: one line in
 <plugin data>/profiles/<engine>/.default naming the profile a broker start uses
 when neither "Profile directory" (profile_dir) nor "Account profile" (account) is
-set. Precedence at start: profile_dir, account, this pointer, the workspace
-profile, the engine default. The change applies at the NEXT server start; it
+set. Precedence at start: profile_dir, account, the harness pointer, the global
+pointer (this pointer by default), the workspace profile, the engine default.
+The change applies at the NEXT server start; it
 never starts, stops or reconfigures a browser.
 
 Options:
@@ -57,6 +59,11 @@ Options:
   --set <name>       Write this profile name to the pointer. "default" means the
                      engine default; any other new name gets its profile
                      directory on the next launch, like an account.
+  --scope <level>    Which pointer --set reads or writes: "global" (the default,
+                     .default) or "harness" (.default.<harness-id>).
+  --harness <id>     Harness id for --scope harness: lowercase letters, digits
+                     and "-", starting with a letter or digit, up to 32 chars.
+                     Required with --scope harness; it is never inferred here.
   --data-dir <path>  Plugin data root (this flag wins; then CLAUDE_PLUGIN_DATA,
                      then STEALTH_DATA_DIR, otherwise ~/${FALLBACK_DATA_DIR_NAME}).
   --dry-run          Validate and report what would be written; write nothing.
@@ -137,8 +144,8 @@ function resolveEngine({ engine, pluginRoot }) {
 
 // The pointer facts, with the directory its name maps to. A broken pointer is
 // reported, never thrown: reading it always succeeds.
-function pointerReport(engineId, dataRoot, launcherName) {
-  const pointer = readProfileDefaultPointer(engineId, dataRoot);
+function pointerReport(engineId, dataRoot, launcherName, harness = null) {
+  const pointer = readProfileDefaultPointer(engineId, dataRoot, { harness });
   const targetDir =
     pointer.name === null ? null : profileDefaultPointerDir(engineId, dataRoot, pointer.name, launcherName);
   return {
@@ -158,6 +165,8 @@ function pointerReport(engineId, dataRoot, launcherName) {
  * @param {object} options Options.
  * @param {string} [options.engine] Engine id; defaults to cloak.
  * @param {string|null} [options.set] Profile name to write, or null to read.
+ * @param {string} [options.scope] Pointer level: "global" (default) or "harness".
+ * @param {string|null} [options.harness] Harness id required by "harness" scope.
  * @param {string|null} [options.dataDir] Plugin data root, or null for the default.
  * @param {boolean} [options.dryRun] Validate and report without writing.
  * @param {object} [options.env] Environment to read CLAUDE_PLUGIN_DATA from.
@@ -168,6 +177,8 @@ function pointerReport(engineId, dataRoot, launcherName) {
 export function runProfileDefault({
   engine = DEFAULT_POINTER_ENGINE,
   set = null,
+  scope = 'global',
+  harness = null,
   dataDir = null,
   dryRun = false,
   env = process.env,
@@ -175,7 +186,7 @@ export function runProfileDefault({
   pluginRoot = PLUGIN_ROOT,
 } = {}) {
   try {
-    const summary = run({ engine, set, dataDir, dryRun, env, home, pluginRoot });
+    const summary = run({ engine, set, scope, harness, dataDir, dryRun, env, home, pluginRoot });
     return { ok: true, summary };
   } catch (error) {
     if (error instanceof ProfileDefaultError) {
@@ -191,14 +202,40 @@ export function runProfileDefault({
   }
 }
 
-function run({ engine, set, dataDir, dryRun, env, home, pluginRoot }) {
+function run({ engine, set, scope, harness, dataDir, dryRun, env, home, pluginRoot }) {
   const resolved = resolveEngine({ engine, pluginRoot });
   const dataRoot = resolveDataDir(dataDir, env, home);
+  if (scope !== 'global' && scope !== 'harness') {
+    throw new ProfileDefaultError('invalid-scope', `--scope must be "global" or "harness", got "${scope}".`);
+  }
+  let harnessId = null;
+  if (scope === 'harness') {
+    if (typeof harness !== 'string' || harness.trim() === '') {
+      throw new ProfileDefaultError(
+        'harness-required',
+        '--scope harness needs --harness <id>: a lowercase harness id.',
+      );
+    }
+    harnessId = normalizeHarnessId(harness);
+    if (harnessId === null) {
+      const value = harness
+        .trim()
+        .replace(/[\u0000-\u001f\u007f]/gu, '?')
+        .slice(0, 60);
+      throw new ProfileDefaultError(
+        'invalid-harness',
+        `--harness: "${value}" is not a valid harness id; use lowercase letters, digits and "-", ` +
+          'starting with a letter or digit, up to 32 characters.',
+      );
+    }
+  }
+  const pointerOptions = harnessId === null ? {} : { harness: harnessId };
   const base = {
     engine: resolved.engineId,
     label: resolved.label,
     dataDir: dataRoot,
     applies: 'next server start',
+    ...(scope === 'harness' ? { scope, harness: harnessId } : {}),
   };
 
   if (set === null) {
@@ -207,7 +244,7 @@ function run({ engine, set, dataDir, dryRun, env, home, pluginRoot }) {
       dryRun: false,
       action: 'show',
       ...base,
-      pointer: pointerReport(resolved.engineId, dataRoot, resolved.launcherName),
+      pointer: pointerReport(resolved.engineId, dataRoot, resolved.launcherName, harnessId),
     };
   }
 
@@ -228,7 +265,7 @@ function run({ engine, set, dataDir, dryRun, env, home, pluginRoot }) {
     return {
       ...summary,
       pointer: {
-        path: readProfileDefaultPointer(resolved.engineId, dataRoot).path,
+        path: readProfileDefaultPointer(resolved.engineId, dataRoot, pointerOptions).path,
         exists: null,
         name,
         state: 'planned',
@@ -238,14 +275,14 @@ function run({ engine, set, dataDir, dryRun, env, home, pluginRoot }) {
       },
     };
   }
-  const written = writeProfileDefaultPointer(resolved.engineId, dataRoot, name);
+  const written = writeProfileDefaultPointer(resolved.engineId, dataRoot, name, pointerOptions);
   if (!written.written) {
     throw new ProfileDefaultError('write-failed', written.error);
   }
   return {
     ...summary,
     written: true,
-    pointer: pointerReport(resolved.engineId, dataRoot, resolved.launcherName),
+    pointer: pointerReport(resolved.engineId, dataRoot, resolved.launcherName, harnessId),
   };
 }
 
@@ -254,6 +291,9 @@ export function formatHumanSummary(summary) {
   const pointer = summary.pointer;
   if (summary.action === 'show') {
     lines.push(`Default-profile pointer for engine "${summary.engine}" (${summary.label ?? 'no label'}).`);
+    if (summary.scope === 'harness') {
+      lines.push(`scope: harness "${summary.harness}"`);
+    }
     lines.push(`pointer: ${pointer.path}`);
     if (!pointer.exists) {
       lines.push('state: missing; no default is configured, so the engine default or the workspace applies.');
@@ -274,6 +314,9 @@ export function formatHumanSummary(summary) {
   }
   const verb = summary.dryRun ? 'Dry run: would write' : 'Wrote';
   lines.push(`${verb} "${summary.name}" as the default profile for engine "${summary.engine}".`);
+  if (summary.scope === 'harness') {
+    lines.push(`scope: harness "${summary.harness}"`);
+  }
   if (summary.dryRun) {
     lines.push(`pointer: ${pointer.path} (nothing was written)`);
   } else {
@@ -296,6 +339,8 @@ export function parseArguments(argv) {
   const options = {
     engine: DEFAULT_POINTER_ENGINE,
     set: null,
+    scope: 'global',
+    harness: null,
     dataDir: null,
     show: false,
     dryRun: false,
@@ -304,7 +349,13 @@ export function parseArguments(argv) {
   };
   const errors = [];
   const seen = new Set();
-  const valueOptions = { '--engine': 'engine', '--set': 'set', '--data-dir': 'dataDir' };
+  const valueOptions = {
+    '--engine': 'engine',
+    '--set': 'set',
+    '--scope': 'scope',
+    '--harness': 'harness',
+    '--data-dir': 'dataDir',
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     const equals = argument.indexOf('=');
@@ -352,6 +403,21 @@ export function parseArguments(argv) {
   if (options.show && seen.has('set')) {
     errors.push('--show and --set cannot be combined.');
   }
+  if (options.scope !== 'global' && options.scope !== 'harness') {
+    errors.push(`--scope must be "global" or "harness", got "${options.scope}".`);
+  }
+  if (options.scope === 'harness' && options.harness === null) {
+    errors.push('--scope harness requires --harness <id>.');
+  }
+  if (options.harness !== null && options.scope !== 'harness') {
+    errors.push('--harness requires --scope harness.');
+  }
+  if (options.harness !== null && normalizeHarnessId(options.harness) === null) {
+    errors.push(
+      `--harness: "${options.harness.replace(/[\u0000-\u001f\u007f]/gu, '?').slice(0, 60)}" is not a ` +
+        'valid harness id; use lowercase letters, digits and "-", starting with a letter or digit, up to 32 characters.',
+    );
+  }
   return { options, errors };
 }
 
@@ -372,6 +438,8 @@ function main(argv) {
   const result = runProfileDefault({
     engine: options.engine,
     set: options.set,
+    scope: options.scope,
+    harness: options.harness,
     dataDir: options.dataDir,
     dryRun: options.dryRun,
     env: process.env,

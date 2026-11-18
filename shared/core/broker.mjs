@@ -56,6 +56,12 @@ import { PING_TIMEOUT_ENGINE_ID, pingTimeoutProblemNote, resolvePingTimeout } fr
 import { readProvisioningRecord } from './lib/provision.mjs';
 import { readToolCache, toolCacheKey, toolCachePath, writeToolCache } from './lib/tool-cache.mjs';
 import {
+  globalPointerReport,
+  pointerSource,
+  profilePrecedenceReport,
+  resolveHarness,
+} from './lib/settings-precedence.mjs';
+import {
   accountNameError,
   accountProxyPath,
   backendEnvironment,
@@ -79,6 +85,7 @@ import {
   isCopyIsolation,
   isPathInsideRoot,
   isolatedIgnoredEntry,
+  listHarnessPointers,
   listPreviousTrees,
   listSessionCopies,
   lockBlocksStart,
@@ -171,7 +178,7 @@ const META_TOOLS = [
   {
     name: 'browser_capabilities',
     description:
-      'Report the selected browser engine, its Playwright MCP contract, the active tool profile, the backend tool count, per-tool support and how to change engines. It also reports the default-profile pointer, the server working directory, the effective artifact directory and the MCP roots the client advertised, which together explain a file-access refusal. This is a local broker tool; it does not start a browser. When another session already uses the browser profile, it also reports the profile directory, the owning process and the fix, plus the on_locked policy: with "fallback" this session runs on a numbered sibling profile, and with "isolated" it runs with no profile, both reported under onLocked and profileFallback.',
+      'Report the selected browser engine, its Playwright MCP contract, the active tool profile, the backend tool count, per-tool support and how to change engines. It also reports the default-profile pointer, which pointer level won, the server working directory, the effective artifact directory and the MCP roots the client advertised, which together explain a file-access refusal. This is a local broker tool; it does not start a browser. When another session already uses the browser profile, it also reports the profile directory, the owning process and the fix, plus the on_locked policy: with "fallback" this session runs on a numbered sibling profile, and with "isolated" it runs with no profile, both reported under onLocked and profileFallback.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
@@ -183,7 +190,7 @@ const META_TOOLS = [
   {
     name: 'browser_profiles',
     description:
-      'List the browser profiles of the selected engine and set the default profile for the next server start. "list" reports the engine, the available profiles (existing directories plus the pointer name), the current profile and its source, the default-profile pointer, the effective profile directory and the profile lock. "set-default" validates a profile name and writes it to the default-profile pointer next to the profiles; the change applies at the next server start, this session keeps its profile, and no browser is started. This is a local broker tool.',
+      'List the browser profiles of the selected engine and set the default profile for the next server start. "list" reports the engine, the available profiles (existing directories plus the pointer name), the current profile and its source, the default-profile pointer, the effective profile directory and the profile lock. "set-default" validates a profile name and writes it to the global pointer next to the profiles, or to the harness pointer when scope is "harness" and a harness id is known; the change applies at the next server start, this session keeps its profile, and no browser is started. This is a local broker tool.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -191,6 +198,13 @@ const META_TOOLS = [
           type: 'string',
           enum: ['list', 'set-default'],
           description: 'What to do: "list" (the default) reports profiles, "set-default" writes the pointer.',
+        },
+        scope: {
+          type: 'string',
+          enum: ['global', 'harness'],
+          description:
+            'Which pointer "set-default" writes: "global" (the default, today\'s .default file) or ' +
+            '"harness" (.default.<STEALTH_HARNESS>, which requires a known harness id).',
         },
         name: {
           type: 'string',
@@ -526,10 +540,34 @@ const copyContentsIgnoredNote = copyContentsClamped
 // it supplies this start's profile. An isolated start never uses it, so a broken
 // pointer is not logged there (it would claim relevance it does not have); the
 // meta-tools still report its state.
-const profilePointer = profileApplies ? readProfileDefaultPointer(engine.id, PLUGIN_DATA_DIR) : null;
-if (profilePointer !== null && profilePointer.error !== null && !isolatedMode) {
-  log(profilePointer.error);
+// 2.25.0: .default is the global level and .default.<harness> is the more
+// specific harness level. Both are the same one-line, validated, atomic file;
+// the broker only reads them. A missing harness pointer is the normal state
+// and is silent. A broken harness pointer is logged once through the existing
+// pointer-error path and falls through to the global pointer, never taking the
+// broader default away. The global pointer keeps its historical object in
+// state.profile.pointer; only the three sites that mean the profile actually
+// in use are given the effective one.
+const harness = resolveHarness(process.env, log);
+const globalPointer = profileApplies ? readProfileDefaultPointer(engine.id, PLUGIN_DATA_DIR) : null;
+const harnessPointer =
+  harness.id !== null && profileApplies
+    ? readProfileDefaultPointer(engine.id, PLUGIN_DATA_DIR, { harness: harness.id })
+    : null;
+for (const pointer of [harnessPointer, globalPointer]) {
+  if (pointer !== null && pointer.error !== null && !isolatedMode) {
+    log(pointer.error);
+  }
 }
+const effectivePointer =
+  harnessPointer?.state === 'present'
+    ? harnessPointer
+    : globalPointer?.state === 'present'
+      ? globalPointer
+      : null;
+const pointerLevel =
+  harnessPointer?.state === 'present' ? 'harness' : globalPointer?.state === 'present' ? 'global' : null;
+const profilePointer = globalPointer;
 
 // One profile per account. Resolution runs once, before the backend starts, and
 // its result feeds both the spawn environment and the meta-tools. With the
@@ -547,7 +585,7 @@ const profileResolutionArgs =
     : {
         account: rawAccount,
         profileDir: process.env.PLAYWRIGHT_MCP_USER_DATA_DIR,
-        pointer: profilePointer === null ? null : profilePointer.name,
+        pointer: effectivePointer === null ? null : effectivePointer.name,
         engineId: engine.id,
         dataDir: PLUGIN_DATA_DIR,
         launcherName: resolveLauncherName(engine),
@@ -567,23 +605,22 @@ let profileResolution =
         error: null,
       }
     : resolveProfile({ ...profileResolutionArgs, isolation: profileIsolation.mode });
-// What an isolated start ignored, in the order the resolution checked it. A
-// pointer file that exists but cannot be used has no name to pass, so the broker
-// adds it here; the report is the same shape either way. It is a function because
-// on_locked=isolated can turn this start into an isolated one during the lock
-// preflight, after the first resolution.
+// What an isolated start ignored, in the order the resolution checked it. The
+// effective (usable) pointer is the one reported, so a broken pointer adds no
+// entry. It is a function because on_locked=isolated can turn this start into
+// an isolated one during the lock preflight, after the first resolution.
 function profileIgnoredForStart() {
   return profileResolution.profileSource === 'isolated'
     ? [
         ...(profileResolution.ignored ?? []),
-        ...(profilePointer !== null && profilePointer.exists === true && profilePointer.name === null
-          ? [isolatedIgnoredEntry(ISOLATED_IGNORED_POINTER, profilePointer.path)]
+        ...(effectivePointer !== null && effectivePointer.exists === true && effectivePointer.name === null
+          ? [isolatedIgnoredEntry(ISOLATED_IGNORED_POINTER, effectivePointer.path)]
           : []),
       ]
     : [];
 }
 if (profileResolution.profileSource === 'pointer') {
-  log(`using the default profile "${profilePointer.name}" from ${profilePointer.path}`);
+  log(`using the default profile "${effectivePointer.name}" from ${effectivePointer.path}`);
 }
 if (rawAccount.trim() !== '' && !rawAccount.includes('${') && profileResolution.accountApplies === false) {
   const ownSetting = engine?.profileArgument?.setting;
@@ -1170,7 +1207,7 @@ function resolveProxy() {
       log(`using the account proxy file for account "${profileResolution.account}"`);
     } else if (profileResolution.profileSource === 'pointer') {
       log(
-        `using the proxy file beside the profile named by the default-profile pointer (${profilePointer.name})`,
+        `using the proxy file beside the profile named by the default-profile pointer (${effectivePointer.name})`,
       );
     } else if (profileResolution.profileSource === 'workspace') {
       log('using the proxy file beside the workspace profile');
@@ -3328,6 +3365,15 @@ const state = {
     // error }, or null for an engine whose profile the broker does not own. It is
     // reported whether or not it supplied this start's profile.
     pointer: profilePointer,
+    // 2.25.0: the level that supplied this start's profile, and the values the
+    // session supplied before the pointer levels were consulted. The meta-tools
+    // report these additively; the pure resolver and its return shape are not
+    // changed.
+    effectivePointer,
+    pointerLevel,
+    sessionProfileDir: profileResolutionArgs === null ? null : (profileResolutionArgs.profileDir ?? null),
+    sessionAccount: rawAccount.trim() === '' ? null : rawAccount.trim(),
+    harness,
   },
   // Browser lifecycle (2.20.0): the engine-lock latch. `open` is null until the
   // first observation; `source` says which signal set it last; the poll timer is
@@ -4883,6 +4929,22 @@ function capabilitiesPayload(clientRoots) {
     state.profile.appliesToEngine && state.engine !== null
       ? readProfileDefaultPointer(state.engineId, PLUGIN_DATA_DIR)
       : null;
+  // Both levels are re-read here so the report describes what the NEXT start
+  // will use after a set-default call, not only what this start read. A harness
+  // pointer that is present wins; a broken one never suppresses the global.
+  const harnessPointerNow =
+    harness.id !== null && state.profile.appliesToEngine && state.engine !== null
+      ? readProfileDefaultPointer(state.engineId, PLUGIN_DATA_DIR, { harness: harness.id })
+      : null;
+  // A harness pointer file can exist before any process knows its id. Discover
+  // those files read-only so precedence is reported without claiming that a
+  // particular pointer was read; the file contents are untouched here.
+  const harnessPointerFilesNow =
+    state.profile.appliesToEngine && state.engine !== null
+      ? listHarnessPointers(state.engineId, PLUGIN_DATA_DIR)
+      : [];
+  const precedenceVisible = harness.id !== null || harnessPointerFilesNow.length > 0;
+  const nextPointer = harnessPointerNow?.state === 'present' ? harnessPointerNow : pointerNow;
   const perToolSupport = {};
   if (state.toolsListed) {
     if (state.native) {
@@ -5091,17 +5153,30 @@ function capabilitiesPayload(clientRoots) {
     // engine whose profile the broker does not own); profileDefaultPath is the file
     // browser_profiles set-default writes. Whether the pointer supplied THIS
     // start's profile is profileSource === "pointer".
-    profileDefault: pointerNow === null ? null : pointerNow.name,
-    profileDefaultSource:
-      pointerNow === null
-        ? null
-        : pointerNow.state === 'present'
-          ? 'pointer'
-          : pointerNow.state === 'missing'
-            ? 'none'
-            : 'invalid',
-    profileDefaultPath: pointerNow === null ? null : pointerNow.path,
-    ...(pointerNow === null || pointerNow.error === null ? {} : { profileDefaultError: pointerNow.error }),
+    profileDefault: nextPointer === null ? null : nextPointer.name,
+    profileDefaultSource: pointerSource(nextPointer),
+    profileDefaultPath: nextPointer === null ? null : nextPointer.path,
+    ...(nextPointer === null || nextPointer.error === null ? {} : { profileDefaultError: nextPointer.error }),
+    // The global pointer is a separate additive view; the four keys above name
+    // the effective (next-start) pointer, which may be the harness level.
+    ...(pointerNow === null ? {} : { profileDefaultGlobal: globalPointerReport(pointerNow) }),
+    ...(state.profile.source === 'pointer' ? { profilePointerLevel: state.profile.pointerLevel } : {}),
+    ...(harness.id === null ? {} : { profileDefaultHarnessPath: harnessPointerNow?.path ?? null }),
+    ...(!precedenceVisible
+      ? {}
+      : {
+          precedence: profilePrecedenceReport({
+            harness,
+            session: {
+              profile_dir: state.profile.sessionProfileDir,
+              account: state.profile.sessionAccount,
+            },
+            harnessPointer: harnessPointerNow,
+            globalPointer: pointerNow,
+            pointerLevel: state.profile.pointerLevel,
+            won: state.profile.source,
+          }),
+        }),
     // 2.24.2: only a start that actually used the alias gains these two keys,
     // with the effective root and its source. A plugin-manager install (or an
     // ignored alias) gains no key, so its payload stays byte-identical.
@@ -5138,6 +5213,11 @@ function statusPayload() {
       : Math.max(0, now - state.spawnedAt);
   const holdNow = holdReport();
   const restartNow = restartReport();
+  const harnessPointerFilesNow =
+    state.profile.appliesToEngine && state.engine !== null
+      ? listHarnessPointers(state.engineId, PLUGIN_DATA_DIR)
+      : [];
+  const precedenceVisible = harness.id !== null || harnessPointerFilesNow.length > 0;
   return {
     engine: state.engineId,
     label: state.engine?.label ?? null,
@@ -5251,6 +5331,11 @@ function statusPayload() {
     // Unpacked extensions (2.18.0), the same additive group browser_capabilities
     // reports, so a status read alone shows whether this start loads them.
     ...extensionReport(),
+    // 2.25.0: the two cheap harness facts only. The liveness tool never reads
+    // a pointer file or a settings document.
+    ...(!precedenceVisible
+      ? {}
+      : { precedence: { harness: { id: harness.id, source: harness.source, error: harness.error } } }),
   };
 }
 
@@ -5323,7 +5408,7 @@ function pointerFacts(pointer) {
 // The profiles that exist for this engine, from the same directory inventory and
 // the same 100-name cap browser_capabilities reports, plus the name the pointer
 // holds (which may not have a directory yet: it is created on its first launch).
-function availableProfiles(pointerName = null) {
+function availableProfiles(pointerName = null, harnessPointerName = null) {
   const inventory = availableAccounts();
   const names = new Set(inventory.names);
   const named =
@@ -5332,8 +5417,10 @@ function availableProfiles(pointerName = null) {
       : state.profile.source === 'pointer' && state.profile.pointer !== null
         ? state.profile.pointer.name
         : null;
-  if (typeof named === 'string' && named !== '') {
-    names.add(named);
+  for (const candidate of [named, harnessPointerName]) {
+    if (typeof candidate === 'string' && candidate !== '') {
+      names.add(candidate);
+    }
   }
   const sorted = [...names].filter((name) => typeof name === 'string').sort();
   return { names: sorted.slice(0, MAX_AVAILABLE_ACCOUNTS), count: sorted.length };
@@ -5352,6 +5439,14 @@ function profileStatePayload() {
     defaultProfileDir: state.profile.defaultDir,
     profileIsolation: state.profile.isolation,
     profileIsolationSource: state.profile.isolationSource,
+    // 2.25.0: the pointer level that supplied this start's base, and the one
+    // silent consequence of a pointer under workspace isolation.
+    ...(state.profile.source === 'pointer' ? { profilePointerLevel: state.profile.pointerLevel } : {}),
+    ...(state.profile.isolation === 'workspace' &&
+    state.profile.pointerLevel !== null &&
+    state.profile.source === 'pointer'
+      ? { workspaceSuppressedBy: state.profile.pointerLevel }
+      : {}),
     // on_locked (2.16.0), additive and only where it can act: the policy that
     // decided what this start did when the profile was in use.
     ...onLockedFields(),
@@ -5426,7 +5521,19 @@ function respondProfiles(id, args) {
       state.profile.appliesToEngine && state.engine !== null
         ? readProfileDefaultPointer(state.engineId, PLUGIN_DATA_DIR)
         : null;
-    const profiles = availableProfiles(pointer === null ? null : pointer.name);
+    const harnessPointer =
+      harness.id !== null && state.profile.appliesToEngine && state.engine !== null
+        ? readProfileDefaultPointer(state.engineId, PLUGIN_DATA_DIR, { harness: harness.id })
+        : null;
+    const harnessPointerFiles =
+      state.profile.appliesToEngine && state.engine !== null
+        ? listHarnessPointers(state.engineId, PLUGIN_DATA_DIR)
+        : [];
+    const precedenceVisible = harness.id !== null || harnessPointerFiles.length > 0;
+    const profiles = availableProfiles(
+      pointer === null ? null : pointer.name,
+      harnessPointer === null ? null : harnessPointer.name,
+    );
     const previousTreesNow = previousTreesReport();
     const lastSwapNow = lastSwapReport();
     sendToolPayload(id, {
@@ -5437,6 +5544,25 @@ function respondProfiles(id, args) {
       availableProfiles: profiles,
       current: profileStatePayload(),
       pointer: pointerFacts(pointer),
+      levels: {
+        global: pointerFacts(pointer),
+        harness: pointerFacts(harnessPointer),
+      },
+      ...(!precedenceVisible
+        ? {}
+        : {
+            precedence: profilePrecedenceReport({
+              harness,
+              session: {
+                profile_dir: state.profile.sessionProfileDir,
+                account: state.profile.sessionAccount,
+              },
+              harnessPointer,
+              globalPointer: pointer,
+              pointerLevel: state.profile.pointerLevel,
+              won: state.profile.source,
+            }),
+          }),
       // A set-default call changes the next start only; this session keeps its
       // profile, so the two are reported separately.
       applies: 'next server start',
@@ -5473,6 +5599,26 @@ function respondProfiles(id, args) {
       );
       return;
     }
+    const rawScope =
+      args !== null && typeof args === 'object' && typeof args.scope === 'string' && args.scope.trim() !== ''
+        ? args.scope.trim().toLowerCase()
+        : 'global';
+    if (rawScope !== 'global' && rawScope !== 'harness') {
+      sendToolError(
+        id,
+        `browser_profiles set-default: scope must be "global" or "harness", got "${rawScope}".`,
+      );
+      return;
+    }
+    if (rawScope === 'harness' && harness.id === null) {
+      sendToolError(
+        id,
+        'browser_profiles set-default with scope "harness" needs a known harness id. Set ' +
+          'STEALTH_HARNESS=<id> in this server entry, or use scope "global".',
+      );
+      return;
+    }
+    const pointerOptions = rawScope === 'harness' ? { harness: harness.id } : {};
     const rawName = args !== null && typeof args === 'object' ? args.name : undefined;
     if (typeof rawName !== 'string' || rawName.trim() === '') {
       sendToolError(id, `browser_profiles set-default requires a profile "name". ${INVALID_ACCOUNT_HINT}`);
@@ -5483,18 +5629,19 @@ function respondProfiles(id, args) {
       sendToolError(id, `browser_profiles set-default: ${accountNameError(rawName)}`);
       return;
     }
-    const written = writeProfileDefaultPointer(state.engineId, PLUGIN_DATA_DIR, name);
+    const written = writeProfileDefaultPointer(state.engineId, PLUGIN_DATA_DIR, name, pointerOptions);
     if (!written.written) {
       sendToolError(id, written.error);
       return;
     }
-    const pointer = readProfileDefaultPointer(state.engineId, PLUGIN_DATA_DIR);
+    const pointer = readProfileDefaultPointer(state.engineId, PLUGIN_DATA_DIR, pointerOptions);
     const facts = pointerFacts(pointer);
     const profiles = availableProfiles(name);
     sendToolPayload(id, {
       action: 'set-default',
       ok: true,
       engine: state.engineId,
+      ...(rawScope === 'harness' ? { scope: rawScope } : {}),
       name,
       pointer: facts,
       availableProfiles: profiles,

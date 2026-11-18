@@ -41,18 +41,24 @@ interface ProfileResolution {
 
 interface ProfileModule {
   PROFILE_DEFAULT_POINTER_FILENAME: string;
-  profileDefaultPointerPath(engineId: string, dataDir: string): string;
+  profileDefaultPointerPath(engineId: string, dataDir: string, options?: { harness?: string | null }): string;
   profileDefaultPointerDir(
     engineId: string,
     dataDir: string,
     name: string,
     launcherName?: string,
   ): string | null;
-  readProfileDefaultPointer(engineId: string, dataDir: string): PointerRead;
+  listHarnessPointers(engineId: string, dataDir: string): { id: string; path: string }[];
+  readProfileDefaultPointer(
+    engineId: string,
+    dataDir: string,
+    options?: { harness?: string | null },
+  ): PointerRead;
   writeProfileDefaultPointer(
     engineId: string,
     dataDir: string,
     name: string,
+    options?: { harness?: string | null },
   ): { path: string; written: boolean; error: string | null };
   resolveProfile(options: {
     account?: string;
@@ -67,12 +73,15 @@ interface ProfileModule {
     cwd?: string;
   }): ProfileResolution;
   effectiveProfileDir(resolution: ProfileResolution): string | null;
+  workspaceProfileDir(engineId: string, dataDir: string, cwd: string): string;
 }
 
 interface CliModule {
   runProfileDefault(options: {
     engine?: string;
     set?: string | null;
+    scope?: string;
+    harness?: string | null;
     dataDir?: string | null;
     dryRun?: boolean;
     env?: Record<string, string | undefined>;
@@ -110,6 +119,8 @@ interface BrokerOptions {
   profileDir?: string;
   engine?: string;
   pluginDir?: string;
+  harness?: string | null;
+  dataDirAlias?: boolean;
 }
 
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
@@ -208,7 +219,9 @@ function createRuntime(dataDir: string): string {
 function startBroker(options: BrokerOptions): BrokerSession {
   const childEnv: Record<string, string | undefined> = {
     ...process.env,
-    CLAUDE_PLUGIN_DATA: options.dataDir,
+    ...(options.dataDirAlias === true
+      ? { STEALTH_DATA_DIR: options.dataDir }
+      : { CLAUDE_PLUGIN_DATA: options.dataDir }),
     CLOAK_PLAYWRIGHT_MCP_PACKAGE: 'cloakbrowser-mcp@1.15.1',
     STEALTH_ENGINE: options.engine ?? 'cloak',
     STEALTH_TOOL_PROFILE: 'full',
@@ -217,9 +230,13 @@ function startBroker(options: BrokerOptions): BrokerSession {
     'STEALTH_ACCOUNT',
     'STEALTH_PROFILE_ISOLATION',
     'STEALTH_ON_LOCKED',
+    'STEALTH_HARNESS',
     'PLAYWRIGHT_MCP_USER_DATA_DIR',
   ]) {
     delete childEnv[name];
+  }
+  if (options.harness !== undefined && options.harness !== null) {
+    childEnv.STEALTH_HARNESS = options.harness;
   }
   if (options.account !== undefined) childEnv.STEALTH_ACCOUNT = options.account;
   if (options.isolation !== undefined) childEnv.STEALTH_PROFILE_ISOLATION = options.isolation;
@@ -328,12 +345,17 @@ async function effectiveEnvironment(
   return JSON.parse(text) as { profileDir: string | null; proxy: string | null };
 }
 
-function pointerFile(dataDir: string, engine = 'cloak'): string {
-  return path.join(dataDir, 'profiles', engine, '.default');
+function pointerFile(dataDir: string, engine = 'cloak', harness: string | null = null): string {
+  return path.join(dataDir, 'profiles', engine, harness === null ? '.default' : `.default.${harness}`);
 }
 
-function writePointer(dataDir: string, text: string, engine = 'cloak'): string {
-  const file = pointerFile(dataDir, engine);
+function writePointer(
+  dataDir: string,
+  text: string,
+  engine = 'cloak',
+  harness: string | null = null,
+): string {
+  const file = pointerFile(dataDir, engine, harness);
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, text);
   return file;
@@ -444,6 +466,24 @@ describe('default-profile pointer file', () => {
       expect(result.error).toContain('Invalid account name');
       expect(existsSync(pointerFile(root))).toBe(false);
     }
+  });
+
+  it('discovers only valid harness pointer files without reading or creating them', () => {
+    const root = tempRoot('pr-default-harness-discover-');
+    expect(profile.listHarnessPointers('cloak', root)).toEqual([]);
+    writePointer(root, 'work\n', 'cloak', 'opencode');
+    writePointer(root, 'alice\n', 'cloak', 'claude-code');
+    writePointer(root, 'bad\n', 'cloak', 'Bad');
+    writePointer(root, 'bad\n', 'cloak', 'a-');
+    writePointer(root, 'bad\n', 'cloak', 'a.b');
+    const directory = pointerFile(root, 'cloak', 'directory');
+    mkdirSync(directory, { recursive: true });
+    expect(profile.listHarnessPointers('cloak', root)).toEqual([
+      { id: 'claude-code', path: pointerFile(root, 'cloak', 'claude-code') },
+      { id: 'opencode', path: pointerFile(root, 'cloak', 'opencode') },
+    ]);
+    expect(readFileSync(pointerFile(root, 'cloak', 'opencode'), 'utf8')).toBe('work\n');
+    expect(existsSync(pointerFile(root))).toBe(false);
   });
 });
 
@@ -993,6 +1033,8 @@ describe('profile-default CLI', () => {
       options: {
         engine: 'cloak',
         set: 'work',
+        scope: 'global',
+        harness: null,
         dataDir: null,
         show: false,
         dryRun: false,
@@ -1041,5 +1083,439 @@ describe('profile-default CLI', () => {
     expect(help.status).toBe(0);
     expect(help.stdout).toContain('CLAUDE_PLUGIN_DATA');
     expect(help.stdout).toContain('cloakbrowser-cloakbrowser-mcp');
+  });
+});
+
+describe('2.25.0 layered pointer precedence', () => {
+  it('round-trips a harness pointer atomically without touching the global file', () => {
+    const root = tempRoot('pr-default-harness-write-');
+    const written = profile.writeProfileDefaultPointer('cloak', root, ' work ', {
+      harness: 'Claude-Code',
+    });
+    const harnessFile = pointerFile(root, 'cloak', 'claude-code');
+    expect(written).toEqual({ path: harnessFile, written: true, error: null });
+    expect(readFileSync(harnessFile, 'utf8')).toBe('work\n');
+    expect(existsSync(`${harnessFile}.${process.pid}.tmp`)).toBe(false);
+    expect(profile.readProfileDefaultPointer('cloak', root)).toMatchObject({ state: 'missing' });
+    expect(profile.readProfileDefaultPointer('cloak', root, { harness: 'claude-code' })).toEqual({
+      path: harnessFile,
+      exists: true,
+      name: 'work',
+      state: 'present',
+      error: null,
+    });
+    const replaced = profile.writeProfileDefaultPointer('cloak', root, 'alice', { harness: 'claude-code' });
+    expect(replaced).toEqual({ path: harnessFile, written: true, error: null });
+    expect(readFileSync(harnessFile, 'utf8')).toBe('alice\n');
+  });
+
+  it('applies every pointer validation case to the harness file and refuses invalid harness ids', () => {
+    const root = tempRoot('pr-default-harness-invalid-');
+    const file = pointerFile(root, 'cloak', 'claude-code');
+    mkdirSync(path.dirname(file), { recursive: true });
+    for (const [text, expected] of [
+      ['', /is empty; it is ignored\.$/],
+      ['../x\n', /does not name a valid profile/],
+      ['CON\n', /does not name a valid profile/],
+      ['alice\nwork\n', /exactly one profile name; it is ignored\.$/],
+    ] as [string, RegExp][]) {
+      writeFileSync(file, text);
+      const read = profile.readProfileDefaultPointer('cloak', root, { harness: 'claude-code' });
+      expect(read.state).toBe('invalid');
+      expect(read.name).toBeNull();
+      expect(read.error).toMatch(expected);
+    }
+    writeFileSync(file, Buffer.from([0xff, 0xfe, 0x00]));
+    expect(profile.readProfileDefaultPointer('cloak', root, { harness: 'claude-code' }).error).toContain(
+      'not valid UTF-8',
+    );
+    rmSync(file);
+    mkdirSync(file);
+    expect(profile.readProfileDefaultPointer('cloak', root, { harness: 'claude-code' }).error).toContain(
+      'not a regular file',
+    );
+    rmSync(file, { recursive: true, force: true });
+
+    const bad = profile.readProfileDefaultPointer('cloak', root, { harness: '../escape' });
+    expect(bad.state).toBe('invalid');
+    expect(bad.error).toContain('harness id');
+    const refused = profile.writeProfileDefaultPointer('cloak', root, 'work', { harness: 'bad/id' });
+    expect(refused.written).toBe(false);
+    expect(refused.error).toContain('harness id');
+    expect(existsSync(pointerFile(root))).toBe(false);
+  });
+
+  it('logs a broken harness pointer once and falls through to the global pointer', async () => {
+    const root = tempRoot('pr-default-harness-broken-');
+    const dataDir = createRuntime(root);
+    writePointer(dataDir, 'global-work\n');
+    writePointer(dataDir, 'alice\nwork\n', 'cloak', 'claude-code');
+    const session = startBroker({ dataDir, harness: 'claude-code' });
+    await initialize(session);
+    const caps = await capabilities(session);
+    expect(caps).toMatchObject({
+      profileSource: 'pointer',
+      profileDir: path.join(dataDir, 'profiles', 'cloak', 'global-work'),
+      profilePointerLevel: 'global',
+      profileDefault: 'global-work',
+      profileDefaultSource: 'pointer',
+      profileDefaultPath: pointerFile(dataDir),
+      profileDefaultHarnessPath: pointerFile(dataDir, 'cloak', 'claude-code'),
+    });
+    const global = caps.profileDefaultGlobal as Record<string, unknown>;
+    expect(global).toMatchObject({ name: 'global-work', source: 'pointer', path: pointerFile(dataDir) });
+    const precedence = caps.precedence as {
+      harness: Record<string, unknown>;
+      profile: Record<string, unknown>;
+    };
+    expect(precedence.harness).toEqual({ id: 'claude-code', source: 'env', error: null });
+    expect(precedence.profile).toMatchObject({
+      won: 'pointer',
+      session: { profile_dir: null, account: null },
+    });
+    expect((precedence.profile.harness as Record<string, unknown>).state).toBe('invalid');
+    expect((precedence.profile.global as Record<string, unknown>).state).toBe('present');
+    expect(session.stderr().split('must contain exactly one profile name').length - 1).toBe(1);
+    expect(await effectiveEnvironment(session)).toEqual({
+      profileDir: path.join(dataDir, 'profiles', 'cloak', 'global-work'),
+      proxy: null,
+    });
+  });
+
+  it('resolves the full ladder with the effective pointer level', async () => {
+    const explicit = 'D:/explicit/../profile';
+    const cases: {
+      label: string;
+      account?: string;
+      profileDir?: string;
+      isolation?: string;
+      harnessPointer?: string;
+      globalPointer?: string;
+      source: string;
+      dir: string | null;
+      level: string | null;
+    }[] = [
+      {
+        label: 'profile-dir',
+        account: 'alice',
+        profileDir: explicit,
+        harnessPointer: 'harness-work',
+        globalPointer: 'global-work',
+        source: 'profile_dir',
+        // The broker passes an explicit profile_dir straight to the launcher,
+        // so its own payload reports profileDir null; the child env is asserted
+        // below instead.
+        dir: null,
+        level: null,
+      },
+      {
+        label: 'account',
+        account: 'alice',
+        harnessPointer: 'harness-work',
+        globalPointer: 'global-work',
+        source: 'account',
+        dir: path.join(DATA_DIR, 'profiles', 'cloak', 'alice'),
+        level: null,
+      },
+      {
+        label: 'harness',
+        harnessPointer: 'harness-work',
+        globalPointer: 'global-work',
+        source: 'pointer',
+        dir: path.join(DATA_DIR, 'profiles', 'cloak', 'harness-work'),
+        level: 'harness',
+      },
+      {
+        label: 'global',
+        globalPointer: 'global-work',
+        source: 'pointer',
+        dir: path.join(DATA_DIR, 'profiles', 'cloak', 'global-work'),
+        level: 'global',
+      },
+      { label: 'default', source: 'default', dir: null, level: null },
+    ];
+    // The directory cannot be DATA_DIR itself: each broker needs its own
+    // runtime. Only the profile names are fixed; the expected path is rebuilt
+    // from the per-case data root.
+    for (const row of cases) {
+      const dataDir = createRuntime(tempRoot(`pr-ladder-${row.label}-`));
+      if (row.harnessPointer !== undefined) {
+        writePointer(dataDir, `${row.harnessPointer}\n`, 'cloak', 'claude-code');
+      }
+      if (row.globalPointer !== undefined) {
+        writePointer(dataDir, `${row.globalPointer}\n`);
+      }
+      const session = startBroker({
+        dataDir,
+        harness: 'claude-code',
+        account: row.account,
+        profileDir: row.profileDir,
+      });
+      await initialize(session);
+      const caps = await capabilities(session);
+      const expectedDir = row.dir === null ? null : row.dir.replace(DATA_DIR, dataDir);
+      const expectedEnvDir =
+        row.source === 'profile_dir' ? explicit : (expectedDir ?? path.join(dataDir, 'profiles', 'default'));
+      expect(caps.profileSource).toBe(row.source);
+      expect(caps.profileDir).toBe(expectedDir);
+      expect(await effectiveEnvironment(session)).toEqual({ profileDir: expectedEnvDir, proxy: null });
+      expect(Object.hasOwn(caps, 'profilePointerLevel')).toBe(row.level !== null);
+      expect(caps.profilePointerLevel ?? null).toBe(row.level);
+      expect(Object.hasOwn(caps, 'precedence')).toBe(true);
+    }
+    const workspaceRoot = tempRoot('pr-ladder-workspace-');
+    const dataDir = createRuntime(workspaceRoot);
+    const session = startBroker({
+      dataDir,
+      harness: 'claude-code',
+      isolation: 'workspace',
+      cwd: workspaceRoot,
+    });
+    await initialize(session);
+    const caps = await capabilities(session);
+    expect(caps.profileSource).toBe('workspace');
+    expect(Object.hasOwn(caps, 'profilePointerLevel')).toBe(false);
+    expect(caps.profileDir).toBe(profile.workspaceProfileDir('cloak', dataDir, workspaceRoot));
+  });
+
+  it('uses the proxy file beside the winning harness profile', async () => {
+    const dataDir = createRuntime(tempRoot('pr-default-harness-proxy-'));
+    writePointer(dataDir, 'global-work\n');
+    writePointer(dataDir, 'harness-work\n', 'cloak', 'claude-code');
+    writeFileSync(
+      path.join(dataDir, 'profiles', 'cloak', 'harness-work.proxy'),
+      'http://harness.example:8080\n',
+    );
+    const session = startBroker({ dataDir, harness: 'claude-code' });
+    await initialize(session);
+    expect(await effectiveEnvironment(session)).toEqual({
+      profileDir: path.join(dataDir, 'profiles', 'cloak', 'harness-work'),
+      proxy: 'http://harness.example:8080',
+    });
+    expect(session.stderr()).toContain('default-profile pointer (harness-work)');
+  });
+
+  it('keeps the child environment and all pre-existing capability keys unchanged', async () => {
+    const dataDir = createRuntime(tempRoot('pr-default-harness-env-'));
+    const explicit = startBroker({ dataDir, harness: 'opencode' });
+    const inferred = startBroker({ dataDir });
+    await initialize(explicit);
+    await initialize(inferred);
+    expect(await effectiveEnvironment(explicit)).toEqual(await effectiveEnvironment(inferred));
+
+    const additive = new Set([
+      'precedence',
+      'profilePointerLevel',
+      'profileDefaultHarnessPath',
+      'profileDefaultGlobal',
+    ]);
+    const first = await capabilities(explicit);
+    const second = await capabilities(inferred);
+    for (const key of Object.keys(first)) {
+      if (additive.has(key)) continue;
+      expect(first[key], `capability "${key}" changed with an explicit harness id`).toEqual(second[key]);
+    }
+    expect((first.precedence as { harness: Record<string, unknown> }).harness.id).toBe('opencode');
+    expect((second.precedence as { harness: Record<string, unknown> }).harness.id).toBe('claude-code');
+
+    // The CLI data-root path has no inference: without STEALTH_HARNESS it gains
+    // no precedence key at all and runs on exactly the same child environment.
+    const aliased = startBroker({ dataDir, dataDirAlias: true });
+    const aliasedExplicit = startBroker({ dataDir, dataDirAlias: true, harness: 'opencode' });
+    await initialize(aliased);
+    await initialize(aliasedExplicit);
+    const aliasCaps = await capabilities(aliased);
+    expect(Object.hasOwn(aliasCaps, 'precedence')).toBe(false);
+    expect(Object.hasOwn(aliasCaps, 'profileDefaultGlobal')).toBe(true);
+    expect(await effectiveEnvironment(aliased)).toEqual(await effectiveEnvironment(aliasedExplicit));
+  });
+
+  it('writes only the selected level with scoped set-default and keeps global response keys', async () => {
+    const dataDir = createRuntime(tempRoot('pr-default-harness-scope-'));
+    const session = startBroker({ dataDir, harness: 'claude-code' });
+    await initialize(session);
+    const globalResponse = await profilesCall(session, { action: 'set-default', name: 'work' });
+    const globalPayload = globalResponse.result?.structuredContent ?? {};
+    expect(Object.keys(globalPayload)).toEqual([
+      'action',
+      'ok',
+      'engine',
+      'name',
+      'pointer',
+      'availableProfiles',
+      'current',
+      'applies',
+      'note',
+      'brokerVersion',
+    ]);
+    expect(readFileSync(pointerFile(dataDir), 'utf8')).toBe('work\n');
+    expect(existsSync(pointerFile(dataDir, 'cloak', 'claude-code'))).toBe(false);
+
+    const harnessResponse = await profilesCall(session, {
+      action: 'set-default',
+      name: 'personal',
+      scope: 'harness',
+    });
+    expect(harnessResponse.result?.isError).not.toBe(true);
+    const harnessPayload = harnessResponse.result?.structuredContent ?? {};
+    expect(harnessPayload.scope).toBe('harness');
+    expect((harnessPayload.pointer as Record<string, unknown>).path).toBe(
+      pointerFile(dataDir, 'cloak', 'claude-code'),
+    );
+    expect(readFileSync(pointerFile(dataDir, 'cloak', 'claude-code'), 'utf8')).toBe('personal\n');
+    expect(readFileSync(pointerFile(dataDir), 'utf8')).toBe('work\n');
+    const capsAfter = await capabilities(session);
+    expect(capsAfter).toMatchObject({
+      profileDefault: 'personal',
+      profileDefaultSource: 'pointer',
+      profileDefaultPath: pointerFile(dataDir, 'cloak', 'claude-code'),
+      profileDefaultGlobal: { name: 'work', source: 'pointer', path: pointerFile(dataDir) },
+    });
+
+    const listed = await profilesPayload(session);
+    const listLevels = listed.levels as { global: Record<string, unknown>; harness: Record<string, unknown> };
+    expect(listLevels.global).toMatchObject({ path: pointerFile(dataDir), name: 'work' });
+    expect(listLevels.harness).toMatchObject({
+      path: pointerFile(dataDir, 'cloak', 'claude-code'),
+      name: 'personal',
+    });
+    expect(listed.pointer).toMatchObject({ path: pointerFile(dataDir), name: 'work' });
+    expect(listed.availableProfiles).toMatchObject({ names: expect.arrayContaining(['personal']) });
+
+    const cliDir = createRuntime(tempRoot('pr-default-harness-cli-scope-'));
+    const scoped = cli.runProfileDefault({
+      engine: 'cloak',
+      dataDir: cliDir,
+      set: 'work',
+      scope: 'harness',
+      harness: 'Claude-Code',
+      env: {},
+      home: cliDir,
+    });
+    expect(scoped.ok).toBe(true);
+    expect(scoped.summary).toMatchObject({ scope: 'harness', harness: 'claude-code' });
+    expect(readFileSync(pointerFile(cliDir, 'cloak', 'claude-code'), 'utf8')).toBe('work\n');
+    expect(existsSync(pointerFile(cliDir))).toBe(false);
+    expect(cli.formatHumanSummary(scoped.summary!)).toContain('scope: harness "claude-code"');
+    const noId = cli.runProfileDefault({
+      engine: 'cloak',
+      dataDir: cliDir,
+      set: 'work',
+      scope: 'harness',
+      env: {},
+      home: cliDir,
+    });
+    expect(noId.ok).toBe(false);
+    expect(noId.error?.code).toBe('harness-required');
+  });
+
+  it('refuses harness scope without a known broker harness id', async () => {
+    const dataDir = createRuntime(tempRoot('pr-default-harness-no-id-'));
+    const session = startBroker({ dataDir, dataDirAlias: true });
+    await initialize(session);
+    const response = await profilesCall(session, {
+      action: 'set-default',
+      name: 'work',
+      scope: 'harness',
+    });
+    expect(response.result?.isError).toBe(true);
+    expect(String(response.result?.content?.[0]?.text)).toContain('STEALTH_HARNESS');
+    expect(existsSync(pointerFile(dataDir))).toBe(false);
+  });
+
+  it('parses scoped CLI flags, refuses bad combinations and exits correctly', () => {
+    expect(cli.parseArguments([])).toEqual({
+      options: {
+        engine: 'cloak',
+        set: null,
+        scope: 'global',
+        harness: null,
+        dataDir: null,
+        show: false,
+        dryRun: false,
+        json: false,
+        help: false,
+      },
+      errors: [],
+    });
+    expect(cli.parseArguments(['--scope', 'harness']).errors).toContain(
+      '--scope harness requires --harness <id>.',
+    );
+    expect(cli.parseArguments(['--harness', 'claude-code']).errors).toContain(
+      '--harness requires --scope harness.',
+    );
+    expect(cli.parseArguments(['--scope', 'harness', '--harness', '../x']).errors.join(' ')).toContain(
+      'not a valid harness id',
+    );
+    expect(cli.parseArguments(['--scope', 'global']).errors).toEqual([]);
+
+    const root = tempRoot('pr-default-harness-script-');
+    const dataDir = path.join(root, 'data');
+    const script = path.join(pluginDir, 'scripts', 'profile-default.mjs');
+    const ok = spawnSync(
+      process.execPath,
+      [
+        script,
+        '--set',
+        'work',
+        '--scope',
+        'harness',
+        '--harness',
+        'Claude-Code',
+        '--json',
+        '--data-dir',
+        dataDir,
+      ],
+      { encoding: 'utf8', windowsHide: true },
+    );
+    expect(ok.status).toBe(0);
+    expect(readFileSync(pointerFile(dataDir, 'cloak', 'claude-code'), 'utf8')).toBe('work\n');
+    const missing = spawnSync(
+      process.execPath,
+      [script, '--set', 'work', '--scope', 'harness', '--data-dir', dataDir],
+      { encoding: 'utf8', windowsHide: true },
+    );
+    expect(missing.status).toBe(2);
+    expect(missing.stderr).toContain('--scope harness requires --harness');
+  });
+
+  it('emits precedence for a discovered harness pointer with no harness id', async () => {
+    const dataDir = createRuntime(tempRoot('pr-default-harness-discovered-'));
+    writePointer(dataDir, 'work\n', 'cloak', 'opencode');
+    const session = startBroker({ dataDir, dataDirAlias: true });
+    await initialize(session);
+    const caps = await capabilities(session);
+    expect(caps).toMatchObject({
+      profileSource: 'default',
+      profileDir: null,
+      profileDefaultSource: 'none',
+    });
+    const precedence = caps.precedence as {
+      harness: Record<string, unknown>;
+      profile: { harness: Record<string, unknown> };
+    };
+    expect(precedence.harness).toEqual({ id: null, source: 'unset', error: null });
+    expect(precedence.profile.harness).toEqual({
+      path: null,
+      state: 'not-applicable',
+      name: null,
+      error: null,
+    });
+    const statusResponse = await session.request('tools/call', {
+      name: 'browser_engine_status',
+      arguments: {},
+    });
+    expect(statusResponse.result?.structuredContent).toMatchObject({
+      precedence: { harness: { id: null, source: 'unset', error: null } },
+    });
+    const listed = await profilesPayload(session);
+    expect(listed.levels).toMatchObject({
+      global: { path: pointerFile(dataDir) },
+      harness: null,
+    });
+    expect(await effectiveEnvironment(session)).toEqual({
+      profileDir: path.join(dataDir, 'profiles', 'default'),
+      proxy: null,
+    });
   });
 });

@@ -115,6 +115,7 @@ interface BrokerOptions {
   account?: string;
   profileDir?: string;
   engine?: string;
+  harness?: string | null;
   profileLifetime?: string;
   copyContents?: string;
 }
@@ -219,6 +220,7 @@ function startBroker(options: BrokerOptions): BrokerSession {
     'STEALTH_ACCOUNT',
     'STEALTH_PROFILE_ISOLATION',
     'STEALTH_ON_LOCKED',
+    'STEALTH_HARNESS',
     'STEALTH_PROFILE_LIFETIME',
     'STEALTH_COPY_CONTENTS',
     'PLAYWRIGHT_MCP_USER_DATA_DIR',
@@ -233,6 +235,7 @@ function startBroker(options: BrokerOptions): BrokerSession {
   if (options.profileLifetime !== undefined) childEnv.STEALTH_PROFILE_LIFETIME = options.profileLifetime;
   if (options.copyContents !== undefined) childEnv.STEALTH_COPY_CONTENTS = options.copyContents;
   if (options.profileDir !== undefined) childEnv.PLAYWRIGHT_MCP_USER_DATA_DIR = options.profileDir;
+  if (options.harness !== undefined && options.harness !== null) childEnv.STEALTH_HARNESS = options.harness;
   const child = spawn(process.execPath, [brokerPath], {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: childEnv,
@@ -440,7 +443,7 @@ describe('session as a profile_isolation value', () => {
       expect(setting.description).toContain('seat limit');
       expect(setting.description).toContain('not applicable');
       expect(setting.description.toLowerCase()).not.toContain('in memory');
-      expect(manifest.version).toBe('2.24.4');
+      expect(manifest.version).toBe('2.25.0');
     }
     expect(profile.PROFILE_ISOLATION_VALUES).toEqual([
       'shared',
@@ -951,5 +954,87 @@ describe('engine-lock fallback report (2.24.0)', () => {
     } finally {
       await holder.stop();
     }
+  });
+});
+
+describe('2.25.0 harness profiles with session isolation', () => {
+  function writePointer(
+    dataDir: string,
+    name: string,
+    engine = 'cloak',
+    harness: string | null = null,
+  ): void {
+    const dir = path.join(dataDir, 'profiles', engine);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, harness === null ? '.default' : `.default.${harness}`), `${name}\n`);
+  }
+
+  it('copies one global base twice, independently, for two harnesses', async () => {
+    const dataDir = createRuntime(tempRoot('session-harness-shared-'));
+    const base = seedBaseProfile(dataDir, 'playwright', 'work');
+    writePointer(dataDir, 'work', 'playwright');
+    const baseHash = hashTree(base);
+    await warmToolCache(dataDir);
+
+    const first = startBroker({
+      dataDir,
+      isolation: 'session',
+      harness: 'claude-code',
+      engine: 'playwright',
+    });
+    const second = startBroker({ dataDir, isolation: 'session', harness: 'opencode', engine: 'playwright' });
+    await initialize(first);
+    await initialize(second);
+    const firstCaps = await capabilities(first);
+    const secondCaps = await capabilities(second);
+    expect(firstCaps.profileSource).toBe('pointer');
+    expect(firstCaps.profilePointerLevel).toBe('global');
+    expect(secondCaps.profilePointerLevel).toBe('global');
+    expect((firstCaps.precedence as { harness: Record<string, unknown> }).harness).toMatchObject({
+      id: 'claude-code',
+    });
+    expect((secondCaps.precedence as { harness: Record<string, unknown> }).harness).toMatchObject({
+      id: 'opencode',
+    });
+    expect((firstCaps.profileDefaultGlobal as Record<string, unknown>).name).toBe('work');
+    expect((secondCaps.profileDefaultGlobal as Record<string, unknown>).name).toBe('work');
+
+    const firstEnv = await effectiveEnvironment(first);
+    const secondEnv = await effectiveEnvironment(second);
+    const copies = sessionCopies(dataDir, 'playwright');
+    expect(copies).toHaveLength(2);
+    expect(copies).toContain(firstEnv.profileDir);
+    expect(copies).toContain(secondEnv.profileDir);
+    expect(firstEnv.profileDir).not.toBe(secondEnv.profileDir);
+    expect(hashTree(base)).toBe(baseHash);
+  });
+
+  it('copies a different base when each harness names its own pointer', async () => {
+    const dataDir = createRuntime(tempRoot('session-harness-distinct-'));
+    const firstBase = seedBaseProfile(dataDir, 'cloak', 'playwright/alpha');
+    const secondBase = seedBaseProfile(dataDir, 'cloak', 'playwright/beta');
+    writePointer(dataDir, 'alpha', 'playwright', 'claude-code');
+    writePointer(dataDir, 'beta', 'playwright', 'opencode');
+    await warmToolCache(dataDir);
+
+    const first = startBroker({
+      dataDir,
+      isolation: 'session',
+      harness: 'claude-code',
+      engine: 'playwright',
+    });
+    const second = startBroker({ dataDir, isolation: 'session', harness: 'opencode', engine: 'playwright' });
+    await initialize(first);
+    await initialize(second);
+    await effectiveEnvironment(first);
+    await effectiveEnvironment(second);
+    const firstCaps = await capabilities(first);
+    const secondCaps = await capabilities(second);
+    expect(firstCaps.profilePointerLevel).toBe('harness');
+    expect(secondCaps.profilePointerLevel).toBe('harness');
+    expect((firstCaps.profileCopy as Record<string, unknown>).baseDir).toBe(firstBase);
+    expect((secondCaps.profileCopy as Record<string, unknown>).baseDir).toBe(secondBase);
+    const copies = sessionCopies(dataDir, 'playwright');
+    expect(copies).toHaveLength(2);
   });
 });

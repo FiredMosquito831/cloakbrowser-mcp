@@ -51,6 +51,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
+import { normalizeHarnessId } from './settings-precedence.mjs';
 
 export const ACCOUNT_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 export const ACCOUNT_NAME_MAX = 64;
@@ -146,6 +147,7 @@ export const ACCOUNT_PROXY_SUFFIX = '.proxy';
 // directories. It is a file, never a directory, so it can never be mistaken for
 // a profile of its own.
 export const PROFILE_DEFAULT_POINTER_FILENAME = '.default';
+const HARNESS_POINTER_PREFIX = `${PROFILE_DEFAULT_POINTER_FILENAME}.`;
 // Windows reserves these device names in every directory, any case and with any
 // extension ("CON", "con.txt"). Joining one as a directory name would create a
 // device path instead of a profile.
@@ -246,9 +248,54 @@ export function accountProfileDir(engineId, account, dataDir) {
 // never created there: a missing pointer is the normal "no default configured"
 // state, and a broken one is reported and ignored rather than made fatal.
 
-// The pointer file for one engine: <plugin data>/profiles/<engine>/.default.
-export function profileDefaultPointerPath(engineId, dataDir) {
-  return path.join(path.resolve(dataDir), 'profiles', engineId, PROFILE_DEFAULT_POINTER_FILENAME);
+// The pointer file for one engine: <plugin data>/profiles/<engine>/.default, or
+// <plugin data>/profiles/<engine>/.default.<harness> for a harness level. The
+// harness id is normalized by the shared rule before any join; an unusable id
+// is ignored here (no raw value ever reaches a path) and the read/write helpers
+// refuse it explicitly below. With no harness the path is byte-identical.
+export function profileDefaultPointerPath(engineId, dataDir, { harness = null } = {}) {
+  const id = normalizeHarnessId(harness);
+  const filename =
+    id === null ? PROFILE_DEFAULT_POINTER_FILENAME : `${PROFILE_DEFAULT_POINTER_FILENAME}.${id}`;
+  return path.join(path.resolve(dataDir), 'profiles', engineId, filename);
+}
+
+function harnessOptionError(harness) {
+  return (
+    `The harness id ${quotedValue(harness)} is not valid; use lowercase letters, digits and "-", ` +
+    'starting with a letter or digit, up to 32 characters.'
+  );
+}
+
+// Read-only discovery of harness pointer files. A harness pointer can exist
+// before any process knows its harness id (a CLI-set file, or a config written
+// by another harness), so the broker needs to know that the level is in use
+// without claiming it read a particular file. Only regular files whose suffix
+// is already a valid harness id are returned; the global .default and malformed
+// names are ignored. Nothing is created, read or changed here.
+export function listHarnessPointers(engineId, dataDir) {
+  const directory = path.join(path.resolve(dataDir), 'profiles', engineId);
+  let entries;
+  try {
+    entries = readdirSync(directory, { withFileTypes: true });
+  } catch {
+    // A missing directory is the normal "no harness pointer" state; an
+    // unreadable one cannot tell us which levels exist, so it is also empty.
+    return [];
+  }
+  const found = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.startsWith(HARNESS_POINTER_PREFIX)) {
+      continue;
+    }
+    const suffix = entry.name.slice(HARNESS_POINTER_PREFIX.length);
+    const id = normalizeHarnessId(suffix);
+    if (id === null || id !== suffix) {
+      continue;
+    }
+    found.push({ id, path: path.join(directory, entry.name) });
+  }
+  return found.sort((left, right) => left.id.localeCompare(right.id));
 }
 
 // The profile directory a pointer name maps to: "default" is the engine default
@@ -277,9 +324,12 @@ function invalidPointer(pointerPath, error) {
 // A missing file is not an error. A file that is not a regular file, cannot be
 // read, is not valid UTF-8, holds no name, holds more than one line, or holds a
 // name the account rule rejects is invalid.
-export function readProfileDefaultPointer(engineId, dataDir) {
-  const pointerPath = profileDefaultPointerPath(engineId, dataDir);
+export function readProfileDefaultPointer(engineId, dataDir, { harness = null } = {}) {
+  const pointerPath = profileDefaultPointerPath(engineId, dataDir, { harness });
   const base = { path: pointerPath, exists: false, name: null, state: 'missing', error: null };
+  if (harness !== null && normalizeHarnessId(harness) === null) {
+    return invalidPointer(pointerPath, harnessOptionError(harness));
+  }
   let bytes;
   try {
     if (!statSync(pointerPath).isFile()) {
@@ -334,14 +384,17 @@ export function readProfileDefaultPointer(engineId, dataDir) {
 // file, then a rename over the pointer. A failed write removes only its own
 // temporary file and leaves any existing pointer in place. Returns
 // { path, written, error }: error is null on success.
-export function writeProfileDefaultPointer(engineId, dataDir, name) {
+export function writeProfileDefaultPointer(engineId, dataDir, name, { harness = null } = {}) {
   const trimmed = typeof name === 'string' ? name.trim() : '';
-  const pointerPath = profileDefaultPointerPath(engineId, dataDir);
+  const pointerPath = profileDefaultPointerPath(engineId, dataDir, { harness });
+  if (harness !== null && normalizeHarnessId(harness) === null) {
+    return { path: pointerPath, written: false, error: harnessOptionError(harness) };
+  }
   if (!validateAccountName(trimmed)) {
     return { path: pointerPath, written: false, error: accountNameError(name) };
   }
   const directory = path.dirname(pointerPath);
-  const temporary = path.join(directory, `${PROFILE_DEFAULT_POINTER_FILENAME}.${process.pid}.tmp`);
+  const temporary = path.join(directory, `${path.basename(pointerPath)}.${process.pid}.tmp`);
   try {
     mkdirSync(directory, { recursive: true });
     writeFileSync(temporary, `${trimmed}\n`, 'utf8');

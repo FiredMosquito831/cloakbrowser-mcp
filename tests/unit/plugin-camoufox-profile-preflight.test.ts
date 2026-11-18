@@ -217,6 +217,11 @@ const CAPABILITIES_KEYS_295 = [
   'profileDefault',
   'profileDefaultSource',
   'profileDefaultPath',
+  // 2.25.0 adds the effective/global pointer views and the profile precedence
+  // block on the inferred Claude Code plugin path.
+  'profileDefaultGlobal',
+  'profileDefaultHarnessPath',
+  'precedence',
 ];
 
 const STATUS_KEYS_293 = [
@@ -262,6 +267,9 @@ const STATUS_KEYS_293 = [
   'profileLock',
   ...IDENTITY_KEYS_2140,
   ...PING_TIMEOUT_KEYS_2141,
+  // 2.25.0: the inferred harness id is the only precedence fact a liveness
+  // read reports.
+  'precedence',
 ];
 
 // 2.11.1 declares the Chromium lockfile for cloak and playwright, so those two
@@ -865,6 +873,7 @@ function createLockPlugin(root: string): string {
     'ping-timeout.mjs',
     'profile.mjs',
     'provision.mjs',
+    'settings-precedence.mjs',
     'surface.mjs',
     'tool-cache.mjs',
   ]) {

@@ -1,7 +1,7 @@
 {
   "name": "cloakbrowser",
   "displayName": "CloakBrowser",
-  "version": "2.24.4",
+  "version": "2.25.0",
   "description": "CloakBrowser stealth Chromium through the Playwright MCP tool contract, via cloakbrowser-mcp. Adapted from swimmwatch/cloakbrowser-mcp (MIT); this repository adds a complete, proper stealth implementation for agentic harnesses and tasks. Its camoufox engine runs through a plugin-owned overlay that restores the stock search engines (Google by default).",
   "author": {
     "name": "FiredMosquito831"

@@ -93,7 +93,7 @@ The documentation in [`docs/`](docs/) documents the upstream bridge this collect
 
 See [Version Compatibility](docs/version-compatibility.md) for the maintained compatibility table.
 
-Both plugins are at version **2.24.4** and move in lockstep. The pins are unchanged: bridge `cloakbrowser-mcp@1.15.1` on Patchright `1.64.1` with engine wrapper `cloakbrowser@0.6.3`; Camoufox wrapper `camoufox-playwright-mcp==0.1.5` with `fastmcp==3.4.7` and `mcp==1.29.0`; managed `uv` `0.13.5`, CPython `3.13.17`, browser build `v156.0.1-beta.39`; native PyPI wrapper `mcp-camoufox==0.4.5`.
+Both plugins are at version **2.25.0** and move in lockstep. The pins are unchanged: bridge `cloakbrowser-mcp@1.15.1` on Patchright `1.64.1` with engine wrapper `cloakbrowser@0.6.3`; Camoufox wrapper `camoufox-playwright-mcp==0.1.5` with `fastmcp==3.4.7` and `mcp==1.29.0`; managed `uv` `0.13.5`, CPython `3.13.17`, browser build `v156.0.1-beta.39`; native PyPI wrapper `mcp-camoufox==0.4.5`.
 
 ## Credits and licence
 

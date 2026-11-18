@@ -539,6 +539,11 @@ describe('browser_capabilities artifact diagnostics', () => {
       'profileDefault',
       'profileDefaultSource',
       'profileDefaultPath',
+      // 2.25.0 adds the effective/global pointer views and the profile
+      // precedence block on the inferred Claude Code plugin path.
+      'profileDefaultGlobal',
+      'profileDefaultHarnessPath',
+      'precedence',
     ];
     const expectedKeys = [...Object.keys(fixture)];
     // 2.21.0 adds the launcher-side settings right after ignoredSettings.

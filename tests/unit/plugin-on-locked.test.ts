@@ -370,6 +370,7 @@ function createScratchPlugin(root: string): string {
     'ping-timeout.mjs',
     'profile.mjs',
     'provision.mjs',
+    'settings-precedence.mjs',
     'surface.mjs',
     'tool-cache.mjs',
   ]) {
