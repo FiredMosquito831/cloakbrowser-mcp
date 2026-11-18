@@ -18,6 +18,7 @@
 import { statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { resolveDataRoot } from '../lib/launcher-settings.mjs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   DEFAULT_ENGINE,
@@ -56,8 +57,8 @@ Options:
   --set <name>       Write this profile name to the pointer. "default" means the
                      engine default; any other new name gets its profile
                      directory on the next launch, like an account.
-  --data-dir <path>  Plugin data root (default: CLAUDE_PLUGIN_DATA, otherwise
-                     ~/${FALLBACK_DATA_DIR_NAME}).
+  --data-dir <path>  Plugin data root (this flag wins; then CLAUDE_PLUGIN_DATA,
+                     then STEALTH_DATA_DIR, otherwise ~/${FALLBACK_DATA_DIR_NAME}).
   --dry-run          Validate and report what would be written; write nothing.
   --json             Print one machine-readable JSON object.
   --help             Show this help and exit 0.
@@ -95,10 +96,9 @@ function resolveDataDir(explicit, env, home) {
   if (nonEmptyString(explicit)) {
     return path.resolve(explicit.trim());
   }
-  if (nonEmptyString(env?.CLAUDE_PLUGIN_DATA)) {
-    return path.resolve(env.CLAUDE_PLUGIN_DATA.trim());
-  }
-  return path.join(home, FALLBACK_DATA_DIR_NAME);
+  return resolveDataRoot(env, path.join(home, FALLBACK_DATA_DIR_NAME), (message) =>
+    process.stderr.write(`${message}\n`),
+  ).dir;
 }
 
 function isDirectory(candidate) {

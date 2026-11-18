@@ -31,6 +31,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { resolveDataRoot } from '../lib/launcher-settings.mjs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   DEFAULT_ENGINE,
@@ -131,8 +132,8 @@ Options:
                      this option is absent.
   --prune            List and remove leftover session copies; takes no --from or
                      --to.
-  --data-dir <path>  Plugin data root (default: CLAUDE_PLUGIN_DATA, otherwise
-                     ~/${FALLBACK_DATA_DIR_NAME}).
+  --data-dir <path>  Plugin data root (this flag wins; then CLAUDE_PLUGIN_DATA,
+                     then STEALTH_DATA_DIR, otherwise ~/${FALLBACK_DATA_DIR_NAME}).
   --dry-run          List what would be copied or pruned; change nothing.
   --json             Print one machine-readable JSON summary object.
   --help             Show this help and exit 0.
@@ -155,10 +156,9 @@ function resolveDataDir(explicit, env, home) {
   if (nonEmptyString(explicit)) {
     return path.resolve(explicit.trim());
   }
-  if (nonEmptyString(env?.CLAUDE_PLUGIN_DATA)) {
-    return path.resolve(env.CLAUDE_PLUGIN_DATA.trim());
-  }
-  return path.join(home, FALLBACK_DATA_DIR_NAME);
+  return resolveDataRoot(env, path.join(home, FALLBACK_DATA_DIR_NAME), (message) =>
+    process.stderr.write(`${message}\n`),
+  ).dir;
 }
 
 function humanBytes(bytes) {

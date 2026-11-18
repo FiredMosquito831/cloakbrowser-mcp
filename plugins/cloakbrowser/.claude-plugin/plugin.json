@@ -1,7 +1,7 @@
 {
   "name": "cloakbrowser",
   "displayName": "CloakBrowser",
-  "version": "2.24.1",
+  "version": "2.24.2",
   "description": "CloakBrowser stealth Chromium through the Playwright MCP tool contract, via cloakbrowser-mcp. Its camoufox engine runs through a plugin-owned overlay that restores the stock search engines (Google by default).",
   "author": {
     "name": "FiredMosquito831"

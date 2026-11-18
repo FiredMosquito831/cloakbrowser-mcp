@@ -52,6 +52,9 @@ USER_DATA_ENV = 'PLAYWRIGHT_MCP_USER_DATA_DIR'
 ISOLATED_ENV = 'PLAYWRIGHT_MCP_ISOLATED'
 BUILD_ENV = 'CAMOUFOX_BROWSER_BUILD'
 PLUGIN_DATA_ENV = 'CLAUDE_PLUGIN_DATA'
+# The alias for installs without a plugin manager. CLAUDE_PLUGIN_DATA wins when
+# both are set, so a host-level alias cannot move a working plugin install.
+ALIAS_DATA_ENV = 'STEALTH_DATA_DIR'
 CONFIG_ENV_NAMES = ('CAMOUFOX_MCP_CONFIG', 'PLAYWRIGHT_MCP_CONFIG')
 PLUGIN_DATA_FALLBACK = '.camoufox-mcp-plugin'
 CONFIG_DIR_PARTS = ('config', 'camoufox')
@@ -279,10 +282,44 @@ def ensure_identity(path, os_name, build, generate=None, log=_log):
 
 
 def plugin_data_dir(env=None) -> str:
+    """Resolve the one data root, with the same rule as the JS launchers.
+
+    CLAUDE_PLUGIN_DATA wins over STEALTH_DATA_DIR so an alias exported by a host
+    shell cannot move a plugin-managed install. An unusable alias is ignored
+    with exactly one log line; no directory is created here.
+    """
     source = os.environ if env is None else env
-    value = source.get(PLUGIN_DATA_ENV)
-    if isinstance(value, str) and value.strip() != '':
-        return value.strip()
+    plugin = source.get(PLUGIN_DATA_ENV)
+    plugin = plugin.strip() if isinstance(plugin, str) else ''
+    has_alias = ALIAS_DATA_ENV in source and source.get(ALIAS_DATA_ENV) is not None
+    alias = source.get(ALIAS_DATA_ENV)
+    alias = alias.strip() if isinstance(alias, str) else ''
+    if has_alias:
+        if plugin:
+            _log(
+                'STEALTH_DATA_DIR is ignored because CLAUDE_PLUGIN_DATA is set; '
+                'the plugin manager data root is kept, so a host-level alias '
+                'cannot move this install.'
+            )
+        elif alias == '':
+            _log('STEALTH_DATA_DIR is empty; the built-in fallback data root is kept.')
+        elif (
+            '${' in alias
+            or not os.path.isabs(alias)
+            or '\x00' in alias
+            or '\n' in alias
+            or '\r' in alias
+        ):
+            _log(
+                f'STEALTH_DATA_DIR: ignoring unusable value {alias!r}; a data root '
+                'must be an absolute path with no placeholder or control characters.'
+            )
+        else:
+            return os.path.abspath(alias)
+    if plugin:
+        # Already trimmed and absolute: keep it byte-identical, as the launchers
+        # do. Do not normalise it with os.path.abspath().
+        return plugin
     return os.path.join(os.path.expanduser('~'), PLUGIN_DATA_FALLBACK)
 
 

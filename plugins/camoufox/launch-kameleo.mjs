@@ -22,7 +22,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { buildEndpoint, validateEndpointSetting } from './lib/attach.mjs';
-import { applyLauncherSettings } from './lib/launcher-settings.mjs';
+import { applyLauncherSettings, resolveDataRoot } from './lib/launcher-settings.mjs';
 import { ensureNpmRuntime, resolveNpmPackage, writeRuntimeLease } from './lib/provision.mjs';
 
 const LOG_PREFIX = '[kameleo]';
@@ -89,9 +89,7 @@ function fail(message) {
 }
 
 function pluginDataDir(env) {
-  return env.CLAUDE_PLUGIN_DATA !== undefined && env.CLAUDE_PLUGIN_DATA.trim() !== ''
-    ? env.CLAUDE_PLUGIN_DATA.trim()
-    : path.join(homedir(), '.cloakbrowser-mcp-plugin');
+  return resolveDataRoot(env, path.join(homedir(), '.cloakbrowser-mcp-plugin'), log).dir;
 }
 
 function runtimeDir(env) {

@@ -20,7 +20,7 @@ import { existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { applyLauncherSettings } from './lib/launcher-settings.mjs';
+import { applyLauncherSettings, resolveDataRoot } from './lib/launcher-settings.mjs';
 import {
   ensurePython,
   ensureUv,
@@ -110,9 +110,7 @@ export function displaylessLinuxProblem(env, platform = process.platform) {
 }
 
 function pluginDataDir(env) {
-  return env.CLAUDE_PLUGIN_DATA !== undefined && env.CLAUDE_PLUGIN_DATA.trim() !== ''
-    ? env.CLAUDE_PLUGIN_DATA.trim()
-    : path.join(homedir(), '.camoufox-native-mcp-plugin');
+  return resolveDataRoot(env, path.join(homedir(), '.camoufox-native-mcp-plugin'), log).dir;
 }
 
 function resolveOverride(env, name, fallback) {
