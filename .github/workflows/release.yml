@@ -1,5 +1,6 @@
 name: Release
 
+# Publishing jobs are owner-guarded so this fork cannot publish upstream's npm, Docker, docs or MCP registry identity; upstream keeps its identity when it runs.
 on:
   release:
     types: [published]
@@ -88,6 +89,7 @@ jobs:
           fi
 
   npm:
+    if: github.repository_owner == 'swimmwatch'
     runs-on: ubuntu-latest
     needs:
       - metadata
@@ -161,6 +163,7 @@ jobs:
         run: npm publish "${{ steps.pack.outputs.package_file }}" --access public --tag "${{ needs.metadata.outputs.npm_dist_tag }}"
 
   docker:
+    if: github.repository_owner == 'swimmwatch'
     runs-on: ubuntu-latest
     needs:
       - metadata
@@ -272,6 +275,7 @@ jobs:
           short-description: CloakBrowser-backed Playwright MCP browser automation for AI agents
 
   docs-build:
+    if: github.repository_owner == 'swimmwatch'
     runs-on: ubuntu-latest
     needs: metadata
     timeout-minutes: 20
@@ -332,6 +336,7 @@ jobs:
           path: site/
 
   docs-deploy:
+    if: github.repository_owner == 'swimmwatch'
     runs-on: ubuntu-latest
     needs:
       - docs-build
@@ -366,6 +371,7 @@ jobs:
         run: node scripts/submit-indexnow.mjs
 
   mcp-registry:
+    if: github.repository_owner == 'swimmwatch'
     runs-on: ubuntu-latest
     needs:
       - metadata

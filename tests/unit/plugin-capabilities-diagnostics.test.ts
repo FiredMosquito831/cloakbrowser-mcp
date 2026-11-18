@@ -51,7 +51,7 @@ const ROOTS = [
   { uri: 'file:///C:/Users/example' },
 ];
 // The root id the broker sends; the client echoes it in its answer.
-const PROBE_ID = 'cloakbrowser-broker-roots';
+const PROBE_ID = 'secret-agent-browser-mcps-broker-roots';
 const fixture = JSON.parse(
   readFileSync(path.join(repoRoot, 'tests', 'fixtures', 'capabilities-2.9.4.json'), 'utf8'),
 ) as Record<string, unknown>;

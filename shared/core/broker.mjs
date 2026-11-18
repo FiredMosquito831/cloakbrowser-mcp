@@ -152,7 +152,7 @@ const ENGINES_DIR = path.join(PLUGIN_ROOT, 'engines');
 const PROFILES_FILE = path.join(ENGINES_DIR, 'profiles.json');
 const PLUGIN_MANIFEST = path.join(PLUGIN_ROOT, '.claude-plugin', 'plugin.json');
 const SHUTDOWN_GRACE_MS = 300;
-const LOG_PREFIX = '[cloakbrowser-broker]';
+const LOG_PREFIX = '[secret-agent-browser-mcps-broker]';
 
 // Appended to a rejected initialize when the backend serves the 2026-07-28
 // protocol era (the Camoufox wrapper stack before plugin 2.9.2, where every
@@ -4138,7 +4138,7 @@ function sendToolPayload(id, payload) {
 // capability is not asked at all (MCP: a server does not request an undeclared
 // capability), so that call answers immediately with the reason.
 const ROOTS_PROBE_TIMEOUT_MS = 2000;
-const ROOTS_PROBE_ID = 'cloakbrowser-broker-roots';
+const ROOTS_PROBE_ID = 'secret-agent-browser-mcps-broker-roots';
 
 const clientRootsProbe = {
   state: 'idle', // idle | pending | done
@@ -5647,8 +5647,8 @@ function synthesizeInitialize(id, reason, options = {}) {
     protocolVersion: state.requestedProtocolVersion ?? '2025-06-18',
     capabilities: { tools: {} },
     serverInfo: {
-      name: 'cloakbrowser-broker',
-      title: 'CloakBrowser broker',
+      name: 'secret-agent-browser-mcps-broker',
+      title: 'Secret Agent Browser MCPs broker',
       version: BROKER_VERSION,
     },
     instructions,
@@ -6138,7 +6138,7 @@ function handleClientRequest(message, rawLine) {
     if (typeof name === 'string' && state.disabled.has(name)) {
       sendToolError(
         id,
-        `Tool "${name}" is disabled by the cloakbrowser plugin. Remove it from the "disabled_tools" setting and restart Claude Code to use it.`,
+        `Tool "${name}" is disabled by the secret-agent-browser-mcps collection. Remove it from the "disabled_tools" setting and restart Claude Code to use it.`,
       );
       return;
     }
