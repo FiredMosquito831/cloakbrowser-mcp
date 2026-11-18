@@ -206,7 +206,7 @@ export function insertJsonProperty(
   const last = properties.at(-1);
   // Match the parent's trailing-comma style. With a pre-existing trailing
   // comma, our property ends with one too, so removal is unambiguous.
-  const trailing = format === 'jsonc' && last?.commaAfter !== null ? ',' : '';
+  const trailing = format === 'jsonc' && last && last.commaAfter !== null ? ',' : '';
   // Insert AFTER an existing trailing comma, not before it: the comma belongs
   // to the previous property and must stay with it for add/remove byte equality.
   const at = last ? (last.commaAfter === null ? last.valueEnd : last.commaAfter + 1) : objectSpan.innerStart;
@@ -272,6 +272,13 @@ export function removeJsonProperty(text, objectSpan, key, format = 'json') {
   const index = properties.indexOf(property);
   const previous = properties[index - 1];
   const candidates = [];
+  if (!previous) {
+    // The first property's leading EOL + indent were inserted by us.
+    candidates.push({
+      start: objectSpan.innerStart,
+      end: property.commaAfter !== null ? property.commaAfter + 1 : property.valueEnd,
+    });
+  }
   if (property.commaAfter !== null) {
     // A pre-existing trailing comma means our inserted property also carries
     // one; its leading newline + indent are part of our span too.

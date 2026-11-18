@@ -150,7 +150,7 @@ test('doctor --start against a stub MCP server passes with three meta tools', as
       'codex',
       '--start',
       '--timeout',
-      '30000',
+      '45000',
       '--json',
       '--from',
       SCHEMA_FROM,

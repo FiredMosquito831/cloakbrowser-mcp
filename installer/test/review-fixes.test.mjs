@@ -220,3 +220,43 @@ test('atomic write failure never leaves a temp file behind', async () => {
     true,
   );
 });
+
+test('empty JSONC parent object: add -> remove restores exact bytes', async () => {
+  const tree = await makeTree('opencode', 'user');
+  const original = '{"mcp":{"servers":{}}}';
+  await writeFile(tree.target.path, original);
+  const installed = await invoke(
+    ['install', 'opencode', '--from', SCHEMA_FROM, '--data-root', tree.dataRoot, '--json'],
+    tree,
+  );
+  assert.equal(installed.code, 0, installed.out);
+  const added = await readFile(tree.target.path, 'utf8');
+  assert.match(added, /"cloakbrowser"/);
+  assert.doesNotMatch(added, /\{\s*,/, 'no trailing comma after an empty object');
+  const removed = await invoke(
+    ['uninstall', 'opencode', '--from', SCHEMA_FROM, '--data-root', tree.dataRoot, '--json'],
+    tree,
+  );
+  assert.equal(removed.code, 0, removed.out);
+  assert.equal(await readFile(tree.target.path, 'utf8'), original);
+});
+
+test('empty and BOM-only config files restore their original bytes', async () => {
+  for (const original of ['', '﻿']) {
+    const tree = await makeTree('antigravity', 'user');
+    await writeFile(tree.target.path, original, 'utf8');
+    const installed = await invoke(
+      ['install', 'antigravity', '--from', SCHEMA_FROM, '--data-root', tree.dataRoot, '--json'],
+      tree,
+    );
+    assert.equal(installed.code, 0, installed.out);
+    const added = await readFile(tree.target.path, 'utf8');
+    assert.match(added, /"cloakbrowser"/);
+    const removed = await invoke(
+      ['uninstall', 'antigravity', '--from', SCHEMA_FROM, '--data-root', tree.dataRoot, '--json'],
+      tree,
+    );
+    assert.equal(removed.code, 0, removed.out);
+    assert.equal(await readFile(tree.target.path, 'utf8'), original);
+  }
+});
