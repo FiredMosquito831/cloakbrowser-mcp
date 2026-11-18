@@ -53,7 +53,7 @@ interface BrokerSession {
 
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 const pluginDir = path.join(repoRoot, 'plugins', 'cloakbrowser');
-const PROBE_ID = 'cloakbrowser-broker-roots';
+const PROBE_ID = 'secret-agent-browser-mcps-broker-roots';
 
 const STUB_SOURCE = `#!/usr/bin/env node
 const { appendFileSync, writeFileSync } = require('node:fs');

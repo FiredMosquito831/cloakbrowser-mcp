@@ -307,7 +307,7 @@ describe('first-start handshake: cold', () => {
     expect(elapsed).toBeLessThan(1500);
     // The broker answered, not the stub: its own server identity and the
     // first-start sentence, which is neither the hold sentence nor "unavailable".
-    expect(initialized.result?.serverInfo?.name).toBe('cloakbrowser-broker');
+    expect(initialized.result?.serverInfo?.name).toBe('secret-agent-browser-mcps-broker');
     const instructions = initialized.result?.instructions ?? '';
     expect(instructions).toContain('starting for the first time on this machine');
     expect(instructions).toContain('the full tool list appears automatically when the engine is ready');
