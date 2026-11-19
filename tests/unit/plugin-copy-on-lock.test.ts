@@ -496,7 +496,7 @@ describe('identity tier planning', () => {
     expect(plan.identity).toBeUndefined();
   });
 
-  it('scans live engine locks in the profiles it manages', () => {
+  it.skipIf(process.platform !== 'win32')('scans live engine locks in the profiles it manages', () => {
     const dataDir = tempRoot('seat-scan-');
     const descriptor = { file: 'parent.lock', owner: 'pid' };
     const live = path.join(dataDir, 'profiles', 'camoufox', 'default');
@@ -683,144 +683,154 @@ describe('broker on_locked=copy', () => {
   // The close-tool instant path and the copy release are covered on every
   // platform by the two tests above (`browser_close` -> discarded, base lock
   // free), so this case adds the latch itself.
-  it('latches the engine lock and releases the copy when the browser closes', async (t) => {
-    const root = tempRoot('browser-latch-');
-    const dataDir = createRuntime(root);
-    const base = path.join(dataDir, 'profiles', 'default');
-    seedBase(base);
-    const session = startBroker({ dataDir, isolation: 'copy', lifetime: 'browser' });
-    await initialize(session);
-    await callTool(session, 'browser_navigate', { url: 'data:text/html,x' });
-    const caps = await capabilities(session);
-    const sessionDir = String((caps.profileCopy as Record<string, unknown>).sessionDir);
-    // The stub wrote the engine lock, but nothing holds it, so the probe reads it
-    // stale and the latch stays closed.
-    expect((await profilesCurrent(session)).browserOpen).toBeNull();
+  it.skipIf(process.platform !== 'win32')(
+    'latches the engine lock and releases the copy when the browser closes',
+    async (t) => {
+      const root = tempRoot('browser-latch-');
+      const dataDir = createRuntime(root);
+      const base = path.join(dataDir, 'profiles', 'default');
+      seedBase(base);
+      const session = startBroker({ dataDir, isolation: 'copy', lifetime: 'browser' });
+      await initialize(session);
+      await callTool(session, 'browser_navigate', { url: 'data:text/html,x' });
+      const caps = await capabilities(session);
+      const sessionDir = String((caps.profileCopy as Record<string, unknown>).sessionDir);
+      // The stub wrote the engine lock, but nothing holds it, so the probe reads it
+      // stale and the latch stays closed.
+      expect((await profilesCurrent(session)).browserOpen).toBeNull();
 
-    // Hold the copied profile's engine lock, so the next probe reads it live and
-    // the latch opens.
-    const holder = await holdEngineLock(t, {
-      file: path.join(sessionDir, 'lockfile'),
-      profileDir: sessionDir,
-      descriptor: manifestProfileLock('cloak'),
-    });
-    try {
-      await callTool(session, 'browser_navigate', { url: 'data:text/html,y' });
-      const open = await profilesCurrent(session);
-      expect(open.browserOpen).toBe(true);
-      expect(open.browserOpenSource).toBe('engine-lock');
-    } finally {
-      await holder.stop();
-      // The browser removes its lock file on exit.
-      rmSync(path.join(sessionDir, 'lockfile'), { force: true });
-    }
-    // The browser is gone: the poll notices within a second and the copy is
-    // deleted while the broker keeps running. Wait on that condition instead of
-    // sleeping once: the broker's poll is 1 s and its six bounded removal
-    // attempts can block for ~3.8 s, so the ceiling must exceed both.
-    await vi.waitFor(() => expect(existsSync(sessionDir)).toBe(false), { timeout: 10_000, interval: 100 });
-    const closed = await profilesCurrent(session);
-    expect(closed.browserOpen).toBe(false);
-    expect(closed.browserOpenSource).toBe('engine-lock');
-    expect(existsSync(sessionDir)).toBe(false);
-    expect(profile.readProfileLock(base)).toMatchObject({ state: 'free' });
-  }, 30_000);
+      // Hold the copied profile's engine lock, so the next probe reads it live and
+      // the latch opens.
+      const holder = await holdEngineLock(t, {
+        file: path.join(sessionDir, 'lockfile'),
+        profileDir: sessionDir,
+        descriptor: manifestProfileLock('cloak'),
+      });
+      try {
+        await callTool(session, 'browser_navigate', { url: 'data:text/html,y' });
+        const open = await profilesCurrent(session);
+        expect(open.browserOpen).toBe(true);
+        expect(open.browserOpenSource).toBe('engine-lock');
+      } finally {
+        await holder.stop();
+        // The browser removes its lock file on exit.
+        rmSync(path.join(sessionDir, 'lockfile'), { force: true });
+      }
+      // The browser is gone: the poll notices within a second and the copy is
+      // deleted while the broker keeps running. Wait on that condition instead of
+      // sleeping once: the broker's poll is 1 s and its six bounded removal
+      // attempts can block for ~3.8 s, so the ceiling must exceed both.
+      await vi.waitFor(() => expect(existsSync(sessionDir)).toBe(false), { timeout: 10_000, interval: 100 });
+      const closed = await profilesCurrent(session);
+      expect(closed.browserOpen).toBe(false);
+      expect(closed.browserOpenSource).toBe('engine-lock');
+      expect(existsSync(sessionDir)).toBe(false);
+      expect(profile.readProfileLock(base)).toMatchObject({ state: 'free' });
+    },
+    30_000,
+  );
 });
 
 describe('broker seat gate and the copy modes', () => {
-  it('re-checks the seat when the copy is actually taken, and holds instead (2.21.0)', async () => {
-    // The preflight sees a free seat and plans the copy; the copy itself is taken
-    // at the first browser action. Another session can open its browser in that
-    // window, so the seat is read AGAIN before anything is copied: a lazy copy
-    // must never start a second CloakBrowser.
-    const root = tempRoot('seat-recheck-');
-    const dataDir = createRuntime(root, 'cloak');
-    const base = path.join(dataDir, 'profiles', 'default');
-    seedBase(base);
-    const plugin = createSeatPlugin(root);
-    // A warm cache: the copy stays deferred, so the take happens on a tool call.
-    const warm = startBroker({ dataDir, engine: 'cloak', pluginDir: plugin });
-    await initialize(warm);
-    await warm.request('tools/list', {});
-    await warm.close();
-    expect(existsSync(path.join(dataDir, 'cache', 'cloak'))).toBe(true);
+  it.skipIf(process.platform !== 'win32')(
+    're-checks the seat when the copy is actually taken, and holds instead (2.21.0)',
+    async () => {
+      // The preflight sees a free seat and plans the copy; the copy itself is taken
+      // at the first browser action. Another session can open its browser in that
+      // window, so the seat is read AGAIN before anything is copied: a lazy copy
+      // must never start a second CloakBrowser.
+      const root = tempRoot('seat-recheck-');
+      const dataDir = createRuntime(root, 'cloak');
+      const base = path.join(dataDir, 'profiles', 'default');
+      seedBase(base);
+      const plugin = createSeatPlugin(root);
+      // A warm cache: the copy stays deferred, so the take happens on a tool call.
+      const warm = startBroker({ dataDir, engine: 'cloak', pluginDir: plugin });
+      await initialize(warm);
+      await warm.request('tools/list', {});
+      await warm.close();
+      expect(existsSync(path.join(dataDir, 'cache', 'cloak'))).toBe(true);
 
-    writeJson(path.join(base, '.cloakbrowser-mcp-profile.lock'), {
-      pid: process.pid,
-      createdAt: '2026-10-28T09:00:00.000Z',
-      userDataDir: base,
-    });
-    const session = startBroker({
-      dataDir,
-      engine: 'cloak',
-      pluginDir: plugin,
-      onLocked: 'copy',
-      lifetime: 'browser',
-    });
-    await initialize(session);
-    // The cache answers tools/list; nothing is copied while the seat is free.
-    expect(await toolNames(session)).toEqual([...STUB_TOOLS, ...META_TOOLS]);
-    expect((await capabilities(session)).profileCopy).toBeUndefined();
-    expect(existsSync(path.join(dataDir, 'profiles', 'cloak', '.sessions'))).toBe(false);
+      writeJson(path.join(base, '.cloakbrowser-mcp-profile.lock'), {
+        pid: process.pid,
+        createdAt: '2026-10-28T09:00:00.000Z',
+        userDataDir: base,
+      });
+      const session = startBroker({
+        dataDir,
+        engine: 'cloak',
+        pluginDir: plugin,
+        onLocked: 'copy',
+        lifetime: 'browser',
+      });
+      await initialize(session);
+      // The cache answers tools/list; nothing is copied while the seat is free.
+      expect(await toolNames(session)).toEqual([...STUB_TOOLS, ...META_TOOLS]);
+      expect((await capabilities(session)).profileCopy).toBeUndefined();
+      expect(existsSync(path.join(dataDir, 'profiles', 'cloak', '.sessions'))).toBe(false);
 
-    // The other session opens its browser: the one seat is taken now.
-    const seatDir = path.join(dataDir, 'profiles', 'cloak', 'default-2');
-    mkdirSync(seatDir, { recursive: true });
-    writeFileSync(
-      path.join(seatDir, 'parent.lock'),
-      `${process.pid}
+      // The other session opens its browser: the one seat is taken now.
+      const seatDir = path.join(dataDir, 'profiles', 'cloak', 'default-2');
+      mkdirSync(seatDir, { recursive: true });
+      writeFileSync(
+        path.join(seatDir, 'parent.lock'),
+        `${process.pid}
 `,
-    );
+      );
 
-    const call = await callTool(session, 'browser_navigate', { url: 'data:text/html,x' });
-    expect(call.result?.isError).toBe(true);
-    const caps = await capabilities(session);
-    expect(caps.hold).toMatchObject({ state: 'waiting', seat: { seatFree: false } });
-    expect(caps.profileCopy).toBeUndefined();
-    // Nothing was copied and no second browser was started.
-    expect(existsSync(path.join(dataDir, 'profiles', 'cloak', '.sessions'))).toBe(false);
-    expect(session.stderr()).toContain('seat limit for this licence is reached');
-  });
+      const call = await callTool(session, 'browser_navigate', { url: 'data:text/html,x' });
+      expect(call.result?.isError).toBe(true);
+      const caps = await capabilities(session);
+      expect(caps.hold).toMatchObject({ state: 'waiting', seat: { seatFree: false } });
+      expect(caps.profileCopy).toBeUndefined();
+      // Nothing was copied and no second browser was started.
+      expect(existsSync(path.join(dataDir, 'profiles', 'cloak', '.sessions'))).toBe(false);
+      expect(session.stderr()).toContain('seat limit for this licence is reached');
+    },
+  );
 
-  it('holds instead of copying when the only seat is taken, and copies when it frees', async () => {
-    const root = tempRoot('seat-gate-');
-    const dataDir = createRuntime(root, 'cloak');
-    const base = path.join(dataDir, 'profiles', 'default');
-    seedBase(base);
-    writeJson(path.join(base, '.cloakbrowser-mcp-profile.lock'), {
-      pid: process.pid,
-      createdAt: '2026-10-28T09:00:00.000Z',
-      userDataDir: base,
-    });
-    // One live engine lock in a sibling profile occupies the single seat. The
-    // cloak manifest's descriptor is exclusive-open-write, so the probe opens the
-    // file for writing; a plain file reads as stale, and a lock naming a live pid
-    // is what the `pid` rule would read — so the seat scan is exercised with a
-    // scratch manifest that declares the pid rule for the same engine id.
-    const plugin = createSeatPlugin(root);
-    const seatDir = path.join(dataDir, 'profiles', 'cloak', 'default-2');
-    mkdirSync(seatDir, { recursive: true });
-    writeFileSync(path.join(seatDir, 'parent.lock'), `${process.pid}\n`);
-    const session = startBroker({
-      dataDir,
-      engine: 'cloak',
-      pluginDir: plugin,
-      onLocked: 'copy',
-      lifetime: 'server',
-    });
-    await initialize(session);
-    const caps = await capabilities(session);
-    expect(caps.seatLimit).toBe(1);
-    expect(caps.seatLimitSource).toBe('manifest');
-    expect(caps.seatsInUse).toBe(1);
-    expect(caps.seatFree).toBe(false);
-    expect(caps.profileCopy).toBeUndefined();
-    expect(caps.hold).toMatchObject({
-      state: 'waiting',
-      seat: { seatLimit: 1, seatsInUse: 1, seatFree: false },
-    });
-    expect(existsSync(path.join(dataDir, 'profiles', 'cloak', '.sessions'))).toBe(false);
-  });
+  it.skipIf(process.platform !== 'win32')(
+    'holds instead of copying when the only seat is taken, and copies when it frees',
+    async () => {
+      const root = tempRoot('seat-gate-');
+      const dataDir = createRuntime(root, 'cloak');
+      const base = path.join(dataDir, 'profiles', 'default');
+      seedBase(base);
+      writeJson(path.join(base, '.cloakbrowser-mcp-profile.lock'), {
+        pid: process.pid,
+        createdAt: '2026-10-28T09:00:00.000Z',
+        userDataDir: base,
+      });
+      // One live engine lock in a sibling profile occupies the single seat. The
+      // cloak manifest's descriptor is exclusive-open-write, so the probe opens the
+      // file for writing; a plain file reads as stale, and a lock naming a live pid
+      // is what the `pid` rule would read — so the seat scan is exercised with a
+      // scratch manifest that declares the pid rule for the same engine id.
+      const plugin = createSeatPlugin(root);
+      const seatDir = path.join(dataDir, 'profiles', 'cloak', 'default-2');
+      mkdirSync(seatDir, { recursive: true });
+      writeFileSync(path.join(seatDir, 'parent.lock'), `${process.pid}\n`);
+      const session = startBroker({
+        dataDir,
+        engine: 'cloak',
+        pluginDir: plugin,
+        onLocked: 'copy',
+        lifetime: 'server',
+      });
+      await initialize(session);
+      const caps = await capabilities(session);
+      expect(caps.seatLimit).toBe(1);
+      expect(caps.seatLimitSource).toBe('manifest');
+      expect(caps.seatsInUse).toBe(1);
+      expect(caps.seatFree).toBe(false);
+      expect(caps.profileCopy).toBeUndefined();
+      expect(caps.hold).toMatchObject({
+        state: 'waiting',
+        seat: { seatLimit: 1, seatsInUse: 1, seatFree: false },
+      });
+      expect(existsSync(path.join(dataDir, 'profiles', 'cloak', '.sessions'))).toBe(false);
+    },
+  );
 
   it('lets seat_limit=unlimited copy while another profile holds a live lock', async () => {
     const root = tempRoot('seat-unlimited-');

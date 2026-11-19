@@ -41,11 +41,33 @@ const faults = vi.hoisted(() => ({
   unreadableCode: '',
   unopenablePath: '',
   unopenableCode: '',
+  forbiddenPath: '',
+  forbiddenCalls: 0,
 }));
+
+// The POSIX Windows-name decision must precede stat/read/open. When a test sets
+// `forbiddenPath`, any such probe throws EIO and increments the count; an honest
+// early return still yields the exact binding reason with count 0.
+const POSIX_WINDOWS_LOCK_REASON =
+  'This lock file cannot be interpreted on this platform, so the engine lock is unknown; ' +
+  'the browser will decide whether the profile is in use.';
 
 vi.mock('node:fs', async (importOriginal) => {
   const original = await importOriginal<typeof import('node:fs')>();
+  const forbid = (file: string): void => {
+    if (faults.forbiddenPath !== '' && String(file) === faults.forbiddenPath) {
+      faults.forbiddenCalls += 1;
+      const error = new Error('Injected filesystem probe before the POSIX decision');
+      Object.assign(error, { code: 'EIO' });
+      throw error;
+    }
+  };
+  const statSync = (file: string): ReturnType<typeof original.statSync> => {
+    forbid(file);
+    return original.statSync(file);
+  };
   const readFileSync = (file: string, options: BufferEncoding): string => {
+    forbid(file);
     if (faults.unreadablePath !== '' && String(file) === faults.unreadablePath) {
       const error = new Error(`Injected ${faults.unreadableCode}`);
       Object.assign(error, { code: faults.unreadableCode });
@@ -54,6 +76,7 @@ vi.mock('node:fs', async (importOriginal) => {
     return original.readFileSync(file, options);
   };
   const openSync = (file: string, flags: string) => {
+    forbid(file);
     if (faults.unopenablePath !== '' && String(file) === faults.unopenablePath) {
       const error = new Error(`Injected ${faults.unopenableCode}`);
       Object.assign(error, { code: faults.unopenableCode });
@@ -61,7 +84,7 @@ vi.mock('node:fs', async (importOriginal) => {
     }
     return original.openSync(file, flags);
   };
-  return { ...original, readFileSync, openSync };
+  return { ...original, readFileSync, openSync, statSync };
 });
 
 interface EngineLock {
@@ -79,6 +102,7 @@ interface ProfileModule {
   readEngineProfileLock(
     profileDir: string,
     descriptor: { file?: string; owner?: string } | null | undefined,
+    platform?: string,
   ): EngineLock;
   engineLockBlocksStart(lock: EngineLock): boolean;
   engineProfileLockFix(lock: EngineLock): string | null;
@@ -352,6 +376,8 @@ afterEach(async () => {
   faults.unreadableCode = '';
   faults.unopenablePath = '';
   faults.unopenableCode = '';
+  faults.forbiddenPath = '';
+  faults.forbiddenCalls = 0;
   for (const session of sessions.splice(0)) {
     await session.close();
   }
@@ -395,7 +421,10 @@ function injectedOpenCode(lockPath: string, code: string): void {
   faults.unopenableCode = code;
 }
 
-describe('engine lock reading (exclusive-open)', () => {
+// These injected/host-default cases exercise Windows-only lock names. On POSIX
+// those names are unknown before any probe; the explicit win32 controls in the
+// new platform table keep the Windows mechanics covered on every host.
+describe.skipIf(process.platform !== 'win32')('engine lock reading (exclusive-open)', () => {
   const descriptor = { file: 'parent.lock', owner: 'exclusive-open' };
 
   it('reports free when the profile has no lock file', () => {
@@ -460,7 +489,9 @@ describe('engine lock reading (exclusive-open)', () => {
   });
 });
 
-describe('engine lock reading (exclusive-open-write)', () => {
+// Same reason: the Chromium `lockfile` rule is Windows-only; POSIX hosts use
+// the new unknown-state table instead of a host-default read.
+describe.skipIf(process.platform !== 'win32')('engine lock reading (exclusive-open-write)', () => {
   const descriptor = { file: 'lockfile', owner: 'exclusive-open-write' };
 
   it('reports free when the profile has no lock file', () => {
@@ -640,6 +671,94 @@ describe('engine lock reading (pid)', () => {
   });
 });
 
+describe('engine lock reading (Windows-only names by platform)', () => {
+  const windowsOnlyDescriptors = [
+    { name: 'lockfile', descriptor: { file: 'lockfile', owner: 'exclusive-open-write' } },
+    { name: 'parent.lock', descriptor: { file: 'parent.lock', owner: 'exclusive-open' } },
+  ] as const;
+
+  for (const platform of ['linux', 'darwin']) {
+    for (const { name, descriptor } of windowsOnlyDescriptors) {
+      for (const leftover of [false, true]) {
+        const fixture = leftover ? 'leftover' : 'missing';
+        it(`reports unknown on ${platform} for ${name} with ${fixture} lock file`, () => {
+          const dir = profileWithLock(
+            `posix-${platform}-${name}-${fixture}`,
+            leftover ? 'leftover from another browser' : undefined,
+            name,
+          );
+          const lock = profile.readEngineProfileLock(dir, descriptor, platform);
+          expect(lock).toMatchObject({
+            profileDir: dir,
+            path: path.join(dir, name),
+            file: name,
+            liveness: descriptor.owner,
+            state: 'unknown',
+            owner: null,
+            error: POSIX_WINDOWS_LOCK_REASON,
+          });
+          expect(profile.engineLockBlocksStart(lock)).toBe(false);
+          // Unknown is not live: no invented fix sentence and no start refusal.
+          expect(profile.engineProfileLockFix(lock)).toBeNull();
+        });
+      }
+    }
+  }
+
+  for (const { name, descriptor } of windowsOnlyDescriptors) {
+    for (const leftover of [false, true]) {
+      it(`keeps the old ${leftover ? 'stale' : 'free'} result on win32 for ${name}`, () => {
+        const dir = profileWithLock(
+          `win32-control-${name}-${leftover ? 'leftover' : 'missing'}`,
+          leftover ? '' : undefined,
+          name,
+        );
+        const lock = profile.readEngineProfileLock(dir, descriptor, 'win32');
+        expect(lock).toMatchObject({
+          state: leftover ? 'stale' : 'free',
+          owner: null,
+          error: null,
+          file: name,
+          path: path.join(dir, name),
+        });
+        expect(profile.engineLockBlocksStart(lock)).toBe(false);
+      });
+    }
+  }
+
+  it('leaves a custom pid descriptor untouched on POSIX', () => {
+    const dir = profileWithLock(
+      'posix-custom-pid',
+      `${process.pid}
+`,
+      'owner.lock',
+    );
+    const lock = profile.readEngineProfileLock(dir, { file: 'owner.lock', owner: 'pid' }, 'linux');
+    expect(lock).toMatchObject({
+      state: 'live',
+      file: 'owner.lock',
+      owner: { pid: process.pid, createdAt: null },
+      error: null,
+    });
+    expect(profile.engineLockBlocksStart(lock)).toBe(true);
+  });
+
+  it('does not touch stat, read or open before the POSIX decision', () => {
+    const dir = profileWithLock('posix-no-probe', 'leftover', 'lockfile');
+    const lockPath = path.join(dir, 'lockfile');
+    faults.forbiddenPath = lockPath;
+    faults.forbiddenCalls = 0;
+    const lock = profile.readEngineProfileLock(
+      dir,
+      { file: 'lockfile', owner: 'exclusive-open-write' },
+      'linux',
+    );
+    expect(lock).toMatchObject({ state: 'unknown', owner: null, error: POSIX_WINDOWS_LOCK_REASON });
+    expect(faults.forbiddenCalls).toBe(0);
+    expect(profile.engineLockBlocksStart(lock)).toBe(false);
+  });
+});
+
 describe('engine lock message', () => {
   it('names the profile dir, the owner pid and the fix for a live pid lock', () => {
     const dir = profileWithLock('message-pid', `${process.pid}\n`, 'owner.lock');
@@ -652,7 +771,9 @@ describe('engine lock message', () => {
     expect(profile.engineProfileLockFix(lock)).toContain('Close the browser or Claude Code session');
   });
 
-  it('names the lock file when the holder cannot be identified', () => {
+  // Windows-only parent.lock holder proof: on POSIX the injected EBUSY can
+  // never be observed because the Windows-only name is unknown before a probe.
+  it.skipIf(process.platform !== 'win32')('names the lock file when the holder cannot be identified', () => {
     const dir = profileWithLock('message-open', '');
     injectedCode(path.join(dir, 'parent.lock'), 'EBUSY');
     const lock = profile.readEngineProfileLock(dir, { file: 'parent.lock', owner: 'exclusive-open' });
@@ -663,26 +784,33 @@ describe('engine lock message', () => {
     expect(message).toContain('The backend was not started.');
   });
 
-  it('names the Chromium lock file and keeps the broker wording for the write rule', () => {
-    const dir = profileWithLock('message-write', '', 'lockfile');
-    injectedOpenCode(path.join(dir, 'lockfile'), 'EBUSY');
-    const lock = profile.readEngineProfileLock(dir, { file: 'lockfile', owner: 'exclusive-open-write' });
-    const message = profile.engineProfileLockMessage(lock);
-    expect(message).toContain(dir);
-    expect(message).toContain(path.join(dir, 'lockfile'));
-    expect(message).toContain('another process holds the engine lock file');
-    expect(message).toContain('The backend was not started.');
-    // The profile copy tool reuses the same heading and fix with its own closing
-    // sentence; the default message above stays byte-identical.
-    const copyMessage = profile.engineProfileLockMessage(lock, {
-      trailing: 'The profile was not copied.',
-    });
-    expect(copyMessage).toContain('The profile was not copied.');
-    expect(copyMessage).not.toContain('The backend was not started.');
-    expect(copyMessage.replace('The profile was not copied.', 'The backend was not started.')).toBe(message);
-  });
+  // Same Windows-only reason as the parent.lock message case above.
+  it.skipIf(process.platform !== 'win32')(
+    'names the Chromium lock file and keeps the broker wording for the write rule',
+    () => {
+      const dir = profileWithLock('message-write', '', 'lockfile');
+      injectedOpenCode(path.join(dir, 'lockfile'), 'EBUSY');
+      const lock = profile.readEngineProfileLock(dir, { file: 'lockfile', owner: 'exclusive-open-write' });
+      const message = profile.engineProfileLockMessage(lock);
+      expect(message).toContain(dir);
+      expect(message).toContain(path.join(dir, 'lockfile'));
+      expect(message).toContain('another process holds the engine lock file');
+      expect(message).toContain('The backend was not started.');
+      // The profile copy tool reuses the same heading and fix with its own closing
+      // sentence; the default message above stays byte-identical.
+      const copyMessage = profile.engineProfileLockMessage(lock, {
+        trailing: 'The profile was not copied.',
+      });
+      expect(copyMessage).toContain('The profile was not copied.');
+      expect(copyMessage).not.toContain('The backend was not started.');
+      expect(copyMessage.replace('The profile was not copied.', 'The backend was not started.')).toBe(
+        message,
+      );
+    },
+  );
 
-  it('has no fix for a stale lock', () => {
+  // Windows-only stale parent.lock; the POSIX table asserts unknown/no fix.
+  it.skipIf(process.platform !== 'win32')('has no fix for a stale lock', () => {
     const dir = profileWithLock('message-stale', '');
     const stale = profile.readEngineProfileLock(dir, { file: 'parent.lock', owner: 'exclusive-open' });
     expect(profile.engineProfileLockFix(stale)).toBeNull();
@@ -1049,6 +1177,13 @@ async function toolNames(session: BrokerSession): Promise<string[]> {
 }
 
 describe('broker engine-lock preflight', () => {
+  // The shipped cloak manifest declares the Windows-only `lockfile`. On POSIX
+  // the broker's host-default probe is unknown with the exact reason, never
+  // free/stale; Windows keeps every original assertion unchanged.
+  const hostLockExpectation = (windowsState: 'free' | 'stale') =>
+    process.platform === 'win32'
+      ? { state: windowsState, error: null }
+      : { state: 'unknown', error: POSIX_WINDOWS_LOCK_REASON };
   // The broker reads the lock once, before it reads stdin, so the fixture must
   // exist before the spawn: writing it after startBroker() is a race that a fast
   // Linux runner loses (seen on ubuntu-latest node 22 in PR #31's first run).
@@ -1130,7 +1265,7 @@ describe('broker engine-lock preflight', () => {
     await initialize(session);
     expect(await toolNames(session)).toContain('browser_navigate');
     const caps = await payload(session, 'browser_capabilities');
-    expect(caps.engineProfileLock).toMatchObject({ state: 'free', profileDir });
+    expect(caps.engineProfileLock).toMatchObject({ ...hostLockExpectation('free'), profileDir });
   });
 
   it('allows the start with a note when the engine lock is malformed', async () => {
@@ -1188,12 +1323,15 @@ describe('broker engine-lock preflight', () => {
     expect(caps.profileLock).toMatchObject({ state: 'free' });
     expect(statusPayload.profileLock).toMatchObject({ state: 'free' });
     expect(caps.engineProfileLock).toMatchObject({
-      state: 'free',
+      ...hostLockExpectation('free'),
       profileDir,
       file: 'lockfile',
       liveness: 'exclusive-open-write',
     });
-    expect(statusPayload.engineProfileLock).toMatchObject({ state: 'free', file: 'lockfile' });
+    expect(statusPayload.engineProfileLock).toMatchObject({
+      ...hostLockExpectation('free'),
+      file: 'lockfile',
+    });
   });
 
   it('allows the start and reports stale for a leftover Chromium lockfile', async () => {
@@ -1203,9 +1341,14 @@ describe('broker engine-lock preflight', () => {
     await initialize(session);
     expect(await toolNames(session)).toContain('browser_navigate');
     const caps = await payload(session, 'browser_capabilities');
-    expect(caps.engineProfileLock).toMatchObject({ state: 'stale', profileDir, file: 'lockfile' });
-    expect(session.stderr()).toContain('engine profile lock');
-    expect(session.stderr()).toContain('is stale');
+    expect(caps.engineProfileLock).toMatchObject({
+      ...hostLockExpectation('stale'),
+      profileDir,
+      file: 'lockfile',
+    });
+    // The broker logs the stale sentence only for a stale read. On POSIX an
+    // unknown Windows name is reported in the payload, not as a stale log line.
+    expect(session.stderr().includes('is stale')).toBe(process.platform === 'win32');
   });
 
   it.skipIf(process.platform !== 'win32')(
@@ -1252,7 +1395,10 @@ describe('broker engine-lock preflight', () => {
       await initialize(next);
       expect(await toolNames(next)).toContain('browser_navigate');
       const nextCaps = await payload(next, 'browser_capabilities');
-      expect(nextCaps.engineProfileLock).toMatchObject({ state: 'stale', file: 'lockfile' });
+      expect(nextCaps.engineProfileLock).toMatchObject({
+        ...hostLockExpectation('stale'),
+        file: 'lockfile',
+      });
     },
   );
 });

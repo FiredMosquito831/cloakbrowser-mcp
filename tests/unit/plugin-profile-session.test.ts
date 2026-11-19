@@ -443,7 +443,7 @@ describe('session as a profile_isolation value', () => {
       expect(setting.description).toContain('seat limit');
       expect(setting.description).toContain('not applicable');
       expect(setting.description.toLowerCase()).not.toContain('in memory');
-      expect(manifest.version).toBe('2.26.0');
+      expect(manifest.version).toBe('2.26.1');
     }
     expect(profile.PROFILE_ISOLATION_VALUES).toEqual([
       'shared',
@@ -632,40 +632,43 @@ describe('session mode end to end', () => {
     });
   });
 
-  it('copies a LIVE base instead of refusing it (the copy mode refuses)', async (t) => {
-    // The playwright engine: no seat limit, so a live base is the only thing in
-    // the way, and the point of the mode is that it is copied rather than refused.
-    // (Camoufox would prove the same but provisions uv on first start.)
-    const dataDir = createRuntime(tempRoot('session-live-base-'));
-    const base = seedBaseProfile(dataDir, 'playwright');
-    const before = hashTree(base);
-    await warmToolCache(dataDir, 'playwright');
-    const holder = await holdEngineLock(t, {
-      file: path.join(base, 'lockfile'),
-      profileDir: base,
-      descriptor: manifestProfileLock('playwright'),
-    });
-    try {
-      const session = startBroker({ dataDir, isolation: 'session', engine: 'playwright' });
-      await initialize(session);
-      const caps = await capabilities(session);
-      expect(caps.profileIsolation).toBe('session');
-      expect(caps.engineError ?? null).toBeNull();
-      expect(caps.profileFallback).toMatchObject({ from: base, kind: 'copy', createdEmpty: false });
-      expect(String((caps.profileFallback as Record<string, unknown>).reason)).toContain('"session"');
+  it.skipIf(process.platform !== 'win32')(
+    'copies a LIVE base instead of refusing it (the copy mode refuses)',
+    async (t) => {
+      // The playwright engine: no seat limit, so a live base is the only thing in
+      // the way, and the point of the mode is that it is copied rather than refused.
+      // (Camoufox would prove the same but provisions uv on first start.)
+      const dataDir = createRuntime(tempRoot('session-live-base-'));
+      const base = seedBaseProfile(dataDir, 'playwright');
+      const before = hashTree(base);
+      await warmToolCache(dataDir, 'playwright');
+      const holder = await holdEngineLock(t, {
+        file: path.join(base, 'lockfile'),
+        profileDir: base,
+        descriptor: manifestProfileLock('playwright'),
+      });
+      try {
+        const session = startBroker({ dataDir, isolation: 'session', engine: 'playwright' });
+        await initialize(session);
+        const caps = await capabilities(session);
+        expect(caps.profileIsolation).toBe('session');
+        expect(caps.engineError ?? null).toBeNull();
+        expect(caps.profileFallback).toMatchObject({ from: base, kind: 'copy', createdEmpty: false });
+        expect(String((caps.profileFallback as Record<string, unknown>).reason)).toContain('"session"');
 
-      const environment = await effectiveEnvironment(session);
-      const copies = sessionCopies(dataDir, 'playwright');
-      expect(copies).toHaveLength(1);
-      expect(environment.profileDir).toBe(copies[0]);
-      expect(listFiles(copies[0])).toContain('Default/Network/Cookies');
-      // The base is untouched and the holder's lock is still the only one.
-      expect(hashTree(base)).toBe(before);
-      expect(profile.readProfileLock(base).state).toBe('free');
-    } finally {
-      await holder.stop();
-    }
-  });
+        const environment = await effectiveEnvironment(session);
+        const copies = sessionCopies(dataDir, 'playwright');
+        expect(copies).toHaveLength(1);
+        expect(environment.profileDir).toBe(copies[0]);
+        expect(listFiles(copies[0])).toContain('Default/Network/Cookies');
+        // The base is untouched and the holder's lock is still the only one.
+        expect(hashTree(base)).toBe(before);
+        expect(profile.readProfileLock(base).state).toBe('free');
+      } finally {
+        await holder.stop();
+      }
+    },
+  );
 
   it('keeps its copy when the browser closes and discards it on a clean exit', async () => {
     const dataDir = createRuntime(tempRoot('session-lifetime-'));
@@ -731,36 +734,39 @@ describe('session mode end to end', () => {
     expect(current.profileCopyPending).toMatchObject({ kind: 'session', baseDir: base });
   });
 
-  it('applies the cloak seat gate exactly as on_locked=copy does', async (t) => {
-    const dataDir = createRuntime(tempRoot('session-seat-'));
-    const base = seedBaseProfile(dataDir);
-    // A warm cache keeps the copy deferred, so the seat is read at take time.
-    await warmToolCache(dataDir);
-    // A live browser on another profile of the same engine occupies the one seat
-    // the free tier allows, so this session must hold rather than copy.
-    const other = path.join(dataDir, 'profiles', 'other');
-    writeFile(path.join(other, 'lockfile'), '');
-    const holder = await holdEngineLock(t, {
-      file: path.join(other, 'lockfile'),
-      profileDir: other,
-      descriptor: manifestProfileLock('cloak'),
-    });
-    try {
-      const session = startBroker({ dataDir, isolation: 'session' });
-      await initialize(session);
-      const response = await session.request('tools/call', {
-        name: 'browser_navigate',
-        arguments: { url: 'http://127.0.0.1:9/' },
+  it.skipIf(process.platform !== 'win32')(
+    'applies the cloak seat gate exactly as on_locked=copy does',
+    async (t) => {
+      const dataDir = createRuntime(tempRoot('session-seat-'));
+      const base = seedBaseProfile(dataDir);
+      // A warm cache keeps the copy deferred, so the seat is read at take time.
+      await warmToolCache(dataDir);
+      // A live browser on another profile of the same engine occupies the one seat
+      // the free tier allows, so this session must hold rather than copy.
+      const other = path.join(dataDir, 'profiles', 'other');
+      writeFile(path.join(other, 'lockfile'), '');
+      const holder = await holdEngineLock(t, {
+        file: path.join(other, 'lockfile'),
+        profileDir: other,
+        descriptor: manifestProfileLock('cloak'),
       });
-      expect(response.result?.isError).toBe(true);
-      expect(String(response.result?.content?.[0]?.text)).toContain('seat limit');
-      // No copy was taken and nothing was started on the base.
-      expect(sessionCopies(dataDir)).toEqual([]);
-      expect(profile.readProfileLock(base).state).toBe('free');
-    } finally {
-      await holder.stop();
-    }
-  });
+      try {
+        const session = startBroker({ dataDir, isolation: 'session' });
+        await initialize(session);
+        const response = await session.request('tools/call', {
+          name: 'browser_navigate',
+          arguments: { url: 'http://127.0.0.1:9/' },
+        });
+        expect(response.result?.isError).toBe(true);
+        expect(String(response.result?.content?.[0]?.text)).toContain('seat limit');
+        // No copy was taken and nothing was started on the base.
+        expect(sessionCopies(dataDir)).toEqual([]);
+        expect(profile.readProfileLock(base).state).toBe('free');
+      } finally {
+        await holder.stop();
+      }
+    },
+  );
 
   it('is engine-neutral: the playwright engine takes the same path', async () => {
     const dataDir = createRuntime(tempRoot('session-playwright-'));
@@ -791,71 +797,77 @@ describe('session mode end to end', () => {
 });
 
 describe('first-browser-action profile re-check (2.24.0)', () => {
-  it('takes the copy path when the base becomes busy AFTER the session started', async (t) => {
-    // The playwright engine, because the cloak seat gate would (correctly) hold
-    // instead of copying when the base's own browser is what occupies the one
-    // seat; the cloak half of that rule is pinned by the seat test above.
-    const dataDir = createRuntime(tempRoot('recheck-busy-'));
-    const base = seedBaseProfile(dataDir, 'playwright');
-    const before = hashTree(base);
-    await warmToolCache(dataDir, 'playwright');
+  it.skipIf(process.platform !== 'win32')(
+    'takes the copy path when the base becomes busy AFTER the session started',
+    async (t) => {
+      // The playwright engine, because the cloak seat gate would (correctly) hold
+      // instead of copying when the base's own browser is what occupies the one
+      // seat; the cloak half of that rule is pinned by the seat test above.
+      const dataDir = createRuntime(tempRoot('recheck-busy-'));
+      const base = seedBaseProfile(dataDir, 'playwright');
+      const before = hashTree(base);
+      await warmToolCache(dataDir, 'playwright');
 
-    // The session starts while the base is free, so it owes no copy.
-    const session = startBroker({ dataDir, isolation: 'shared', onLocked: 'copy', engine: 'playwright' });
-    await initialize(session);
-    const startCaps = await capabilities(session);
-    expect(startCaps.profileFallback).toBeNull();
-    const startProfiles = await profilesPayload(session);
-    expect((startProfiles.current as Record<string, unknown>).profileCopyPending).toBeUndefined();
+      // The session starts while the base is free, so it owes no copy.
+      const session = startBroker({ dataDir, isolation: 'shared', onLocked: 'copy', engine: 'playwright' });
+      await initialize(session);
+      const startCaps = await capabilities(session);
+      expect(startCaps.profileFallback).toBeNull();
+      const startProfiles = await profilesPayload(session);
+      expect((startProfiles.current as Record<string, unknown>).profileCopyPending).toBeUndefined();
 
-    // Another session's browser opens on the base between our start and our first
-    // browser action: exactly the "several agents launch together" case.
-    const holder = await holdEngineLock(t, {
-      file: path.join(base, 'lockfile'),
-      profileDir: base,
-      descriptor: manifestProfileLock('playwright'),
-    });
-    try {
-      const environment = await effectiveEnvironment(session);
-      const copies = sessionCopies(dataDir, 'playwright');
-      expect(copies).toHaveLength(1);
-      // The session moved to the copy instead of launching on the busy base.
-      expect(environment.profileDir).toBe(copies[0]);
-      const caps = await capabilities(session);
-      expect(caps.profileFallback).toMatchObject({ from: base, to: copies[0], kind: 'copy' });
-      expect(hashTree(base)).toBe(before);
-    } finally {
-      await holder.stop();
-    }
-  });
-
-  it('holds on the cloak engine instead of starting a second CloakBrowser', async (t) => {
-    // The seat rule is absolute: a base that turns busy on the one-seat engine
-    // makes this session wait, never copy-and-run a second browser.
-    const dataDir = createRuntime(tempRoot('recheck-cloak-seat-'));
-    const base = seedBaseProfile(dataDir);
-    await warmToolCache(dataDir);
-    const session = startBroker({ dataDir, isolation: 'shared', onLocked: 'copy' });
-    await initialize(session);
-    const holder = await holdEngineLock(t, {
-      file: path.join(base, 'lockfile'),
-      profileDir: base,
-      descriptor: manifestProfileLock('cloak'),
-    });
-    try {
-      const response = await session.request('tools/call', {
-        name: 'browser_navigate',
-        arguments: { url: 'http://127.0.0.1:9/' },
+      // Another session's browser opens on the base between our start and our first
+      // browser action: exactly the "several agents launch together" case.
+      const holder = await holdEngineLock(t, {
+        file: path.join(base, 'lockfile'),
+        profileDir: base,
+        descriptor: manifestProfileLock('playwright'),
       });
-      expect(response.result?.isError).toBe(true);
-      expect(String(response.result?.content?.[0]?.text)).toContain('seat limit');
-      expect(sessionCopies(dataDir)).toEqual([]);
-      const caps = await capabilities(session);
-      expect(caps.hold).toMatchObject({ state: 'waiting', seat: { seatFree: false } });
-    } finally {
-      await holder.stop();
-    }
-  });
+      try {
+        const environment = await effectiveEnvironment(session);
+        const copies = sessionCopies(dataDir, 'playwright');
+        expect(copies).toHaveLength(1);
+        // The session moved to the copy instead of launching on the busy base.
+        expect(environment.profileDir).toBe(copies[0]);
+        const caps = await capabilities(session);
+        expect(caps.profileFallback).toMatchObject({ from: base, to: copies[0], kind: 'copy' });
+        expect(hashTree(base)).toBe(before);
+      } finally {
+        await holder.stop();
+      }
+    },
+  );
+
+  it.skipIf(process.platform !== 'win32')(
+    'holds on the cloak engine instead of starting a second CloakBrowser',
+    async (t) => {
+      // The seat rule is absolute: a base that turns busy on the one-seat engine
+      // makes this session wait, never copy-and-run a second browser.
+      const dataDir = createRuntime(tempRoot('recheck-cloak-seat-'));
+      const base = seedBaseProfile(dataDir);
+      await warmToolCache(dataDir);
+      const session = startBroker({ dataDir, isolation: 'shared', onLocked: 'copy' });
+      await initialize(session);
+      const holder = await holdEngineLock(t, {
+        file: path.join(base, 'lockfile'),
+        profileDir: base,
+        descriptor: manifestProfileLock('cloak'),
+      });
+      try {
+        const response = await session.request('tools/call', {
+          name: 'browser_navigate',
+          arguments: { url: 'http://127.0.0.1:9/' },
+        });
+        expect(response.result?.isError).toBe(true);
+        expect(String(response.result?.content?.[0]?.text)).toContain('seat limit');
+        expect(sessionCopies(dataDir)).toEqual([]);
+        const caps = await capabilities(session);
+        expect(caps.hold).toMatchObject({ state: 'waiting', seat: { seatFree: false } });
+      } finally {
+        await holder.stop();
+      }
+    },
+  );
 
   it('is byte-identical on the uncontended path: no new key, no fallback, no copy', async () => {
     const dataDir = createRuntime(tempRoot('recheck-free-'));
@@ -874,87 +886,96 @@ describe('first-browser-action profile re-check (2.24.0)', () => {
     expect(hashTree(base)).toBe(before);
   });
 
-  it('holds instead of launching when the policy is block and the base turns busy', async (t) => {
-    const dataDir = createRuntime(tempRoot('recheck-block-'));
-    const base = seedBaseProfile(dataDir);
-    await warmToolCache(dataDir);
-    const session = startBroker({ dataDir, isolation: 'shared', onLocked: 'block' });
-    await initialize(session);
-    const holder = await holdEngineLock(t, {
-      file: path.join(base, 'lockfile'),
-      profileDir: base,
-      descriptor: manifestProfileLock('cloak'),
-    });
-    try {
-      const response = await session.request('tools/call', {
-        name: 'browser_navigate',
-        arguments: { url: 'http://127.0.0.1:9/' },
+  it.skipIf(process.platform !== 'win32')(
+    'holds instead of launching when the policy is block and the base turns busy',
+    async (t) => {
+      const dataDir = createRuntime(tempRoot('recheck-block-'));
+      const base = seedBaseProfile(dataDir);
+      await warmToolCache(dataDir);
+      const session = startBroker({ dataDir, isolation: 'shared', onLocked: 'block' });
+      await initialize(session);
+      const holder = await holdEngineLock(t, {
+        file: path.join(base, 'lockfile'),
+        profileDir: base,
+        descriptor: manifestProfileLock('cloak'),
       });
-      // block has no copy and no sibling: the call is refused, the session stays.
-      expect(response.result?.isError).toBe(true);
-      expect(sessionCopies(dataDir)).toEqual([]);
-    } finally {
-      await holder.stop();
-    }
-  });
+      try {
+        const response = await session.request('tools/call', {
+          name: 'browser_navigate',
+          arguments: { url: 'http://127.0.0.1:9/' },
+        });
+        // block has no copy and no sibling: the call is refused, the session stays.
+        expect(response.result?.isError).toBe(true);
+        expect(sessionCopies(dataDir)).toEqual([]);
+      } finally {
+        await holder.stop();
+      }
+    },
+  );
 });
 
 describe('engine-lock fallback report (2.24.0)', () => {
-  it('carries kind and createdEmpty, like the bridge-lock path always has', async (t) => {
-    const dataDir = createRuntime(tempRoot('engine-fallback-'));
-    // Camoufox never writes the bridge lock, so its fallback can only ever come
-    // from the engine-lock pass; that is the path this pins.
-    const base = seedBaseProfile(dataDir, 'camoufox');
-    writeFile(path.join(base, 'parent.lock'), '');
-    const holder = await holdEngineLock(t, {
-      file: path.join(base, 'parent.lock'),
-      profileDir: base,
-      descriptor: manifestProfileLock('camoufox'),
-    });
-    try {
-      const session = startBroker({
-        dataDir,
-        isolation: 'shared',
-        onLocked: 'fallback',
-        engine: 'camoufox',
+  it.skipIf(process.platform !== 'win32')(
+    'carries kind and createdEmpty, like the bridge-lock path always has',
+    async (t) => {
+      const dataDir = createRuntime(tempRoot('engine-fallback-'));
+      // Camoufox never writes the bridge lock, so its fallback can only ever come
+      // from the engine-lock pass; that is the path this pins.
+      const base = seedBaseProfile(dataDir, 'camoufox');
+      writeFile(path.join(base, 'parent.lock'), '');
+      const holder = await holdEngineLock(t, {
+        file: path.join(base, 'parent.lock'),
+        profileDir: base,
+        descriptor: manifestProfileLock('camoufox'),
       });
-      await initialize(session);
-      const caps = await capabilities(session);
-      const fallback = caps.profileFallback as Record<string, unknown>;
-      expect(fallback).toMatchObject({ from: base, to: `${base}-2`, kind: 'sibling' });
-      expect(fallback.createdEmpty).toBe(true);
-      expect(String(fallback.reason)).toContain('created empty');
-    } finally {
-      await holder.stop();
-    }
-  });
+      try {
+        const session = startBroker({
+          dataDir,
+          isolation: 'shared',
+          onLocked: 'fallback',
+          engine: 'camoufox',
+        });
+        await initialize(session);
+        const caps = await capabilities(session);
+        const fallback = caps.profileFallback as Record<string, unknown>;
+        expect(fallback).toMatchObject({ from: base, to: `${base}-2`, kind: 'sibling' });
+        expect(fallback.createdEmpty).toBe(true);
+        expect(String(fallback.reason)).toContain('created empty');
+      } finally {
+        await holder.stop();
+      }
+    },
+  );
 
-  it('says createdEmpty false when the sibling already exists', async (t) => {
-    const dataDir = createRuntime(tempRoot('engine-fallback-existing-'));
-    const base = seedBaseProfile(dataDir, 'camoufox');
-    writeFile(path.join(base, 'parent.lock'), '');
-    writeFile(path.join(`${base}-2`, 'prefs.js'), '// existing sibling');
-    const holder = await holdEngineLock(t, {
-      file: path.join(base, 'parent.lock'),
-      profileDir: base,
-      descriptor: manifestProfileLock('camoufox'),
-    });
-    try {
-      const session = startBroker({
-        dataDir,
-        isolation: 'shared',
-        onLocked: 'fallback',
-        engine: 'camoufox',
+  it.skipIf(process.platform !== 'win32')(
+    'says createdEmpty false when the sibling already exists',
+    async (t) => {
+      const dataDir = createRuntime(tempRoot('engine-fallback-existing-'));
+      const base = seedBaseProfile(dataDir, 'camoufox');
+      writeFile(path.join(base, 'parent.lock'), '');
+      writeFile(path.join(`${base}-2`, 'prefs.js'), '// existing sibling');
+      const holder = await holdEngineLock(t, {
+        file: path.join(base, 'parent.lock'),
+        profileDir: base,
+        descriptor: manifestProfileLock('camoufox'),
       });
-      await initialize(session);
-      const caps = await capabilities(session);
-      const fallback = caps.profileFallback as Record<string, unknown>;
-      expect(fallback).toMatchObject({ to: `${base}-2`, kind: 'sibling', createdEmpty: false });
-      expect(String(fallback.reason)).not.toContain('created empty');
-    } finally {
-      await holder.stop();
-    }
-  });
+      try {
+        const session = startBroker({
+          dataDir,
+          isolation: 'shared',
+          onLocked: 'fallback',
+          engine: 'camoufox',
+        });
+        await initialize(session);
+        const caps = await capabilities(session);
+        const fallback = caps.profileFallback as Record<string, unknown>;
+        expect(fallback).toMatchObject({ to: `${base}-2`, kind: 'sibling', createdEmpty: false });
+        expect(String(fallback.reason)).not.toContain('created empty');
+      } finally {
+        await holder.stop();
+      }
+    },
+  );
 });
 
 describe('2.25.0 harness profiles with session isolation', () => {

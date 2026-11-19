@@ -113,6 +113,16 @@ const camoufoxCopy = (await import(
 // stale-lock fixtures flaky; this constant cannot collide.
 const DEAD_PID = 2_147_483_647;
 
+// Item 45: the CLI report must name the exact reason when the declared Windows
+// lock name cannot be interpreted on POSIX; no file is moved or deleted.
+const POSIX_WINDOWS_LOCK_REASON =
+  'This lock file cannot be interpreted on this platform, so the engine lock is unknown; ' +
+  'the browser will decide whether the profile is in use.';
+const hostEngineLockState = (windowsState: 'stale' | 'free') =>
+  process.platform === 'win32'
+    ? { state: windowsState, error: null }
+    : { state: 'unknown', error: POSIX_WINDOWS_LOCK_REASON };
+
 const SECRET_COOKIE = 'COOKIE-SECRET-6f2a';
 const SECRET_SEED = 'SEED-SECRET-9c1b';
 const LOCK_FILENAME = '.cloakbrowser-mcp-profile.lock';
@@ -540,7 +550,7 @@ describe('profile-copy behaviour', () => {
       skipped: { symlinks: 0, other: 0 },
       sourceLock: { state: 'stale', owner: { pid: DEAD_PID } },
       sourceEngineLock: {
-        state: 'stale',
+        ...hostEngineLockState('stale'),
         file: 'lockfile',
         liveness: 'exclusive-open-write',
         owner: null,
@@ -808,7 +818,7 @@ describe('camoufox exclusions', () => {
         byRule: { engineLock: 1, cache: 2, thumbnails: 1, lock: 0, shm: 1 },
       },
       sourceEngineLock: {
-        state: 'stale',
+        ...hostEngineLockState('stale'),
         file: 'parent.lock',
         liveness: 'exclusive-open',
         owner: null,
@@ -961,9 +971,36 @@ describe('behaviour-preserving equality', () => {
       },
       names: [],
     });
-    expect(summary.sourceEngineLock).toMatchObject({ state: 'free', file: 'lockfile' });
+    expect(summary.sourceEngineLock).toMatchObject({
+      ...hostEngineLockState('free'),
+      file: 'lockfile',
+    });
     const human = profileCopy.formatHumanSummary(summary);
     expect(human).toContain('engine-specific exclusions: none');
+  });
+
+  it('reports an uninterpretable Windows lock name without refusing the copy', () => {
+    const dataDir = tempRoot();
+    const profile = path.join(dataDir, 'profiles', 'default');
+    write(profile, 'Cookies', 'plain-cookies');
+    writeLock(profile, DEAD_PID);
+    write(profile, 'lockfile', 'leftover from another browser');
+    const result = run({ from: 'default', to: 'alice', dataDir, contents: 'full' });
+    expect(result.ok).toBe(true);
+    expect(result.error).toBeUndefined();
+    const summary = result.summary!;
+    expect(summary.sourceEngineLock).toMatchObject({
+      ...hostEngineLockState('stale'),
+      file: 'lockfile',
+      liveness: 'exclusive-open-write',
+      owner: null,
+    });
+    const human = profileCopy.formatHumanSummary(summary);
+    // The CLI prints the binding sentence on POSIX and never deletes/moves it.
+    expect(human.includes('stale engine lock ignored')).toBe(process.platform === 'win32');
+    expect(human.includes('engine lock not interpreted')).toBe(process.platform !== 'win32');
+    expect(human.includes(POSIX_WINDOWS_LOCK_REASON)).toBe(process.platform !== 'win32');
+    expect(existsSync(path.join(profile, 'lockfile'))).toBe(true);
   });
 });
 
@@ -1051,6 +1088,15 @@ describe('the identity tier is the default (2.21.0)', () => {
 });
 
 describe('profile-copy output', () => {
+  it('prints the engine-lock reason in the human report', () => {
+    const dataDir = tempRoot();
+    createCloakFixture(dataDir);
+    const cli = runCli(['--from', 'default', '--to', 'target', '--data-dir', dataDir, '--dry-run']);
+    expect(cli.status).toBe(0);
+    expect(cli.stdout.includes('stale engine lock ignored')).toBe(process.platform === 'win32');
+    expect(cli.stdout.includes(POSIX_WINDOWS_LOCK_REASON)).toBe(process.platform !== 'win32');
+  });
+
   it('prints a machine-readable JSON summary and nothing else', () => {
     const dataDir = tempRoot();
     createCloakFixture(dataDir);
@@ -1103,7 +1149,9 @@ describe('profile-copy output', () => {
     expect(human).toContain(
       'engine-specific exclusions: lockfile 1, Cache 2, Code Cache 1, Crashpad 1, DawnCache 1',
     );
-    expect(human).toContain('stale engine lock ignored');
+    // POSIX reports a Windows-only name as unknown instead of stale.
+    expect(human.includes('stale engine lock ignored')).toBe(process.platform === 'win32');
+    expect(human.includes('engine lock not interpreted')).toBe(process.platform !== 'win32');
     expect(human).toContain('A copy carries no session cookies');
     expect(human).toContain('stale lock ignored');
     expect(human).toContain('The per-account <name>.proxy file was not copied');

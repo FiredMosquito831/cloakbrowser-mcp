@@ -896,6 +896,10 @@ describe('broker on_locked: the engine profile lock', () => {
     expect(caps.engineProfileLock).toMatchObject({ state: 'live' });
   });
 
+  // Item 45: `parent.lock` is Windows-only, so on POSIX the broker reports
+  // `unknown` and never takes this fallback. The holder helper still proves
+  // `live` there through its test-only positional 'win32' probe; that is not a
+  // product start decision. This broker-level policy proof stays Windows-only.
   it.skipIf(process.platform !== 'win32')(
     'applies the policy to the Camoufox parent.lock rule',
     async (t) => {

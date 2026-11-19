@@ -7,6 +7,12 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { spawn } from 'node:child_process';
 
+// Item 45: the cloak manifest's `lockfile` is a Windows-only name. On POSIX
+// browser_capabilities must report the honest unknown state and exact reason.
+const POSIX_WINDOWS_LOCK_REASON =
+  'This lock file cannot be interpreted on this platform, so the engine lock is unknown; ' +
+  'the browser will decide whether the profile is in use.';
+
 // Capabilities diagnostics (2.9.5, updated for the 2.10.1 output-directory
 // policy). browser_capabilities must report the server cwd, the effective
 // artifact directory and the MCP roots the client advertised, because upstream's
@@ -602,9 +608,12 @@ describe('browser_capabilities artifact diagnostics', () => {
     expect(payload.profileDefaultSource).toBe('none');
     expect(payload.profileDefaultPath).toBe('<ROOT>/data/profiles/cloak/.default');
     expect(payload.engineProfileLock).toMatchObject({
-      state: 'free',
+      ...(process.platform === 'win32'
+        ? { state: 'free', error: null }
+        : { state: 'unknown', error: POSIX_WINDOWS_LOCK_REASON }),
       file: 'lockfile',
       liveness: 'exclusive-open-write',
+      owner: null,
     });
   });
 

@@ -2006,7 +2006,7 @@ function probeEngineLockWrite(base, liveness, lockPath) {
 //            pid it names exists); owner is { pid, createdAt } and pid may be null
 //   stale    the file exists but no live owner holds it; the browser replaces it
 //   unknown  the file cannot be interpreted; the start is allowed with a note
-export function readEngineProfileLock(profileDir, descriptor) {
+export function readEngineProfileLock(profileDir, descriptor, platform = process.platform) {
   const resolved = path.resolve(typeof profileDir === 'string' ? profileDir : '');
   const file = isPlainObject(descriptor) && nonEmptyString(descriptor.file) ? descriptor.file.trim() : null;
   const liveness =
@@ -2021,6 +2021,20 @@ export function readEngineProfileLock(profileDir, descriptor) {
     owner: null,
     error: null,
   };
+  // These two names are Windows-only engine locks. On any other platform the OS
+  // cannot tell whether a browser owns them, so report the uncertainty instead
+  // of a false "free". The decision precedes every filesystem probe; a custom
+  // pid descriptor is untouched and only `live` ever blocks a start.
+  if (platform !== 'win32' && (file === 'lockfile' || file === 'parent.lock')) {
+    return engineLockResult(
+      base,
+      liveness,
+      'unknown',
+      null,
+      'This lock file cannot be interpreted on this platform, so the engine lock is unknown; ' +
+        'the browser will decide whether the profile is in use.',
+    );
+  }
   if (file === null || !ENGINE_LOCK_OWNER_RULES.includes(liveness)) {
     return engineLockResult(
       base,
