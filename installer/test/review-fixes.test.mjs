@@ -394,6 +394,42 @@ test('empty JSONC parent object: add -> remove restores exact bytes', async () =
   assert.equal(await readFile(tree.target.path, 'utf8'), original);
 });
 
+test('legacy pathless root metadata is not shared with an unrelated harness config', async () => {
+  const tree = await makeTree('antigravity', 'user');
+  const original = '{"mcpServers":{}}\n';
+  await writeFile(tree.target.path, original);
+  const manifestPath = join(tree.dataRoot, 'manifest.json');
+  const legacy = { parents: ['mcpServers'], rootText: '' };
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(
+      {
+        schema: 'sabm-manifest/1',
+        cliVersion: '1.1.0',
+        entries: ['codex:user:legacy'],
+        engines: ['2.26.0'],
+        createdPaths: { 'codex:user:legacy': legacy },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  const installed = await invoke(
+    ['install', 'antigravity', '--from', SCHEMA_FROM, '--data-root', tree.dataRoot, '--json'],
+    tree,
+  );
+  assert.equal(installed.code, 0, installed.out);
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  assert.equal(manifest.createdPaths['antigravity:user:cloakbrowser'], undefined);
+  assert.deepEqual(manifest.createdPaths['codex:user:legacy'], legacy);
+  const removed = await invoke(
+    ['uninstall', 'antigravity', '--from', SCHEMA_FROM, '--data-root', tree.dataRoot, '--json'],
+    tree,
+  );
+  assert.equal(removed.code, 0, removed.out);
+  assert.equal(await readFile(tree.target.path, 'utf8'), original);
+});
+
 test('empty and BOM-only config files restore their original bytes', async () => {
   for (const original of ['', '﻿']) {
     const tree = await makeTree('antigravity', 'user');

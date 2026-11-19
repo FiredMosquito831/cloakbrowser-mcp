@@ -317,10 +317,7 @@ export async function installResult(options, context) {
     const createdPaths = { ...(priorManifest?.createdPaths ?? {}) };
     const sharedRoot = Object.values(createdPaths).find(
       (value) =>
-        value &&
-        !Array.isArray(value) &&
-        typeof value.rootText === 'string' &&
-        (!value.path || value.path === target.path),
+        value && !Array.isArray(value) && typeof value.rootText === 'string' && value.path === target.path,
     );
     if (parentWasAbsent) {
       createdPaths[entryKey] = rootGenerated
