@@ -79,5 +79,30 @@ Windows are refused until an upstream path is verified. `--data-root` beats ever
 
 `dist/` contains the deterministic engine bundle, `bundle.json` with SHA-256 hashes, the stable shim
 and the byte-identical vendored resolver. It is built before packaging and shipped in `files`; there
-is no `postinstall`. CI packs the tarball and installs it into a scratch prefix, but publishes nothing.
-Publishing is an owner action (OIDC and a fresh npm-name check).
+is no `postinstall`. CI packs the tarball and installs it into a scratch prefix.
+
+## npm publishing
+
+`.github/workflows/npm-release.yml` publishes this package to npm with npm trusted publishing (OIDC),
+so no npm token is stored in the repository. It runs when a GitHub release is published, when a push
+to `main` changes `installer/package.json` (or any other file under `installer/`), and on manual
+dispatch with an optional tag. A `sabm-vX.Y.Z` tag must match `installer/package.json`; a normal
+`vX.Y.Z` plugin release publishes the installer version in that same commit. An already published
+version is skipped, and commits that do not change the installer version are skipped.
+
+One-time npm setup, on the package's **Settings → Trusted Publisher → GitHub Actions** page:
+
+| Field | Value |
+|---|---|
+| Organisation or user | `FiredMosquito831` |
+| Repository | `secret-agent-browser-mcps` |
+| Workflow filename | `npm-release.yml` |
+| Environment | leave EMPTY |
+
+The workflow pins npm 11.19.0, publishes with `--access public --provenance`, and verifies the version
+afterwards with `npm view`. A refused trusted publish prints the setup reminder and leaves the GitHub
+release green; check the workflow log and the registry, not just the badge. Re-run a tag with:
+
+```sh
+gh workflow run npm-release.yml --repo FiredMosquito831/secret-agent-browser-mcps -f tag=sabm-v1.1.0
+```
