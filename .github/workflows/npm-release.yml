@@ -1,0 +1,179 @@
+# Publishes only this fork's installer package (`installer/package.json`) to npm.
+#
+# The inherited release.yml keeps its owner guard so a tag here cannot publish
+# upstream's root package, Docker images, docs site or MCP registry entry. This
+# file owns the fork's separate npm identity instead. It uses npm trusted
+# publishing: npmjs.com names this repository and this workflow filename, and
+# GitHub gives the job a short-lived OIDC token. No long-lived npm credential is
+# stored in the repository, and npm attaches provenance because the repo is public.
+#
+# One-time setup on npmjs.com, package Settings -> Trusted Publisher -> GitHub Actions:
+#   Organisation or user: FiredMosquito831
+#   Repository:           secret-agent-browser-mcps
+#   Workflow filename:    npm-release.yml
+#   Environment:          leave EMPTY
+#   Allowed actions:      enable npm publish
+# npm needs 11.5.1 or newer; this workflow pins 11.19.0.
+
+name: npm publish
+
+on:
+  release:
+    types: [published]
+  push:
+    branches: [main]
+    paths:
+      - 'installer/**'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to publish from, e.g. sabm-v1.2.0 or v2.27.0. Leave empty for main.'
+        required: false
+        type: string
+
+concurrency:
+  # One publish queue for this package. Never cancel: an interrupted publish is
+  # not idempotent, and a release plus a push for the same bump must not race.
+  group: npm-publish-secret-agent-browser-mcps
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  NODE_VERSION: '24'
+  NPM_VERSION: '11.19.0'
+  PACKAGE_DIR: installer
+  NPM_CONFIG_AUDIT: 'false'
+  NPM_CONFIG_FUND: 'false'
+
+jobs:
+  publish:
+    name: Publish installer to npm
+    # This workflow is fork-specific. Upstream's copy of the repo must never
+    # publish this fork's npm identity, even if a later sync brings this file.
+    if: github.repository_owner == 'FiredMosquito831'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # GitHub's OIDC identity for npm trusted publishing and provenance.
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag || github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Use npm ${{ env.NPM_VERSION }}
+        run: |
+          set -euo pipefail
+          npm install --global npm@${{ env.NPM_VERSION }}
+          npm --version
+
+      - name: Build and verify the installer package
+        run: |
+          set -euo pipefail
+          npm ci --prefix "$PACKAGE_DIR" --ignore-scripts --no-audit --fund=false
+          npm --prefix "$PACKAGE_DIR" run build
+          npm --prefix "$PACKAGE_DIR" run check
+          npm --prefix "$PACKAGE_DIR" test
+          (cd "$PACKAGE_DIR" && npm pack --dry-run >/dev/null)
+
+      - name: Resolve version and decide whether to publish
+        id: publish
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag || '' }}
+          BEFORE_SHA: ${{ github.event.before || '' }}
+        run: |
+          set -euo pipefail
+          name="$(node -p "require('./$PACKAGE_DIR/package.json').name")"
+          version="$(node -p "require('./$PACKAGE_DIR/package.json').version")"
+          {
+            echo "name=$name"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::installer/package.json has an invalid npm version '$version'"
+            exit 1
+          fi
+          case "$RELEASE_TAG" in
+            sabm-v*)
+              tag_version="${RELEASE_TAG#sabm-v}"
+              if [ "$tag_version" != "$version" ]; then
+                echo "::error::installer tag $RELEASE_TAG says $tag_version but installer/package.json says $version"
+                exit 1
+              fi
+              ;;
+            v*)
+              echo "release tag $RELEASE_TAG is the plugin line; publishing installer $name@$version from the same commit"
+              ;;
+            '')
+              ;;
+            *)
+              echo "::error::unsupported tag $RELEASE_TAG; use sabm-vX.Y.Z for installer releases or vX.Y.Z for plugin releases"
+              exit 1
+              ;;
+          esac
+          if [ "$EVENT_NAME" = 'push' ]; then
+            before="$BEFORE_SHA"
+            if [ -z "$before" ] || [ -z "${before//0/}" ]; then
+              before="$(git rev-parse HEAD^)"
+            fi
+            if git cat-file -e "$before:installer/package.json" 2>/dev/null; then
+              previous="$(git show "$before:installer/package.json" | node -p 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).version')"
+              if [ "$previous" = "$version" ]; then
+                echo "installer/package.json version is unchanged ($version); nothing to publish"
+                echo 'publish=false' >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
+          fi
+          published="$(npm view "$name@$version" version 2>/dev/null || true)"
+          if [ "$published" = "$version" ]; then
+            echo "::notice::$name@$version is already on npm; nothing to publish"
+            echo 'publish=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'publish=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to npm with trusted publishing
+        id: publish_step
+        if: steps.publish.outputs.publish == 'true'
+        working-directory: installer
+        env:
+          PACKAGE_NAME: ${{ steps.publish.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.publish.outputs.version }}
+        run: |
+          set -uo pipefail
+          if npm publish --access public --provenance; then
+            echo "published $PACKAGE_NAME@$PACKAGE_VERSION"
+          else
+            echo "::warning::npm refused the trusted publish. One-time setup on npmjs.com: open secret-agent-browser-mcps, Settings -> Trusted Publisher -> GitHub Actions, user FiredMosquito831, repository secret-agent-browser-mcps, workflow filename npm-release.yml, environment EMPTY, and Allowed actions must include npm publish. Check that this job has id-token: write, then rerun this workflow. No npm token is used by this workflow."
+          fi
+
+      - name: Verify the version on npm
+        if: steps.publish.outputs.publish == 'true'
+        env:
+          PACKAGE_NAME: ${{ steps.publish.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.publish.outputs.version }}
+        run: |
+          set -uo pipefail
+          actual="$(npm view "$PACKAGE_NAME@$PACKAGE_VERSION" version 2>/dev/null || true)"
+          if [ "$actual" = "$PACKAGE_VERSION" ]; then
+            echo "verified $PACKAGE_NAME@$PACKAGE_VERSION on npm"
+          else
+            echo "::warning::$PACKAGE_NAME@$PACKAGE_VERSION was not found on npm after this run. The GitHub release is unaffected; check the trusted-publisher warning above and verify with: npm view $PACKAGE_NAME version"
+          fi

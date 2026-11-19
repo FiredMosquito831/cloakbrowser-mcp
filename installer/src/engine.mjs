@@ -1,12 +1,14 @@
 // Engine bundle, shim materialisation and current.json/manifest ownership.
 import { createHash } from 'node:crypto';
 import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SabmError } from './envelope.mjs';
 import { atomicWriteText } from './writers.mjs';
 
-export const CLI_VERSION = '1.1.0';
+const require = createRequire(import.meta.url);
+export const CLI_VERSION = require('../package.json').version;
 export const CURRENT_SCHEMA = 'sabm-current/1';
 export const MANIFEST_SCHEMA = 'sabm-manifest/1';
 export const INSTALLER_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));

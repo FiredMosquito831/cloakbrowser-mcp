@@ -69,8 +69,14 @@ test('packaged tarball installs into a scratch prefix and runs the smoke command
     TMPDIR: join(prefix, 'tmp'),
     STEALTH_DATA_DIR: '',
   };
+  const installedVersion = JSON.parse(
+    await readFile(join(prefix, 'node_modules', 'secret-agent-browser-mcps', 'package.json'), 'utf8'),
+  ).version;
   const version = run(process.execPath, [cli, '--version'], { env });
-  assert.match(version.stdout, /secret-agent-browser-mcps 1\.1\.0/);
+  assert.ok(
+    version.stdout.includes(`secret-agent-browser-mcps ${installedVersion}`),
+    `version output ${version.stdout.trim()} does not match ${installedVersion}`,
+  );
   const list = run(process.execPath, [cli, 'list', '--json'], { env });
   const envelope = JSON.parse(list.stdout);
   assert.equal(envelope.schema, 'sabm/1');

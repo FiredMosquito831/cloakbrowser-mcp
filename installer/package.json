@@ -2,6 +2,10 @@
   "name": "secret-agent-browser-mcps",
   "version": "1.1.0",
   "description": "Installer and CLI for secret-agent-browser MCP harness entries (Phase 1 writers).",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FiredMosquito831/secret-agent-browser-mcps.git"
+  },
   "type": "module",
   "bin": {
     "secret-agent-browser-mcps": "src/cli.mjs",
