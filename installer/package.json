@@ -1,6 +1,6 @@
 {
   "name": "secret-agent-browser-mcps",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Installer and CLI for secret-agent-browser MCP harness entries (Phase 1 writers).",
   "repository": {
     "type": "git",
