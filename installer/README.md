@@ -1,7 +1,8 @@
 # secret-agent-browser-mcps
 
-`secret-agent-browser-mcps` 1.1.0 installs, configures and removes stable shim entries for Codex,
-Antigravity and OpenCode. It has its own version line and its own dependency tree; the root
+`secret-agent-browser-mcps` installs, configures and removes stable shim entries for Codex,
+Antigravity and OpenCode. Its published version is declared in `package.json` and printed by
+`sabm --version`. It has its own version line and its own dependency tree; the root
 `package.json` (the upstream bridge) is untouched, and no `workspaces` field is added. Claude Code
 remains print-only (D0): all plugin settings stay under `/plugin` and nothing under `~/.claude` is
 read or written by this CLI.

@@ -53,6 +53,16 @@ describe('npm publish workflow contract', () => {
     expect(workflow).toContain('npm view $PACKAGE_NAME version');
   });
 
+  it('keeps the published version tied to package metadata', () => {
+    const engineSource = readFileSync(path.join(repoRoot, 'installer', 'src', 'engine.mjs'), 'utf8');
+    const checkSource = readFileSync(path.join(repoRoot, 'installer', 'scripts', 'check.mjs'), 'utf8');
+    expect(engineSource).toContain('const require = createRequire(import.meta.url);');
+    expect(engineSource).toContain("require('../package.json').version");
+    expect(engineSource).not.toContain("'1.1.0'");
+    expect(checkSource).toContain('assert.equal(manifest.version, CLI_VERSION)');
+    expect(checkSource).not.toContain("'1.1.0'");
+  });
+
   it('builds and verifies the exact package before any publish', () => {
     for (const command of [
       'npm ci --prefix "$PACKAGE_DIR" --ignore-scripts --no-audit --fund=false',

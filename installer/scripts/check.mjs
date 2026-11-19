@@ -4,6 +4,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
+import { CLI_VERSION } from '../src/engine.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repo = resolve(root, '..');
@@ -12,7 +13,8 @@ const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
 const manifest = JSON.parse(await read(join(root, 'package.json')));
 assert.equal(manifest.name, 'secret-agent-browser-mcps');
-assert.equal(manifest.version, '1.1.0');
+assert.match(manifest.version, /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/);
+assert.equal(manifest.version, CLI_VERSION);
 assert.deepEqual(Object.keys(manifest.bin).sort(), ['sabm', 'secret-agent-browser-mcps']);
 assert.equal(manifest.engines.node, '>=22.13.0');
 assert.deepEqual(Object.keys(manifest.dependencies).sort(), ['commander', 'json5', 'smol-toml', 'yaml']);
@@ -21,7 +23,8 @@ assert.ok(manifest.files.includes('dist') && manifest.files.includes('vendor'), 
 assert.equal(manifest.scripts.postinstall, undefined, 'the package must never install at npm install time');
 
 const lock = JSON.parse(await read(join(root, 'package-lock.json')));
-assert.equal(lock.packages[''].version, '1.1.0');
+assert.equal(lock.version, manifest.version);
+assert.equal(lock.packages[''].version, manifest.version);
 assert.equal(lock.name, 'secret-agent-browser-mcps');
 
 const entry = await read(join(root, 'src', 'cli.mjs'));
