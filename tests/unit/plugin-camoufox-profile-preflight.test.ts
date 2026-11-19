@@ -1260,12 +1260,27 @@ describe('broker engine-lock preflight', () => {
     expect(session.stderr()).toContain('is stale');
   });
 
-  it('starts normally with no engine lock file', async () => {
+  it('starts normally with no engine lock file (custom pid stays free on POSIX)', async () => {
     const { profileDir, session } = setupSynthetic('lock-engine');
     await initialize(session);
     expect(await toolNames(session)).toContain('browser_navigate');
     const caps = await payload(session, 'browser_capabilities');
-    expect(caps.engineProfileLock).toMatchObject({ ...hostLockExpectation('free'), profileDir });
+    // `lock-engine` declares { file: 'owner.lock', owner: 'pid' }, not a
+    // Windows-only name, so item 45 leaves it free on every platform.
+    expect(caps.engineProfileLock).toMatchObject({ state: 'free', error: null, profileDir });
+    // Explicit POSIX coverage of that same custom descriptor, independent of
+    // the host running this suite.
+    const descriptor = { file: 'owner.lock', owner: 'pid' };
+    expect(profile.readEngineProfileLock(profileDir, descriptor, 'linux')).toMatchObject({
+      state: 'free',
+      owner: null,
+      error: null,
+    });
+    expect(profile.readEngineProfileLock(profileDir, descriptor, 'darwin')).toMatchObject({
+      state: 'free',
+      owner: null,
+      error: null,
+    });
   });
 
   it('allows the start with a note when the engine lock is malformed', async () => {
