@@ -561,6 +561,84 @@ test('legacy metadata with a colon in the entry name is shared and restores byte
   assert.equal(await readFile(tree.target.path, 'utf8'), '');
 });
 
+test('legacy names with empty colon segments are shared and restore bytes', async () => {
+  for (const legacyName of ['a:', 'a::b', ':x']) {
+    const tree = await makeTree('antigravity', 'user');
+    await writeFile(tree.target.path, '');
+    const first = await invoke(
+      [
+        'install',
+        'antigravity',
+        '--name',
+        legacyName,
+        '--from',
+        SCHEMA_FROM,
+        '--data-root',
+        tree.dataRoot,
+        '--json',
+      ],
+      tree,
+    );
+    assert.equal(first.code, 0, `${legacyName}: ${first.out}`);
+    const manifestPath = join(tree.dataRoot, 'manifest.json');
+    const legacyKey = `antigravity:user:${legacyName}`;
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+    assert.ok(manifest.createdPaths[legacyKey].path);
+    delete manifest.createdPaths[legacyKey].path;
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    const second = await invoke(
+      [
+        'install',
+        'antigravity',
+        '--name',
+        'second',
+        '--from',
+        SCHEMA_FROM,
+        '--data-root',
+        tree.dataRoot,
+        '--json',
+      ],
+      tree,
+    );
+    assert.equal(second.code, 0, `${legacyName}: ${second.out}`);
+    const upgraded = JSON.parse(await readFile(manifestPath, 'utf8'));
+    assert.equal(upgraded.createdPaths['antigravity:user:second'].path, tree.target.path);
+    assert.equal(upgraded.createdPaths['antigravity:user:second'].rootText, '');
+    const removedFirst = await invoke(
+      [
+        'uninstall',
+        'antigravity',
+        '--name',
+        legacyName,
+        '--from',
+        SCHEMA_FROM,
+        '--data-root',
+        tree.dataRoot,
+        '--json',
+      ],
+      tree,
+    );
+    assert.equal(removedFirst.code, 0, `${legacyName}: ${removedFirst.out}`);
+    assert.match(await readFile(tree.target.path, 'utf8'), /second/);
+    const removedSecond = await invoke(
+      [
+        'uninstall',
+        'antigravity',
+        '--name',
+        'second',
+        '--from',
+        SCHEMA_FROM,
+        '--data-root',
+        tree.dataRoot,
+        '--json',
+      ],
+      tree,
+    );
+    assert.equal(removedSecond.code, 0, `${legacyName}: ${removedSecond.out}`);
+    assert.equal(await readFile(tree.target.path, 'utf8'), '');
+  }
+});
+
 test('empty and BOM-only config files restore their original bytes', async () => {
   for (const original of ['', '﻿']) {
     const tree = await makeTree('antigravity', 'user');

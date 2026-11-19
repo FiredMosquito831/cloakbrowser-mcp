@@ -327,15 +327,9 @@ export async function installResult(options, context) {
       }
       // Legacy records have no path. Derive it from harness:scope:name and
       // share only when that derived config path is exactly ours.
-      const [legacyHarness, legacyScope, ...legacyName] = createdKey.split(':');
-      if (
-        !legacyHarness ||
-        !legacyScope ||
-        legacyName.length === 0 ||
-        legacyName.some((part) => part === '')
-      ) {
-        continue;
-      }
+      const [legacyHarness, legacyScope, ...nameParts] = createdKey.split(':');
+      const legacyName = nameParts.join(':');
+      if (!legacyHarness || !legacyScope || legacyName === '') continue;
       try {
         const legacyTarget = await resolveTarget(
           legacyHarness,
