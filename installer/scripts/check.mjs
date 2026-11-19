@@ -13,6 +13,10 @@ const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
 const manifest = JSON.parse(await read(join(root, 'package.json')));
 assert.equal(manifest.name, 'secret-agent-browser-mcps');
+assert.deepEqual(manifest.repository, {
+  type: 'git',
+  url: 'git+https://github.com/FiredMosquito831/secret-agent-browser-mcps.git',
+});
 assert.match(manifest.version, /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/);
 assert.equal(manifest.version, CLI_VERSION);
 assert.deepEqual(Object.keys(manifest.bin).sort(), ['sabm', 'secret-agent-browser-mcps']);
@@ -26,6 +30,7 @@ const lock = JSON.parse(await read(join(root, 'package-lock.json')));
 assert.equal(lock.version, manifest.version);
 assert.equal(lock.packages[''].version, manifest.version);
 assert.equal(lock.name, 'secret-agent-browser-mcps');
+assert.deepEqual(lock.packages[''].repository, manifest.repository);
 
 const entry = await read(join(root, 'src', 'cli.mjs'));
 assert.ok(entry.startsWith('#!/usr/bin/env node\n'), 'bin entry needs a node shebang');

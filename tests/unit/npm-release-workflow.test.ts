@@ -9,12 +9,17 @@ const packagePath = path.join(repoRoot, 'installer', 'package.json');
 const workflow = readFileSync(workflowPath, 'utf8');
 const installerPackage = JSON.parse(readFileSync(packagePath, 'utf8')) as {
   name: string;
+  repository: { type: string; url: string };
   version: string;
 };
 
 describe('npm publish workflow contract', () => {
   it('publishes only the fork installer package, never the upstream root package', () => {
     expect(installerPackage.name).toBe('secret-agent-browser-mcps');
+    expect(installerPackage.repository).toEqual({
+      type: 'git',
+      url: 'git+https://github.com/FiredMosquito831/secret-agent-browser-mcps.git',
+    });
     expect(workflow).toContain('PACKAGE_DIR: installer');
     expect(workflow).toContain('working-directory: installer');
     expect(workflow).toContain('npm publish --access public --provenance');
