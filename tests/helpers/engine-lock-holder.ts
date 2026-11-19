@@ -65,6 +65,7 @@ interface ProfileProbeModule {
   readEngineProfileLock(
     profileDir: string,
     descriptor: { file?: string; owner?: string } | null | undefined,
+    platform?: string,
   ): EngineProfileLockRead;
 }
 
@@ -346,7 +347,10 @@ async function holdWithFileMode(
   registerHolderStop(testContext, stop);
 
   chmodSync(file, 0o400);
-  const probe = profileProbe.readEngineProfileLock(profileDir, descriptor);
+  // Test-only platform injection: the POSIX chmod route needs the product's
+  // Windows-name probe (`lockfile`/`parent.lock`) to prove `live` here. The third
+  // positional argument bypasses only this holder check, never a product start.
+  const probe = profileProbe.readEngineProfileLock(profileDir, descriptor, 'win32');
   if (probe.state !== 'live') {
     await stop();
     return unsupported(

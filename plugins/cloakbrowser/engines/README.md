@@ -222,11 +222,13 @@ with the reason in `error`). Only `live` blocks a start. `profileLock` for the
 bridge is unchanged and keeps its own meaning; an engine without this field gains
 no key and a byte-identical start.
 
-The check is exact to the declared file. On a platform where that file is not the
-browser's lock (Firefox on POSIX uses a `lock` symlink instead), the preflight
-reads `free` and changes nothing; the write probe on a platform where Chromium
-does not keep `<profile>/lockfile` finds it absent (`free`) or unheld (`stale`)
-and likewise changes nothing. `scripts/profile-copy.mjs` reads the same
+The check is exact to the declared file. On Linux and macOS a declared `lockfile`
+or `parent.lock` is not the browser's own lock (Firefox on POSIX uses a `lock`
+symlink instead): the preflight reports `state: "unknown"`, `owner: null` and the
+reason in `error` before touching any file, and the browser decides whether the
+profile is in use. Real POSIX lock detection is a later item. On Windows the
+write probe for Chromium's `<profile>/lockfile` finds it absent (`free`) or
+unheld (`stale`) and likewise changes nothing. `scripts/profile-copy.mjs` reads the same
 descriptor before copying: a live owner refuses the copy with the broker's
 wording instead of failing mid-tree, and the declared lock file is excluded from
 the copied tree.
