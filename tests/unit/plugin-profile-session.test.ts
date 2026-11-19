@@ -632,6 +632,8 @@ describe('session mode end to end', () => {
     });
   });
 
+  // Item 45: on POSIX the Windows-only engine lock name is 'unknown' before any
+  // probe, so a holder cannot drive this live-lock copy/hold decision there.
   it.skipIf(process.platform !== 'win32')(
     'copies a LIVE base instead of refusing it (the copy mode refuses)',
     async (t) => {
@@ -734,6 +736,8 @@ describe('session mode end to end', () => {
     expect(current.profileCopyPending).toMatchObject({ kind: 'session', baseDir: base });
   });
 
+  // Item 45: on POSIX the Windows-only engine lock name is 'unknown' before any
+  // probe, so a holder cannot drive this live-lock copy/hold decision there.
   it.skipIf(process.platform !== 'win32')(
     'applies the cloak seat gate exactly as on_locked=copy does',
     async (t) => {
@@ -797,6 +801,8 @@ describe('session mode end to end', () => {
 });
 
 describe('first-browser-action profile re-check (2.24.0)', () => {
+  // Item 45: on POSIX the Windows-only engine lock name is 'unknown' before any
+  // probe, so a holder cannot drive this live-lock copy/hold decision there.
   it.skipIf(process.platform !== 'win32')(
     'takes the copy path when the base becomes busy AFTER the session started',
     async (t) => {
@@ -838,6 +844,8 @@ describe('first-browser-action profile re-check (2.24.0)', () => {
     },
   );
 
+  // Item 45: on POSIX the Windows-only engine lock name is 'unknown' before any
+  // probe, so a holder cannot drive this live-lock copy/hold decision there.
   it.skipIf(process.platform !== 'win32')(
     'holds on the cloak engine instead of starting a second CloakBrowser',
     async (t) => {
@@ -886,6 +894,8 @@ describe('first-browser-action profile re-check (2.24.0)', () => {
     expect(hashTree(base)).toBe(before);
   });
 
+  // Item 45: on POSIX the Windows-only engine lock name is 'unknown' before any
+  // probe, so a holder cannot drive this live-lock copy/hold decision there.
   it.skipIf(process.platform !== 'win32')(
     'holds instead of launching when the policy is block and the base turns busy',
     async (t) => {
@@ -915,6 +925,8 @@ describe('first-browser-action profile re-check (2.24.0)', () => {
 });
 
 describe('engine-lock fallback report (2.24.0)', () => {
+  // Item 45: on POSIX the Windows-only engine lock name is 'unknown' before any
+  // probe, so a holder cannot drive this live-lock copy/hold decision there.
   it.skipIf(process.platform !== 'win32')(
     'carries kind and createdEmpty, like the bridge-lock path always has',
     async (t) => {
@@ -947,6 +959,8 @@ describe('engine-lock fallback report (2.24.0)', () => {
     },
   );
 
+  // Item 45: on POSIX the Windows-only engine lock name is 'unknown' before any
+  // probe, so a holder cannot drive this live-lock copy/hold decision there.
   it.skipIf(process.platform !== 'win32')(
     'says createdEmpty false when the sibling already exists',
     async (t) => {

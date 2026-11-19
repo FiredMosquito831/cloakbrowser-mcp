@@ -496,6 +496,8 @@ describe('identity tier planning', () => {
     expect(plan.identity).toBeUndefined();
   });
 
+  // Item 45: parent.lock is Windows-only; on POSIX the probe returns 'unknown'
+  // before reading the pid file, so this live-lock scan has no POSIX proof.
   it.skipIf(process.platform !== 'win32')('scans live engine locks in the profiles it manages', () => {
     const dataDir = tempRoot('seat-scan-');
     const descriptor = { file: 'parent.lock', owner: 'pid' };
@@ -683,6 +685,8 @@ describe('broker on_locked=copy', () => {
   // The close-tool instant path and the copy release are covered on every
   // platform by the two tests above (`browser_close` -> discarded, base lock
   // free), so this case adds the latch itself.
+  // Item 45: the Windows-only lockfile is 'unknown' on POSIX before any probe,
+  // so this holder cannot open the browser-liveness latch on that platform.
   it.skipIf(process.platform !== 'win32')(
     'latches the engine lock and releases the copy when the browser closes',
     async (t) => {
@@ -732,6 +736,8 @@ describe('broker on_locked=copy', () => {
 });
 
 describe('broker seat gate and the copy modes', () => {
+  // Item 45: on POSIX the Windows-only engine lock name is 'unknown' before any
+  // probe, so a holder cannot drive this live-lock copy/hold decision there.
   it.skipIf(process.platform !== 'win32')(
     're-checks the seat when the copy is actually taken, and holds instead (2.21.0)',
     async () => {
@@ -789,6 +795,8 @@ describe('broker seat gate and the copy modes', () => {
     },
   );
 
+  // Item 45: on POSIX the Windows-only engine lock name is 'unknown' before any
+  // probe, so a holder cannot drive this live-lock copy/hold decision there.
   it.skipIf(process.platform !== 'win32')(
     'holds instead of copying when the only seat is taken, and copies when it frees',
     async () => {

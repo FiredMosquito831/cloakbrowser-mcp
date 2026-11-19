@@ -877,6 +877,8 @@ describe('live engine-lock refusals', () => {
     expect(existsSync(path.join(dataDir, 'profiles', 'camoufox', 'alice'))).toBe(false);
   });
 
+  // Item 45: on POSIX the Windows-only engine lock is 'unknown' before any probe,
+  // so a real holder cannot drive this copy refusal there.
   it.skipIf(process.platform !== 'win32')(
     'refuses a Chromium profile while a real process holds lockfile, then copies once it exits',
     async (t) => {
@@ -904,6 +906,8 @@ describe('live engine-lock refusals', () => {
     },
   );
 
+  // Item 45: on POSIX the Windows-only engine lock is 'unknown' before any probe,
+  // so a real holder cannot drive this copy refusal there.
   it.skipIf(process.platform !== 'win32')(
     'refuses a Camoufox profile while a real process holds parent.lock, then copies once it exits',
     async (t) => {
