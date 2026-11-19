@@ -141,7 +141,9 @@ process.stdin.on('data', (chunk) => {
 process.stdin.on('end', () => process.exit(0));
 `;
 
-const SILENT_BROKER = 'process.stdin.resume();\nprocess.stdin.on("end", () => process.exit(0));\n';
+// Hold the inherited stdio pipes open; only real process-tree teardown lets
+// the runner exit. This intentionally has no stdin 'end' handler.
+const SILENT_BROKER = 'setInterval(() => {}, 1000);\n';
 
 test('doctor --start against a stub MCP server passes with three meta tools', async () => {
   const tree = await installedTree();

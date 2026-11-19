@@ -4,7 +4,160 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { pruneBackups, atomicWriteText } from '../src/writers.mjs';
 import { writeSettingsValue } from '../src/settings-documents.mjs';
+import { parsesSuccessfully } from '../src/commands.mjs';
+import { findJsonObject, removeJsonProperty, spliceText } from '../src/spans.mjs';
 import { envForHome, INSTALLER_ROOT, invoke, makeTree, SCHEMA_FROM, snapshotTree } from './helpers.mjs';
+
+test('post-splice validation accepts valid falsy JSON roots', () => {
+  for (const text of ['null', 'false', '0', '""']) {
+    assert.equal(parsesSuccessfully('json', text), true, text);
+  }
+  assert.equal(parsesSuccessfully('json', '{bad'), false);
+});
+
+test('JSONC removal preserves user trivia before the first managed property', async () => {
+  const text = `{
+  "mcp": {
+    "servers": {
+      // user comment must survive
+      "cloakbrowser": { "command": "node" }
+    }
+  }
+}
+`;
+  const found = findJsonObject(text, ['mcp', 'servers']);
+  const edit = removeJsonProperty(text, found.objectSpan, 'cloakbrowser', 'jsonc');
+  assert.ok(edit.start > found.objectSpan.innerStart, 'leading trivia was not part of our span');
+  const next = spliceText(text, edit);
+  assert.match(next, /\/\/ user comment must survive/);
+  assert.doesNotMatch(next, /cloakbrowser/);
+});
+
+test('JSONC comment-bearing config add -> remove restores original bytes', async () => {
+  const tree = await makeTree('opencode', 'user');
+  const original = `{
+  // header comment
+  "mcp": {
+    "servers": {
+      // inner comment
+    }
+  }
+}
+`;
+  await writeFile(tree.target.path, original);
+  const installed = await invoke(
+    ['install', 'opencode', '--from', SCHEMA_FROM, '--data-root', tree.dataRoot, '--json'],
+    tree,
+  );
+  assert.equal(installed.code, 0, installed.out);
+  const removed = await invoke(
+    ['uninstall', 'opencode', '--from', SCHEMA_FROM, '--data-root', tree.dataRoot, '--json'],
+    tree,
+  );
+  assert.equal(removed.code, 0, removed.out);
+  assert.equal(await readFile(tree.target.path, 'utf8'), original);
+});
+
+test('multiple entries from a generated root all retain restoration metadata', async () => {
+  const tree = await makeTree('antigravity', 'user');
+  await writeFile(tree.target.path, '');
+  const first = await invoke(
+    ['install', 'antigravity', '--from', SCHEMA_FROM, '--data-root', tree.dataRoot, '--json'],
+    tree,
+  );
+  assert.equal(first.code, 0, first.out);
+  const second = await invoke(
+    [
+      'install',
+      'antigravity',
+      '--name',
+      'second',
+      '--from',
+      SCHEMA_FROM,
+      '--data-root',
+      tree.dataRoot,
+      '--json',
+    ],
+    tree,
+  );
+  assert.equal(second.code, 0, second.out);
+  const manifest = JSON.parse(await readFile(join(tree.dataRoot, 'manifest.json'), 'utf8'));
+  assert.equal(manifest.createdPaths['antigravity:user:cloakbrowser'].rootText, '');
+  assert.deepEqual(
+    manifest.createdPaths['antigravity:user:second'],
+    manifest.createdPaths['antigravity:user:cloakbrowser'],
+  );
+  const removedFirst = await invoke(
+    ['uninstall', 'antigravity', '--from', SCHEMA_FROM, '--data-root', tree.dataRoot, '--json'],
+    tree,
+  );
+  assert.equal(removedFirst.code, 0, removedFirst.out);
+  assert.match(await readFile(tree.target.path, 'utf8'), /second/);
+  const removedSecond = await invoke(
+    [
+      'uninstall',
+      'antigravity',
+      '--name',
+      'second',
+      '--from',
+      SCHEMA_FROM,
+      '--data-root',
+      tree.dataRoot,
+      '--json',
+    ],
+    tree,
+  );
+  assert.equal(removedSecond.code, 0, removedSecond.out);
+  assert.equal(await readFile(tree.target.path, 'utf8'), '');
+});
+
+test('install -> update -> uninstall preserves generated-root restoration metadata', async () => {
+  const tree = await makeTree('antigravity', 'user');
+  await writeFile(tree.target.path, '');
+  const installed = await invoke(
+    ['install', 'antigravity', '--from', SCHEMA_FROM, '--data-root', tree.dataRoot, '--json'],
+    tree,
+  );
+  assert.equal(installed.code, 0, installed.out);
+  const currentPath = join(tree.dataRoot, 'current.json');
+  const current = JSON.parse(await readFile(currentPath, 'utf8'));
+  current.pluginVersion = '2.25.0';
+  await writeFile(currentPath, `${JSON.stringify(current, null, 2)}\n`);
+  const before = JSON.parse(await readFile(join(tree.dataRoot, 'manifest.json'), 'utf8'));
+  assert.ok(before.createdPaths['antigravity:user:cloakbrowser']);
+  const updated = await invoke(
+    ['update', 'antigravity', '--from', SCHEMA_FROM, '--data-root', tree.dataRoot, '--json'],
+    tree,
+  );
+  assert.equal(updated.code, 0, updated.out);
+  const after = JSON.parse(await readFile(join(tree.dataRoot, 'manifest.json'), 'utf8'));
+  assert.deepEqual(after.createdPaths, before.createdPaths);
+  const removed = await invoke(
+    ['uninstall', 'antigravity', '--from', SCHEMA_FROM, '--data-root', tree.dataRoot, '--json'],
+    tree,
+  );
+  assert.equal(removed.code, 0, removed.out);
+  assert.equal(await readFile(tree.target.path, 'utf8'), '');
+});
+
+test('user-added BOM on a generated root is preserved on uninstall', async () => {
+  const tree = await makeTree('antigravity', 'user');
+  await writeFile(tree.target.path, '');
+  const installed = await invoke(
+    ['install', 'antigravity', '--from', SCHEMA_FROM, '--data-root', tree.dataRoot, '--json'],
+    tree,
+  );
+  assert.equal(installed.code, 0, installed.out);
+  await writeFile(tree.target.path, `﻿${await readFile(tree.target.path, 'utf8')}`);
+  const removed = await invoke(
+    ['uninstall', 'antigravity', '--from', SCHEMA_FROM, '--data-root', tree.dataRoot, '--json'],
+    tree,
+  );
+  assert.equal(removed.code, 0, removed.out);
+  const final = await readFile(tree.target.path, 'utf8');
+  assert.ok(final.startsWith('﻿'), 'user-authored BOM was discarded');
+  assert.doesNotMatch(final, /cloakbrowser/);
+});
 
 test('JSONC without a trailing comma: add -> remove restores the original bytes', async () => {
   const tree = await makeTree('opencode', 'user', 'no-trailing');

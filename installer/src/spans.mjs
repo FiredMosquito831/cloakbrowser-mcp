@@ -273,11 +273,15 @@ export function removeJsonProperty(text, objectSpan, key, format = 'json') {
   const previous = properties[index - 1];
   const candidates = [];
   if (!previous) {
-    // The first property's leading EOL + indent were inserted by us.
-    candidates.push({
-      start: objectSpan.innerStart,
-      end: property.commaAfter !== null ? property.commaAfter + 1 : property.valueEnd,
-    });
+    // Only remove the leading EOL + indent when it is exactly our inserted
+    // span. User comments/trivia before the first property are preserved.
+    const leading = text.slice(objectSpan.innerStart, property.start);
+    if (/^(?:\r?\n)[ \t]*$/.test(leading)) {
+      candidates.push({
+        start: objectSpan.innerStart,
+        end: property.commaAfter !== null ? property.commaAfter + 1 : property.valueEnd,
+      });
+    }
   }
   if (property.commaAfter !== null) {
     // A pre-existing trailing comma means our inserted property also carries
