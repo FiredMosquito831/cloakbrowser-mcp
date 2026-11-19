@@ -315,17 +315,44 @@ export async function installResult(options, context) {
     const entryKey = `${harness.id}:${scope}:${name}`;
     const priorManifest = await readManifest(root.path);
     const createdPaths = { ...(priorManifest?.createdPaths ?? {}) };
-    const sharedRoot = Object.values(createdPaths).find(
-      (value) =>
-        value && !Array.isArray(value) && typeof value.rootText === 'string' && value.path === target.path,
-    );
+    let sharedRoot = null;
+    for (const [createdKey, value] of Object.entries(createdPaths)) {
+      if (!value || Array.isArray(value) || typeof value.rootText !== 'string') continue;
+      if (typeof value.path === 'string' && value.path !== '') {
+        if (value.path === target.path) {
+          sharedRoot = value;
+          break;
+        }
+        continue;
+      }
+      // Legacy records have no path. Derive it from harness:scope:name and
+      // share only when that derived config path is exactly ours.
+      const parts = createdKey.split(':');
+      if (parts.length !== 3) continue;
+      const [legacyHarness, legacyScope, legacyName] = parts;
+      if (!legacyHarness || !legacyScope || !legacyName) continue;
+      try {
+        const legacyTarget = await resolveTarget(
+          legacyHarness,
+          { scope: legacyScope, project: options.project },
+          context,
+        );
+        if (!legacyTarget.refused && legacyTarget.path === target.path) {
+          sharedRoot = value;
+          break;
+        }
+      } catch {
+        // Skip malformed legacy harness/scope records.
+      }
+    }
     if (parentWasAbsent) {
       createdPaths[entryKey] = rootGenerated
         ? { parents: target.parent, rootText: text, path: target.path }
         : target.parent;
     } else if (sharedRoot) {
       // Every entry created from a generated root must be able to restore it.
-      createdPaths[entryKey] = sharedRoot;
+      // A copied legacy record gains an exact path for future comparisons.
+      createdPaths[entryKey] = { ...sharedRoot, path: target.path };
     } else delete createdPaths[entryKey];
     const manifest = await writeManifest(
       root.path,

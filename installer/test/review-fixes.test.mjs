@@ -430,6 +430,61 @@ test('legacy pathless root metadata is not shared with an unrelated harness conf
   assert.equal(await readFile(tree.target.path, 'utf8'), original);
 });
 
+test('same-config pathless legacy metadata is shared and upgraded with a path', async () => {
+  const tree = await makeTree('antigravity', 'user');
+  await writeFile(tree.target.path, '');
+  const first = await invoke(
+    ['install', 'antigravity', '--from', SCHEMA_FROM, '--data-root', tree.dataRoot, '--json'],
+    tree,
+  );
+  assert.equal(first.code, 0, first.out);
+  const manifestPath = join(tree.dataRoot, 'manifest.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  assert.ok(manifest.createdPaths['antigravity:user:cloakbrowser'].path);
+  delete manifest.createdPaths['antigravity:user:cloakbrowser'].path;
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  const second = await invoke(
+    [
+      'install',
+      'antigravity',
+      '--name',
+      'second',
+      '--from',
+      SCHEMA_FROM,
+      '--data-root',
+      tree.dataRoot,
+      '--json',
+    ],
+    tree,
+  );
+  assert.equal(second.code, 0, second.out);
+  const upgraded = JSON.parse(await readFile(manifestPath, 'utf8'));
+  assert.equal(upgraded.createdPaths['antigravity:user:second'].path, tree.target.path);
+  assert.equal(upgraded.createdPaths['antigravity:user:second'].rootText, '');
+  const removedFirst = await invoke(
+    ['uninstall', 'antigravity', '--from', SCHEMA_FROM, '--data-root', tree.dataRoot, '--json'],
+    tree,
+  );
+  assert.equal(removedFirst.code, 0, removedFirst.out);
+  assert.match(await readFile(tree.target.path, 'utf8'), /second/);
+  const removedSecond = await invoke(
+    [
+      'uninstall',
+      'antigravity',
+      '--name',
+      'second',
+      '--from',
+      SCHEMA_FROM,
+      '--data-root',
+      tree.dataRoot,
+      '--json',
+    ],
+    tree,
+  );
+  assert.equal(removedSecond.code, 0, removedSecond.out);
+  assert.equal(await readFile(tree.target.path, 'utf8'), '');
+});
+
 test('empty and BOM-only config files restore their original bytes', async () => {
   for (const original of ['', '﻿']) {
     const tree = await makeTree('antigravity', 'user');
