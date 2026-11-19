@@ -1,7 +1,7 @@
 // doctor --start: spawn exactly the installed entry and perform an MCP
 // initialize -> tools/list -> browser_capabilities handshake. No browser, no
 // provisioning request and no harness config write.
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { shimArgs } from './paths.mjs';
 import { CLI_VERSION } from './engine.mjs';
 
@@ -36,6 +36,48 @@ function contentPayload(response) {
   }
 }
 
+// The shim spawns the broker with inherited stdio. Killing only the shim can
+// leave that grandchild holding doctor's pipes open forever, so kill the whole
+// tree before resolving the check.
+function killProcessTree(child) {
+  if (!child?.pid) return;
+  if (process.platform === 'win32') {
+    const killed = spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
+      stdio: 'ignore',
+    });
+    if (killed.status === 0) return;
+    try {
+      child.kill();
+    } catch {
+      // already gone
+    }
+    return;
+  }
+  try {
+    process.kill(-child.pid, 'SIGKILL');
+  } catch {
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      // already gone
+    }
+  }
+}
+
+function waitForClose(child, ms = 1000) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      child.off('close', done);
+      resolve();
+    }, ms);
+    function done() {
+      clearTimeout(timer);
+      resolve();
+    }
+    child.once('close', done);
+  });
+}
+
 export async function startCheck({
   dataRoot,
   harness,
@@ -47,11 +89,18 @@ export async function startCheck({
   const child = spawn(process.execPath, args, {
     env: { ...env, STEALTH_DATA_DIR: dataRoot, STEALTH_HARNESS: harness },
     stdio: ['pipe', 'pipe', 'pipe'],
+    detached: process.platform !== 'win32',
+  });
+  let closed = false;
+  child.once('close', () => {
+    closed = true;
   });
   let stderr = '';
   let buffer = '';
   const pending = new Map();
+  const timers = new Set();
   let nextId = 1;
+  child.stdin.on('error', () => {});
   child.stderr.on('data', (chunk) => {
     stderr += String(chunk);
   });
@@ -72,25 +121,35 @@ export async function startCheck({
       }
     }
   });
+  const writeLine = (line) => {
+    try {
+      child.stdin.write(line);
+    } catch {
+      // the tree is already being torn down
+    }
+  };
   const request = (method, params = {}) =>
     new Promise((resolveRequest, rejectRequest) => {
       const id = nextId;
       nextId += 1;
       const timer = setTimeout(
         () => {
+          timers.delete(timer);
           pending.delete(id);
           rejectRequest(new Error(`${method} timed out`));
         },
         Math.max(1, timeout),
       );
+      timers.add(timer);
       pending.set(id, (message) => {
         clearTimeout(timer);
+        timers.delete(timer);
         resolveRequest(message);
       });
-      child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
+      writeLine(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
     });
   const notify = (method, params = {}) => {
-    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method, params })}\n`);
+    writeLine(`${JSON.stringify({ jsonrpc: '2.0', method, params })}\n`);
   };
   const handshake = async () => {
     const init = await request('initialize', {
@@ -172,7 +231,15 @@ export async function startCheck({
       ],
     };
   } finally {
-    child.stdin.end();
-    child.kill();
+    clearTimeout(timer);
+    for (const requestTimer of timers) clearTimeout(requestTimer);
+    timers.clear();
+    try {
+      child.stdin.end();
+    } catch {
+      // already closed
+    }
+    killProcessTree(child);
+    if (!closed) await waitForClose(child);
   }
 }

@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { composeEnvironment } from '../src/shim-runtime.mjs';
 import { shimPath } from '../src/paths.mjs';
 import { readCurrent } from '../src/engine.mjs';
 import { writeSettingsValue, SETTINGS_ENV_NAMES } from '../src/settings-documents.mjs';
-import { envForHome, invoke, makeTree, SCHEMA_FROM } from './helpers.mjs';
+import { envForHome, INSTALLER_ROOT, invoke, makeTree, SCHEMA_FROM } from './helpers.mjs';
 
 async function installedTree(harness = 'codex') {
   const tree = await makeTree(harness, 'user');
@@ -118,16 +119,15 @@ test('the child receives exactly the composed environment from a stub engine', a
 });
 
 const STUB_SERVER = `
-const lines = [];
+let buffer = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
-  lines.push(chunk);
+  buffer += chunk;
   for (;;) {
-    const at = lines.join('').indexOf('\\n');
+    const at = buffer.indexOf('\\n');
     if (at === -1) break;
-    const raw = lines.join('').slice(0, at);
-    lines.length = 0;
-    lines.push(lines.join('') + raw.slice(at + 1));
+    const raw = buffer.slice(0, at);
+    buffer = buffer.slice(at + 1);
     let message;
     try { message = JSON.parse(raw); } catch { continue; }
     if (!message.method || message.id === undefined) continue;
@@ -138,7 +138,10 @@ process.stdin.on('data', (chunk) => {
     process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }) + '\\n');
   }
 });
+process.stdin.on('end', () => process.exit(0));
 `;
+
+const SILENT_BROKER = 'process.stdin.resume();\nprocess.stdin.on("end", () => process.exit(0));\n';
 
 test('doctor --start against a stub MCP server passes with three meta tools', async () => {
   const tree = await installedTree();
@@ -180,10 +183,7 @@ test('doctor --start against a stub MCP server passes with three meta tools', as
 test('doctor --start honours --timeout and never launches a browser', async () => {
   const tree = await installedTree();
   const current = await readCurrent(tree.dataRoot);
-  await writeFile(
-    join(tree.dataRoot, 'engine', current.pluginVersion, 'broker.mjs'),
-    'setInterval(() => {}, 1000);\n',
-  );
+  await writeFile(join(tree.dataRoot, 'engine', current.pluginVersion, 'broker.mjs'), SILENT_BROKER);
   const result = await invoke(
     [
       'doctor',
@@ -209,4 +209,50 @@ test('doctor --start honours --timeout and never launches a browser', async () =
   );
   assert.equal(refused.code, 2);
   assert.match(refused.jsonLines[0].error.message, /later phase/);
+});
+
+test('a failed doctor --start leaves no child handles and the process exits promptly', async () => {
+  const tree = await installedTree();
+  const current = await readCurrent(tree.dataRoot);
+  await writeFile(join(tree.dataRoot, 'engine', current.pluginVersion, 'broker.mjs'), SILENT_BROKER);
+  const cliUrl = pathToFileURL(join(INSTALLER_ROOT, 'src', 'cli.mjs')).href;
+  const argv = [
+    'doctor',
+    'codex',
+    '--start',
+    '--timeout',
+    '400',
+    '--json',
+    '--from',
+    SCHEMA_FROM,
+    '--data-root',
+    tree.dataRoot,
+  ];
+  const runner = join(tree.root, 'doctor-failure-runner.mjs');
+  await writeFile(
+    runner,
+    `import { main } from ${JSON.stringify(cliUrl)};
+const out = [];
+const sink = () => ({ write(text) { out.push(String(text)); return true; } });
+const code = await main(${JSON.stringify(argv)}, {
+  stdout: sink(), stderr: sink(), env: process.env, platform: process.platform,
+  homedir: process.env.HOME || process.env.USERPROFILE || '', cwd: process.cwd(),
+});
+process.stdout.write(JSON.stringify({ code, out: out.join('') }));
+`,
+  );
+  const started = Date.now();
+  const child = spawnSync(process.execPath, [runner], {
+    env: baseEnv(tree),
+    cwd: tree.project,
+    encoding: 'utf8',
+    timeout: 10000,
+  });
+  const elapsed = Date.now() - started;
+  assert.equal(child.error, undefined, `runner did not exit: ${child.stderr ?? child.error}`);
+  assert.equal(child.status, 0, child.stderr || child.stdout);
+  assert.ok(elapsed < 9000, `runner took ${elapsed} ms; child handles survived`);
+  const body = JSON.parse(child.stdout);
+  assert.equal(body.code, 3);
+  assert.match(body.out, /start-handshake/);
 });
