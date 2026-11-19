@@ -29,7 +29,9 @@ export function redact(key, value) {
 }
 
 export function success(command, extra = {}) {
-  return { schema: SCHEMA, ok: true, command, ...extra, writes: [] };
+  // Writes are opt-in: read-only commands and dry runs leave the default [].
+  // Writing commands pass their real write records through.
+  return { schema: SCHEMA, ok: true, command, writes: [], ...extra };
 }
 
 export function failure({ command = 'cli', code, kind, message, remedy, ...extra }) {
@@ -45,13 +47,13 @@ export function failure({ command = 'cli', code, kind, message, remedy, ...extra
 }
 
 export function errorEnvelope(error, command = 'cli') {
-  if (error instanceof SabmError) {
+  if (error instanceof SabmError || (error && error.code in EXIT_CODES)) {
     return failure({
       command,
       code: error.code,
-      kind: error.kind,
+      kind: error.kind ?? 'command-error',
       message: error.message,
-      remedy: error.remedy,
+      remedy: error.remedy ?? 'Check the command and try again.',
     });
   }
   return failure({

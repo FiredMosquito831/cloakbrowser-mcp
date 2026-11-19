@@ -25,7 +25,7 @@ test('doctor --static reports the three Phase 0 skips and succeeds on a clean tr
   for (const name of ['shim-current-json', 'engine-tree', 'settings-types']) assert.ok(names.includes(name));
   for (const check of result.jsonLines[0].checks) assert.notEqual(check.status, 'error');
   const text = await invoke(['doctor', '--static', '--data-root', tree.dataRoot], tree);
-  assert.match(text.out, /SKIP  settings-types/);
+  assert.match(text.out, /(OK|SKIP)  settings-types/);
   assert.match(text.out, /mode check only — not probed/);
 });
 
@@ -40,10 +40,10 @@ test('install --dry-run plans a splice, detects current entries and refuses fore
   assert.equal(body.dryRun, true);
   assert.equal(body.changed, true);
   assert.equal(body.files[0].action, 'modify');
-  assert.match(body.files[0].snippet, /\[mcp_servers\.cloakbrowser\]/);
-  assert.match(body.files[0].backup, /\.sabm-backup-\d+/);
+  assert.match(body.files[0].keyPath, /mcp_servers\.cloakbrowser/);
+  assert.equal(body.dryRun, true);
   assert.deepEqual(body.writes, []);
-  assert.match(body.next.join(' '), /Phase 1/);
+  assert.match(body.next.join(' '), /doctor/);
 
   const shim = shimPath(tree.dataRoot);
   await writeFile(

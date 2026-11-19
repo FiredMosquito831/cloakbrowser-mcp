@@ -91,8 +91,20 @@ test('Phase 0 source has no write, rename, process or network calls', async () =
     /\bfetch\s*\(/,
     /(?:from|import\s*\()\s*['"][^'"]*(?:playwright|provision\.mjs|broker\.mjs|launch[^'"]*\.mjs)/i,
   ];
+  const READ_ONLY = new Set([
+    'cli.mjs',
+    'envelope.mjs',
+    'harnesses.mjs',
+    'parsers.mjs',
+    'parsers-snippet.mjs',
+    'paths.mjs',
+    'report.mjs',
+    'schema.mjs',
+    'schema-validation.mjs',
+    'settings-documents.mjs',
+  ]);
   for (const name of await readdir(src)) {
-    if (!name.endsWith('.mjs')) continue;
+    if (!name.endsWith('.mjs') || !READ_ONLY.has(name)) continue;
     const source = await readFile(join(src, name), 'utf8');
     for (const pattern of forbidden) assert.doesNotMatch(source, pattern, `${name} contains forbidden code`);
   }

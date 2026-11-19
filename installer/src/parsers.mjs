@@ -244,6 +244,7 @@ export function snippetFor(target, options = {}) {
       '',
       `[mcp_servers.${tableName}.env]`,
       `STEALTH_DATA_DIR = ${root}`,
+      `STEALTH_HARNESS = ${q(harness)}`,
     ].join('\n');
   } else if (target.format === 'json') {
     block = [
@@ -251,7 +252,7 @@ export function snippetFor(target, options = {}) {
       `  ${q(name)}: {`,
       `    "command": "node",`,
       `    "args": ${args},`,
-      `    "env": { "STEALTH_DATA_DIR": ${root} },`,
+      `    "env": { "STEALTH_DATA_DIR": ${root}, "STEALTH_HARNESS": ${q(harness)} },`,
       `    "timeoutSeconds": 600`,
       `  }`,
       `}`,
@@ -263,7 +264,7 @@ export function snippetFor(target, options = {}) {
       `    ${q(name)}: {`,
       '      "type": "local",',
       `      "command": ${arr(['node', shim, '--harness', harness, '--entry', name])},`,
-      `      "environment": { "STEALTH_DATA_DIR": ${root} }`,
+      `      "environment": { "STEALTH_DATA_DIR": ${root}, "STEALTH_HARNESS": ${q(harness)} }`,
       '    }',
       '  }',
       '}',

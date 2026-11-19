@@ -1,0 +1,9 @@
+{
+  // JSONC without a trailing comma on the last property.
+  "mcp": {
+    "servers": {
+      "other": { "type": "local", "command": ["node", "other.mjs"] }
+    }
+  },
+  "keep": true
+}

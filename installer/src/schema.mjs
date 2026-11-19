@@ -2,8 +2,10 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { join, resolve } from 'node:path';
 import { redact, SabmError } from './envelope.mjs';
+import { DOCUMENT_SETTINGS_KEYS } from '../vendor/lib/settings-precedence.mjs';
 
 const DEFAULT_FROM = fileURLToPath(new URL('../../plugins/cloakbrowser', import.meta.url));
+const PACKAGE_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const PLACEHOLDER = /^\$\{user_config\.([^}]+)\}$/;
 
 async function readJson(path) {
@@ -20,7 +22,22 @@ async function readJson(path) {
 }
 
 export async function loadSchema(options = {}, context) {
-  const from = options.from ? resolve(context.cwd, options.from) : resolve(context.cwd, DEFAULT_FROM);
+  let from = options.from ? resolve(context.cwd, options.from) : resolve(context.cwd, DEFAULT_FROM);
+  try {
+    await readFile(join(from, '.claude-plugin', 'plugin.json'));
+  } catch (error) {
+    if (options.from) {
+      throw new SabmError(
+        'refused',
+        'config-not-found',
+        `Cannot read schema file ${join(from, '.claude-plugin', 'plugin.json')}: ${error?.code ?? 'invalid JSON'}.`,
+        'Run this reporter from a checkout or pass --from <dir> pointing at a cloakbrowser plugin tree.',
+      );
+    }
+    if (error?.code !== 'ENOENT') throw error;
+    const bundle = JSON.parse(await readFile(join(PACKAGE_ROOT, 'dist', 'bundle.json'), 'utf8'));
+    from = join(PACKAGE_ROOT, 'dist', 'engine', bundle.pluginVersion);
+  }
   const manifest = await readJson(join(from, '.claude-plugin', 'plugin.json'));
   const mcp = await readJson(join(from, '.mcp.json'));
   const server = mcp.cloakbrowser ?? Object.values(mcp)[0] ?? {};
