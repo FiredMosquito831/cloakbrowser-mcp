@@ -106,5 +106,5 @@ and verifies the version afterwards with `npm view`. A refused trusted publish p
 release green; check the workflow log and the registry, not just the badge. Re-run a tag with:
 
 ```sh
-gh workflow run npm-release.yml --repo FiredMosquito831/secret-agent-browser-mcps -f tag=sabm-v1.1.0
+gh workflow run npm-release.yml --repo FiredMosquito831/secret-agent-browser-mcps -f tag=sabm-v1.1.1
 ```

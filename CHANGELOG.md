@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Fork-only `npm-release.yml` publishes `secret-agent-browser-mcps` from `installer/` on GitHub releases, installer version bumps, and manual dispatch. It uses npm trusted publishing with provenance, documents the npm dashboard setup including the `npm publish` allowed action, and skips versions already on the registry.
 
+### Changed
+
+- Installer CLI is now version 1.1.1. This version bump triggers the fork's npm trusted-publishing workflow after merge to `main`.
+
 ## [1.15.1] - 2026-10-18
 
 ### Fixed
