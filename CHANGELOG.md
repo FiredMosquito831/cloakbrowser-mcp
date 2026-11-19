@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- Fork-only `npm-release.yml` publishes `secret-agent-browser-mcps` from `installer/` on GitHub releases, installer version bumps, and manual dispatch. It uses npm trusted publishing with provenance and skips versions already on the registry.
+- Fork-only `npm-release.yml` publishes `secret-agent-browser-mcps` from `installer/` on GitHub releases, installer version bumps, and manual dispatch. It uses npm trusted publishing with provenance, documents the npm dashboard setup including the `npm publish` allowed action, and skips versions already on the registry.
 
 ## [1.15.1] - 2026-10-18
 

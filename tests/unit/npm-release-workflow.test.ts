@@ -55,6 +55,8 @@ describe('npm publish workflow contract', () => {
     expect(workflow).toContain('npm view "$name@$version" version');
     expect(workflow).toContain('echo \'publish=false\' >> "$GITHUB_OUTPUT"');
     expect(workflow).toContain('npm refused the trusted publish');
+    expect(workflow).toContain('Allowed actions must include npm publish');
+    expect(workflow).toContain('Allowed actions:      enable npm publish');
     expect(workflow).toContain('npm view $PACKAGE_NAME version');
   });
 

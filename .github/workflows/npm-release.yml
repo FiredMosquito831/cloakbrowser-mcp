@@ -12,6 +12,7 @@
 #   Repository:           secret-agent-browser-mcps
 #   Workflow filename:    npm-release.yml
 #   Environment:          leave EMPTY
+#   Allowed actions:      enable npm publish
 # npm needs 11.5.1 or newer; this workflow pins 11.19.0.
 
 name: npm publish
@@ -160,7 +161,7 @@ jobs:
           if npm publish --access public --provenance; then
             echo "published $PACKAGE_NAME@$PACKAGE_VERSION"
           else
-            echo "::warning::npm refused the trusted publish. One-time setup on npmjs.com: open secret-agent-browser-mcps, Settings -> Trusted Publisher -> GitHub Actions, user FiredMosquito831, repository secret-agent-browser-mcps, workflow filename npm-release.yml, environment EMPTY. Check that this job has id-token: write, then rerun this workflow. No npm token is used by this workflow."
+            echo "::warning::npm refused the trusted publish. One-time setup on npmjs.com: open secret-agent-browser-mcps, Settings -> Trusted Publisher -> GitHub Actions, user FiredMosquito831, repository secret-agent-browser-mcps, workflow filename npm-release.yml, environment EMPTY, and Allowed actions must include npm publish. Check that this job has id-token: write, then rerun this workflow. No npm token is used by this workflow."
           fi
 
       - name: Verify the version on npm

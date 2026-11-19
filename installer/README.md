@@ -100,8 +100,9 @@ One-time npm setup, on the package's **Settings → Trusted Publisher → GitHub
 | Workflow filename | `npm-release.yml` |
 | Environment | leave EMPTY |
 
-The workflow pins npm 11.19.0, publishes with `--access public --provenance`, and verifies the version
-afterwards with `npm view`. A refused trusted publish prints the setup reminder and leaves the GitHub
+If the dashboard shows Allowed actions, enable `npm publish`; newer trusted-publisher configurations
+default to staging only. The workflow pins npm 11.19.0, publishes with `--access public --provenance`,
+and verifies the version afterwards with `npm view`. A refused trusted publish prints the setup reminder and leaves the GitHub
 release green; check the workflow log and the registry, not just the badge. Re-run a tag with:
 
 ```sh
